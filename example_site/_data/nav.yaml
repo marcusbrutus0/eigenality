@@ -1,0 +1,6 @@
+- label: Home
+  url: /
+- label: About
+  url: /about.html
+- label: Posts
+  url: /posts/

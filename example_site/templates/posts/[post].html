@@ -1,0 +1,20 @@
+---
+collection:
+  source: blog_api
+  path: /posts
+slug_field: id
+item_as: post
+data:
+  nav:
+    file: "nav.yaml"
+---
+{% extends "_base.html" %}
+
+{% block title %}{{ post.title }} — {{ site.name }}{% endblock %}
+
+{% block content %}
+<article>
+    <h1>{{ post.title }}</h1>
+    <p>{{ post.body }}</p>
+</article>
+{% endblock %}

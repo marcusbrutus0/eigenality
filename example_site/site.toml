@@ -1,0 +1,18 @@
+[site]
+name = "Example Site"
+base_url = "https://example.com"
+
+[build]
+fragments = true
+fragment_dir = "_fragments"
+content_block = "content"
+
+[sources.blog_api]
+url = "https://jsonplaceholder.typicode.com"
+headers = {}
+
+
+# [assets]
+# localize = true  # default: true
+# cdn_skip_hosts = ["mycdn.internal.com"]  # additional hosts to skip
+# cdn_allow_hosts = ["cdn.jsdelivr.net"]   # override default skips

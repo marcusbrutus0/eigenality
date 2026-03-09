@@ -1,0 +1,19 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}{{ site.name }}{% endblock %}</title>
+    <link rel="stylesheet" href="/css/style.css">
+    <script src="https://unpkg.com/htmx.org@2.0.4"></script>
+</head>
+<body>
+    {% include "_partials/nav.html" %}
+    <main id="content">
+        {% block content %}{% endblock %}
+    </main>
+    <footer>
+        <p>&copy; {{ site.name }}</p>
+    </footer>
+</body>
+</html>

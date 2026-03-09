@@ -1,0 +1,24 @@
+---
+data:
+  nav:
+    file: "nav.yaml"
+  recent_posts:
+    source: blog_api
+    path: /posts
+    limit: 5
+---
+{% extends "_base.html" %}
+
+{% block title %}Home — {{ site.name }}{% endblock %}
+
+{% block content %}
+<h1>Welcome to {{ site.name }}</h1>
+<p>This is an example site built with Eigen.</p>
+
+<h2>Recent Posts</h2>
+<ul>
+    {% for post in recent_posts %}
+    <li><a href="/posts/{{ post.id }}.html">{{ post.title }}</a></li>
+    {% endfor %}
+</ul>
+{% endblock %}

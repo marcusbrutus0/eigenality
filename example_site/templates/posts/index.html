@@ -1,0 +1,23 @@
+---
+data:
+  nav:
+    file: "nav.yaml"
+  all_posts:
+    source: blog_api
+    path: /posts
+---
+{% extends "_base.html" %}
+
+{% block title %}Posts — {{ site.name }}{% endblock %}
+
+{% block content %}
+  <h1>All Posts</h1>
+  <p>These are all the posts</p>
+
+  <h2>Posts</h2>
+  <ul>
+    {% for post in all_posts %}
+      <li><a href="/posts/{{ post.id }}.html">{{ post.title }}</a></li>
+    {% endfor %}
+  </ul>
+{% endblock %}
