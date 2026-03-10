@@ -238,6 +238,7 @@ mod tests {
             localize: true,
             cdn_skip_hosts: Vec::new(),
             cdn_allow_hosts: Vec::new(),
+            images: Default::default()
         }
     }
 
@@ -347,6 +348,7 @@ mod tests {
             localize: true,
             cdn_skip_hosts: vec!["mycdn.example.com".to_string()],
             cdn_allow_hosts: Vec::new(),
+            images: Default::default()
         };
         assert!(should_skip_cdn("https://mycdn.example.com/assets/lib.js", &config));
     }
@@ -357,6 +359,7 @@ mod tests {
             localize: true,
             cdn_skip_hosts: Vec::new(),
             cdn_allow_hosts: vec!["cdn.jsdelivr.net".to_string()],
+            images: Default::default()
         };
         // Normally this would be skipped, but allow_hosts overrides.
         assert!(!should_skip_cdn("https://cdn.jsdelivr.net/my-image.jpg", &config));

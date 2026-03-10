@@ -9,6 +9,7 @@ use std::path::Path;
 
 use crate::assets;
 use crate::assets::cache::AssetCache;
+use crate::assets::images::ImageCache;
 use crate::config::SiteConfig;
 use crate::data::{self, DataFetcher};
 use crate::discovery::{self, PageDef, PageType};
@@ -83,6 +84,18 @@ pub fn build(project_root: &Path) -> Result<()> {
         tracing::info!("Asset localization enabled.");
     }
 
+    // Image optimization.
+    let image_cache = ImageCache::open(project_root)
+        .wrap_err("Failed to open image cache")?;
+    if config.assets.images.optimize {
+        tracing::info!(
+            "Image optimization enabled (formats: [{}], widths: {:?}, quality: {}).",
+            config.assets.images.formats.join(", "),
+            config.assets.images.widths,
+            config.assets.images.quality,
+        );
+    }
+
     // Build timestamp.
     let build_time = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
 
@@ -107,6 +120,7 @@ pub fn build(project_root: &Path) -> Result<()> {
                     &mut asset_cache,
                     &asset_client,
                     &plugin_registry,
+                    &image_cache,
                 )?;
                 rendered_pages.push(result);
             }
@@ -124,6 +138,7 @@ pub fn build(project_root: &Path) -> Result<()> {
                     &mut asset_cache,
                     &asset_client,
                     &plugin_registry,
+                    &image_cache,
                 )?;
                 rendered_pages.extend(results);
             }
@@ -201,6 +216,7 @@ fn render_static_page(
     asset_cache: &mut AssetCache,
     asset_client: &reqwest::blocking::Client,
     plugin_registry: &PluginRegistry,
+    image_cache: &ImageCache,
 ) -> Result<RenderedPage> {
     let tmpl_name = page.template_path.to_string_lossy().to_string();
 
@@ -251,7 +267,7 @@ fn render_static_page(
         }
     };
 
-    // 4. Write full page (with markers stripped, assets localized, plugins applied).
+    // 4. Write full page (with markers stripped, assets localized, images optimized, plugins applied).
     let full_html = fragments::strip_fragment_markers(&rendered);
     let full_html = assets::localize_assets(
         &full_html,
@@ -260,6 +276,21 @@ fn render_static_page(
         asset_client,
         dist_dir,
     ).wrap_err_with(|| format!("Failed to localize assets for '{}'", tmpl_name))?;
+
+    // 4b. Image optimization: convert/compress/resize + rewrite <img> → <picture>.
+    let full_html = assets::optimize_and_rewrite_images(
+        &full_html,
+        &config.assets.images,
+        image_cache,
+        dist_dir,
+    ).wrap_err_with(|| format!("Failed to optimize images for '{}'", tmpl_name))?;
+    let full_html = assets::rewrite_css_background_images(
+        &full_html,
+        &config.assets.images,
+        image_cache,
+        dist_dir,
+    ).wrap_err_with(|| format!("Failed to optimize CSS background images for '{}'", tmpl_name))?;
+
     let full_html = plugin_registry.post_render_html(
         full_html,
         &url_path,
@@ -278,7 +309,7 @@ fn render_static_page(
 
     tracing::debug!("  Static: {} → {} ({} bytes)", tmpl_name, output_path.display(), full_html.len());
 
-    // 5. Extract and write fragments (also localize assets in fragments).
+    // 5. Extract and write fragments (also localize assets + optimize images in fragments).
     if config.build.fragments {
         let frags = extract_page_fragments(&rendered, page, &config.build.content_block);
         if !frags.is_empty() {
@@ -289,10 +320,16 @@ fn render_static_page(
                 asset_client,
                 dist_dir,
             )?;
+            let optimized_frags = optimize_fragment_images(
+                &localized_frags,
+                &config.assets.images,
+                image_cache,
+                dist_dir,
+            )?;
             fragments::write_fragments(
                 dist_dir,
                 &output_path,
-                &localized_frags,
+                &optimized_frags,
                 &config.build.content_block,
                 &config.build.fragment_dir,
             )?;
@@ -324,6 +361,7 @@ fn render_dynamic_page(
     asset_cache: &mut AssetCache,
     asset_client: &reqwest::blocking::Client,
     plugin_registry: &PluginRegistry,
+    image_cache: &ImageCache,
 ) -> Result<Vec<RenderedPage>> {
     let tmpl_name = page.template_path.to_string_lossy().to_string();
     let item_as = &page.frontmatter.item_as;
@@ -444,7 +482,7 @@ fn render_dynamic_page(
             }
         };
 
-        // Write full page (with assets localized, plugins applied).
+        // Write full page (with assets localized, images optimized, plugins applied).
         let full_html = fragments::strip_fragment_markers(&rendered);
         let full_html = assets::localize_assets(
             &full_html,
@@ -455,6 +493,25 @@ fn render_dynamic_page(
         ).wrap_err_with(|| {
             format!("Failed to localize assets for '{}' slug '{}'", tmpl_name, slug)
         })?;
+
+        // Image optimization: convert/compress/resize + rewrite <img> → <picture>.
+        let full_html = assets::optimize_and_rewrite_images(
+            &full_html,
+            &config.assets.images,
+            image_cache,
+            dist_dir,
+        ).wrap_err_with(|| {
+            format!("Failed to optimize images for '{}' slug '{}'", tmpl_name, slug)
+        })?;
+        let full_html = assets::rewrite_css_background_images(
+            &full_html,
+            &config.assets.images,
+            image_cache,
+            dist_dir,
+        ).wrap_err_with(|| {
+            format!("Failed to optimize CSS background images for '{}' slug '{}'", tmpl_name, slug)
+        })?;
+
         let full_html = plugin_registry.post_render_html(
             full_html,
             &url_path,
@@ -473,7 +530,7 @@ fn render_dynamic_page(
         std::fs::write(&full_path, &full_html)
             .wrap_err_with(|| format!("Failed to write {}", full_path.display()))?;
 
-        // Write fragments (also localize assets in fragments).
+        // Write fragments (also localize assets + optimize images in fragments).
         if config.build.fragments {
             let frags = extract_page_fragments(&rendered, page, &config.build.content_block);
             if !frags.is_empty() {
@@ -484,10 +541,16 @@ fn render_dynamic_page(
                     asset_client,
                     dist_dir,
                 )?;
+                let optimized_frags = optimize_fragment_images(
+                    &localized_frags,
+                    &config.assets.images,
+                    image_cache,
+                    dist_dir,
+                )?;
                 fragments::write_fragments(
                     dist_dir,
                     &output_path,
-                    &localized_frags,
+                    &optimized_frags,
                     &config.build.content_block,
                     &config.build.fragment_dir,
                 )?;
@@ -533,6 +596,38 @@ fn localize_fragments(
         result.push(fragments::Fragment {
             block_name: frag.block_name.clone(),
             html: localized_html,
+        });
+    }
+    Ok(result)
+}
+
+/// Optimize images in fragment HTML.
+///
+/// Since the full page has already been through optimization (and all image
+/// variants are cached), this should be fast — no new encoding.
+fn optimize_fragment_images(
+    frags: &[fragments::Fragment],
+    image_config: &crate::config::ImageOptimConfig,
+    image_cache: &ImageCache,
+    dist_dir: &Path,
+) -> Result<Vec<fragments::Fragment>> {
+    let mut result = Vec::with_capacity(frags.len());
+    for frag in frags {
+        let optimized_html = assets::optimize_and_rewrite_images(
+            &frag.html,
+            image_config,
+            image_cache,
+            dist_dir,
+        )?;
+        let optimized_html = assets::rewrite_css_background_images(
+            &optimized_html,
+            image_config,
+            image_cache,
+            dist_dir,
+        )?;
+        result.push(fragments::Fragment {
+            block_name: frag.block_name.clone(),
+            html: optimized_html,
         });
     }
     Ok(result)

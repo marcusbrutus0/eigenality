@@ -12,6 +12,9 @@ homepage = "https://wavefunk.github.io/eigen/"
 
 [dependencies]
 axum = "0.8.8"
+glob = "0.3"
+image = "0.25.10"
+lol_html = "2.7.2"
 axum-htmx = "0.8.1"
 chrono = "0.4"
 clap = { version = "4", features = ["derive"] }

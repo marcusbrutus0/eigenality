@@ -9,3 +9,4 @@
 #/target
 /.envrc.private
 /example_site/dist/
+.eigen_cache/

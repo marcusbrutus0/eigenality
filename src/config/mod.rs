@@ -82,6 +82,9 @@ pub struct AssetsConfig {
     /// list. Useful when a CDN hosts your actual content images.
     #[serde(default)]
     pub cdn_allow_hosts: Vec<String>,
+    /// Image optimization configuration.
+    #[serde(default)]
+    pub images: ImageOptimConfig,
 }
 
 impl Default for AssetsConfig {
@@ -90,8 +93,69 @@ impl Default for AssetsConfig {
             localize: true,
             cdn_skip_hosts: Vec::new(),
             cdn_allow_hosts: Vec::new(),
+            images: ImageOptimConfig::default(),
         }
     }
+}
+
+/// Image optimization configuration.
+///
+/// Controls format conversion, compression quality, and responsive image
+/// generation.  Images are converted to the target formats, resized to
+/// the configured widths, and `<img>` tags are rewritten to `<picture>`
+/// elements with `srcset` for responsive loading.
+#[derive(Debug, Clone, Deserialize)]
+pub struct ImageOptimConfig {
+    /// Master switch — set to `false` to disable all image optimization.
+    #[serde(default = "default_true")]
+    pub optimize: bool,
+    /// Target output formats. Supported: `"webp"`, `"avif"`.
+    /// The original format is always kept as a fallback.
+    #[serde(default = "default_image_formats")]
+    pub formats: Vec<String>,
+    /// Compression quality (1–100). Applies to JPEG, WebP and AVIF output.
+    #[serde(default = "default_image_quality")]
+    pub quality: u8,
+    /// Responsive widths to generate.  Each source image is resized to
+    /// these widths (only if the original is wider).
+    #[serde(default = "default_image_widths")]
+    pub widths: Vec<u32>,
+    /// Glob patterns for files/paths to exclude from optimization.
+    /// Matched against the asset path relative to the site root
+    /// (e.g. `"static/favicons/*"`, `"**/*.svg"`, `"**/*.gif"`).
+    #[serde(default = "default_image_exclude")]
+    pub exclude: Vec<String>,
+}
+
+impl Default for ImageOptimConfig {
+    fn default() -> Self {
+        Self {
+            optimize: true,
+            formats: default_image_formats(),
+            quality: default_image_quality(),
+            widths: default_image_widths(),
+            exclude: default_image_exclude(),
+        }
+    }
+}
+
+fn default_image_formats() -> Vec<String> {
+    vec!["webp".to_string(), "avif".to_string()]
+}
+
+fn default_image_quality() -> u8 {
+    80
+}
+
+fn default_image_widths() -> Vec<u32> {
+    vec![480, 768, 1200]
+}
+
+fn default_image_exclude() -> Vec<String> {
+    vec![
+        "**/*.svg".to_string(),
+        "**/*.gif".to_string(),
+    ]
 }
 
 /// Configuration for an external data source (API).
@@ -361,5 +425,61 @@ option2 = 42
         let custom = config.plugins.get("my_custom_plugin").unwrap();
         assert_eq!(custom.get("option1").unwrap().as_str().unwrap(), "value1");
         assert_eq!(custom.get("option2").unwrap().as_integer().unwrap(), 42);
+    }
+
+    // --- Image optimization config tests ---
+
+    #[test]
+    fn test_image_config_defaults() {
+        let toml_str = r#"
+[site]
+name = "Img Default"
+base_url = "https://example.com"
+"#;
+        let config = parse_toml(toml_str).unwrap();
+        assert!(config.assets.images.optimize);
+        assert_eq!(config.assets.images.formats, vec!["webp", "avif"]);
+        assert_eq!(config.assets.images.quality, 80);
+        assert_eq!(config.assets.images.widths, vec![480, 768, 1200]);
+        assert_eq!(config.assets.images.exclude, vec!["**/*.svg", "**/*.gif"]);
+    }
+
+    #[test]
+    fn test_image_config_custom() {
+        let toml_str = r#"
+[site]
+name = "Img Custom"
+base_url = "https://example.com"
+
+[assets.images]
+optimize = true
+formats = ["webp"]
+quality = 60
+widths = [320, 640, 1024]
+exclude = ["static/favicons/*", "**/*.svg", "**/*.gif", "logo.png"]
+"#;
+        let config = parse_toml(toml_str).unwrap();
+        assert!(config.assets.images.optimize);
+        assert_eq!(config.assets.images.formats, vec!["webp"]);
+        assert_eq!(config.assets.images.quality, 60);
+        assert_eq!(config.assets.images.widths, vec![320, 640, 1024]);
+        assert_eq!(config.assets.images.exclude.len(), 4);
+        assert!(config.assets.images.exclude.contains(&"static/favicons/*".to_string()));
+    }
+
+    #[test]
+    fn test_image_config_disabled() {
+        let toml_str = r#"
+[site]
+name = "Img Disabled"
+base_url = "https://example.com"
+
+[assets.images]
+optimize = false
+"#;
+        let config = parse_toml(toml_str).unwrap();
+        assert!(!config.assets.images.optimize);
+        // Other fields should still have defaults.
+        assert_eq!(config.assets.images.quality, 80);
     }
 }
