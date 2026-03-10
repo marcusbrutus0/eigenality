@@ -195,7 +195,7 @@ fn flatten_strapi_value(value: Value, media_base_url: Option<&str>) -> Value {
             // Pattern 2: { "data": <value> } where data is a relation wrapper.
             // Only unwrap if this looks like a Strapi relation (data + no other
             // content keys, or data is an object with id/attributes).
-            if let Some(data) = map.get("data") {
+            if let Some(_) = map.get("data") {
                 let is_relation_wrapper = is_strapi_relation_wrapper(&map);
                 if is_relation_wrapper {
                     let data = map.remove("data").unwrap();

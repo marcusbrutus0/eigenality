@@ -171,6 +171,7 @@ impl DataFetcher {
     }
 
     /// Clear the URL cache (used when frontmatter queries change during dev).
+    #[allow(unused)]
     pub fn clear_url_cache(&mut self) {
         self.url_cache.clear();
     }
