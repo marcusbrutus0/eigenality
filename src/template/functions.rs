@@ -111,6 +111,7 @@ mod tests {
                 fragments: true,
                 fragment_dir: "_fragments".into(),
                 content_block: "content".into(),
+                ..Default::default()
             },
             assets: Default::default(),
             sources: HashMap::new(),

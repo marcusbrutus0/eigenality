@@ -349,6 +349,7 @@ fn render_static_page(
                 &optimized_frags,
                 &config.build.content_block,
                 &config.build.fragment_dir,
+                &config.build.oob_blocks,
             )?;
         }
     }
@@ -582,6 +583,7 @@ fn render_dynamic_page(
                     &optimized_frags,
                     &config.build.content_block,
                     &config.build.fragment_dir,
+                    &config.build.oob_blocks,
                 )?;
             }
         }

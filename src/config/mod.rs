@@ -40,6 +40,11 @@ pub struct BuildConfig {
     /// The default block name to extract as a fragment.
     #[serde(default = "default_content_block")]
     pub content_block: String,
+    /// Block names to include as HTMX out-of-band swaps in every content
+    /// fragment.  Each listed block is appended to the content fragment with
+    /// `hx-swap-oob="outerHTML"` on its root element.
+    #[serde(default)]
+    pub oob_blocks: Vec<String>,
     /// Whether to minify HTML (including inline CSS and JS) output.
     #[serde(default = "default_true")]
     pub minify: bool,
@@ -51,6 +56,7 @@ impl Default for BuildConfig {
             fragments: true,
             fragment_dir: default_fragment_dir(),
             content_block: default_content_block(),
+            oob_blocks: Vec::new(),
             minify: true,
         }
     }
