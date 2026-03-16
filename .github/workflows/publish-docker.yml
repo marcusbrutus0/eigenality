@@ -1,0 +1,64 @@
+name: Publish to GHCR
+
+on:
+  workflow_call:
+    inputs:
+      plan:
+        required: true
+        type: string
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  publish-docker:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - name: Fetch artifacts
+        uses: actions/download-artifact@v7
+        with:
+          pattern: artifacts-*
+          path: dist-artifacts/
+          merge-multiple: true
+      - name: Extract binary
+        run: |
+          archive=$(ls dist-artifacts/eigen-*x86_64*linux-gnu*.tar.* 2>/dev/null | head -1)
+          if [ -z "$archive" ]; then
+            echo "No Linux x86_64 archive found"
+            ls -la dist-artifacts/
+            exit 1
+          fi
+          tar xf "$archive"
+          cp $(find . -maxdepth 2 -name 'eigen' -type f -not -path './dist-artifacts/*' | head -1) eigen
+          chmod +x eigen
+      - name: Login to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Extract Docker metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=semver,pattern={{major}}
+            type=raw,value=latest
+      - name: Build and push
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          target: release
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}

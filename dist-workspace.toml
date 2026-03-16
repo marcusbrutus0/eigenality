@@ -17,3 +17,6 @@ npm-scope = "@wavefunk"
 install-path = "CARGO_HOME"
 # Whether to install an updater program
 install-updater = false
+# Publish jobs to run in CI
+publish-jobs = ["./publish-docker"]
+github-custom-job-permissions = { "publish-docker" = { contents = "read", id-token = "write", packages = "write" } }

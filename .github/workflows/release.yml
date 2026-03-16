@@ -278,67 +278,30 @@ jobs:
 
           gh release create "${{ needs.plan.outputs.tag }}" --target "$RELEASE_COMMIT" $PRERELEASE_FLAG --title "$ANNOUNCEMENT_TITLE" --notes-file "$RUNNER_TEMP/notes.txt" artifacts/*
 
-  publish-docker:
+  custom-publish-docker:
     needs:
       - plan
       - host
-    if: ${{ needs.plan.outputs.publishing == 'true' }}
-    runs-on: ubuntu-22.04
+    if: ${{ !fromJson(needs.plan.outputs.val).announcement_is_prerelease || fromJson(needs.plan.outputs.val).publish_prereleases }}
+    uses: ./.github/workflows/publish-docker.yml
+    with:
+      plan: ${{ needs.plan.outputs.val }}
+    secrets: inherit
+    # publish jobs get escalated permissions
     permissions:
-      contents: read
-      packages: write
-    env:
-      REGISTRY: ghcr.io
-      IMAGE_NAME: ${{ github.repository }}
-    steps:
-      - uses: actions/checkout@v6
-        with:
-          persist-credentials: false
-      - name: Fetch artifacts
-        uses: actions/download-artifact@v7
-        with:
-          pattern: artifacts-*
-          path: dist-artifacts/
-          merge-multiple: true
-      - name: Extract binary
-        run: |
-          archive=$(ls dist-artifacts/eigen-*x86_64*linux*.tar.* 2>/dev/null | head -1)
-          if [ -z "$archive" ]; then
-            echo "No Linux x86_64 archive found"
-            ls -la dist-artifacts/
-            exit 1
-          fi
-          tar xf "$archive"
-          cp $(find . -maxdepth 2 -name 'eigen' -type f -not -path './dist-artifacts/*' | head -1) eigen
-          chmod +x eigen
-      - name: Login to GHCR
-        uses: docker/login-action@v3
-        with:
-          registry: ${{ env.REGISTRY }}
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-      - name: Extract Docker metadata
-        id: meta
-        uses: docker/metadata-action@v5
-        with:
-          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
-      - name: Build and push
-        uses: docker/build-push-action@v5
-        with:
-          context: .
-          target: release
-          push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
+      "contents": "read"
+      "id-token": "write"
+      "packages": "write"
 
   announce:
     needs:
       - plan
       - host
+      - custom-publish-docker
     # use "always() && ..." to allow us to wait for all publish jobs while
     # still allowing individual publish jobs to skip themselves (for prereleases).
     # "host" however must run to completion, no skipping allowed!
-    if: ${{ always() && needs.host.result == 'success' }}
+    if: ${{ always() && needs.host.result == 'success' && (needs.custom-publish-docker.result == 'skipped' || needs.custom-publish-docker.result == 'success') }}
     runs-on: "ubuntu-22.04"
     env:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -50,6 +50,7 @@
               claude-code
               dolt
               beads-latest
+              cargo-dist
             ];
 
             buildInputs = [
