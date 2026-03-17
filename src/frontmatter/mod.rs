@@ -19,6 +19,12 @@ pub struct Frontmatter {
     /// Which template blocks to extract as fragments (overrides the default
     /// `content_block` from build config).
     pub fragment_blocks: Option<Vec<String>>,
+    /// Path to the hero/LCP image for this page.
+    ///
+    /// When set, a `<link rel="preload">` hint is injected into `<head>`
+    /// for this image, improving Largest Contentful Paint.
+    /// The path should be relative to the site root (e.g. "/assets/hero.jpg").
+    pub hero_image: Option<String>,
 }
 
 impl Default for Frontmatter {
@@ -29,6 +35,7 @@ impl Default for Frontmatter {
             item_as: "item".into(),
             data: HashMap::new(),
             fragment_blocks: None,
+            hero_image: None,
         }
     }
 }
@@ -66,6 +73,7 @@ struct RawFrontmatter {
     #[serde(default)]
     data: HashMap<String, DataQuery>,
     fragment_blocks: Option<Vec<String>>,
+    hero_image: Option<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -139,6 +147,7 @@ pub fn parse_frontmatter(raw_yaml: &str, file_path: &str) -> Result<Frontmatter>
         item_as: raw.item_as.unwrap_or_else(|| "item".into()),
         data: raw.data,
         fragment_blocks: raw.fragment_blocks,
+        hero_image: raw.hero_image,
     })
 }
 
@@ -314,5 +323,27 @@ mod tests {
         assert!(fm.collection.is_none());
         assert!(fm.data.is_empty());
         assert_eq!(body, content);
+    }
+
+    // --- hero_image frontmatter tests ---
+
+    #[test]
+    fn test_parse_hero_image_frontmatter() {
+        let yaml = "hero_image: /assets/hero-banner.jpg\n";
+        let fm = parse_frontmatter(yaml, "index.html").unwrap();
+        assert_eq!(fm.hero_image.as_deref(), Some("/assets/hero-banner.jpg"));
+    }
+
+    #[test]
+    fn test_parse_no_hero_image() {
+        let yaml = "data:\n  nav:\n    file: \"nav.yaml\"\n";
+        let fm = parse_frontmatter(yaml, "index.html").unwrap();
+        assert!(fm.hero_image.is_none());
+    }
+
+    #[test]
+    fn test_default_hero_image_is_none() {
+        let fm = Frontmatter::default();
+        assert!(fm.hero_image.is_none());
     }
 }
