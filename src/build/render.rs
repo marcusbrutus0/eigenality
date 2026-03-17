@@ -18,6 +18,7 @@ use crate::template;
 use crate::template::errors::TemplateError;
 
 use super::context::{self, PageMeta};
+use super::critical_css;
 use super::fragments;
 use super::minify;
 use super::output;
@@ -101,6 +102,12 @@ pub fn build(project_root: &Path) -> Result<()> {
         tracing::info!("HTML minification enabled (CSS + JS).");
     }
 
+    // Critical CSS cache.
+    let mut css_cache = critical_css::StylesheetCache::new();
+    if config.build.critical_css.enabled {
+        tracing::info!("Critical CSS inlining enabled.");
+    }
+
     // Build timestamp.
     let build_time = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
 
@@ -126,6 +133,7 @@ pub fn build(project_root: &Path) -> Result<()> {
                     &asset_client,
                     &plugin_registry,
                     &image_cache,
+                    &mut css_cache,
                 )?;
                 rendered_pages.push(result);
             }
@@ -144,6 +152,7 @@ pub fn build(project_root: &Path) -> Result<()> {
                     &asset_client,
                     &plugin_registry,
                     &image_cache,
+                    &mut css_cache,
                 )?;
                 rendered_pages.extend(results);
             }
@@ -222,6 +231,7 @@ fn render_static_page(
     asset_client: &reqwest::blocking::Client,
     plugin_registry: &PluginRegistry,
     image_cache: &ImageCache,
+    css_cache: &mut critical_css::StylesheetCache,
 ) -> Result<RenderedPage> {
     let tmpl_name = page.template_path.to_string_lossy().to_string();
 
@@ -302,7 +312,19 @@ fn render_static_page(
         dist_dir,
     ).wrap_err_with(|| format!("Plugin post_render_html failed for '{}'", tmpl_name))?;
 
-    // 4c. Minify HTML (last transformation before writing).
+    // 4c. Critical CSS inlining (after plugins, before minify).
+    let full_html = if config.build.critical_css.enabled {
+        critical_css::inline_critical_css(
+            &full_html,
+            &config.build.critical_css,
+            dist_dir,
+            css_cache,
+        )
+    } else {
+        full_html
+    };
+
+    // 4d. Minify HTML (last transformation before writing).
     let full_html = if config.build.minify {
         minify::minify_html(&full_html)
     } else {
@@ -380,6 +402,7 @@ fn render_dynamic_page(
     asset_client: &reqwest::blocking::Client,
     plugin_registry: &PluginRegistry,
     image_cache: &ImageCache,
+    css_cache: &mut critical_css::StylesheetCache,
 ) -> Result<Vec<RenderedPage>> {
     let tmpl_name = page.template_path.to_string_lossy().to_string();
     let item_as = &page.frontmatter.item_as;
@@ -537,6 +560,18 @@ fn render_dynamic_page(
         ).wrap_err_with(|| {
             format!("Plugin post_render_html failed for '{}' slug '{}'", tmpl_name, slug)
         })?;
+
+        // Critical CSS inlining (after plugins, before minify).
+        let full_html = if config.build.critical_css.enabled {
+            critical_css::inline_critical_css(
+                &full_html,
+                &config.build.critical_css,
+                dist_dir,
+                css_cache,
+            )
+        } else {
+            full_html
+        };
 
         // Minify HTML (last transformation before writing).
         let full_html = if config.build.minify {
@@ -1328,5 +1363,112 @@ fragments = false
         let err = format!("{:#}", result.unwrap_err());
         assert!(err.contains("site.toml"));
         assert!(err.contains("eigen init"));
+    }
+
+    #[test]
+    fn test_build_with_critical_css() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path();
+
+        write(
+            root,
+            "site.toml",
+            r#"
+[site]
+name = "Critical CSS Test"
+base_url = "https://test.com"
+
+[build]
+fragments = false
+minify = false
+
+[build.critical_css]
+enabled = true
+"#,
+        );
+
+        write(
+            root,
+            "templates/index.html",
+            r#"<!DOCTYPE html>
+<html>
+<head>
+  <link rel="stylesheet" href="/css/style.css">
+</head>
+<body>
+  <div class="hero">Hello World</div>
+</body>
+</html>"#,
+        );
+
+        write(
+            root,
+            "static/css/style.css",
+            r#"
+.hero { color: red; font-size: 2em; }
+.sidebar { color: blue; }
+.footer { color: gray; }
+"#,
+        );
+
+        build(root).unwrap();
+
+        let html = fs::read_to_string(root.join("dist/index.html")).unwrap();
+
+        // Should have inlined <style> with .hero but not .sidebar or .footer.
+        assert!(html.contains("<style>"));
+        assert!(html.contains(".hero"));
+        assert!(!html.contains(".sidebar"));
+        assert!(!html.contains(".footer"));
+
+        // Should have a preload <link> for the full stylesheet.
+        assert!(html.contains(r#"rel="preload""#));
+        assert!(html.contains(r#"as="style""#));
+        assert!(html.contains("<noscript>"));
+    }
+
+    #[test]
+    fn test_build_critical_css_disabled_by_default() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path();
+
+        write(
+            root,
+            "site.toml",
+            r#"
+[site]
+name = "No Critical CSS"
+base_url = "https://test.com"
+
+[build]
+fragments = false
+minify = false
+"#,
+        );
+
+        write(
+            root,
+            "templates/index.html",
+            r#"<!DOCTYPE html>
+<html>
+<head>
+  <link rel="stylesheet" href="/css/style.css">
+</head>
+<body>
+  <div class="hero">Hello</div>
+</body>
+</html>"#,
+        );
+
+        write(root, "static/css/style.css", ".hero { color: red; }");
+
+        build(root).unwrap();
+
+        let html = fs::read_to_string(root.join("dist/index.html")).unwrap();
+
+        // No inlined <style> -- critical CSS is disabled by default.
+        assert!(!html.contains("<style>"));
+        // Original <link> should be intact.
+        assert!(html.contains(r#"rel="stylesheet""#));
     }
 }
