@@ -48,6 +48,9 @@ pub struct BuildConfig {
     /// Whether to minify HTML (including inline CSS and JS) output.
     #[serde(default = "default_true")]
     pub minify: bool,
+    /// Critical CSS inlining configuration.
+    #[serde(default)]
+    pub critical_css: CriticalCssConfig,
 }
 
 impl Default for BuildConfig {
@@ -58,6 +61,7 @@ impl Default for BuildConfig {
             content_block: default_content_block(),
             oob_blocks: Vec::new(),
             minify: true,
+            critical_css: CriticalCssConfig::default(),
         }
     }
 }
@@ -166,6 +170,49 @@ fn default_image_exclude() -> Vec<String> {
         "**/*.svg".to_string(),
         "**/*.gif".to_string(),
     ]
+}
+
+/// Configuration for critical CSS inlining.
+///
+/// Located under `[build.critical_css]` in site.toml.
+#[derive(Debug, Clone, Deserialize)]
+pub struct CriticalCssConfig {
+    /// Master switch. Default: false (opt-in).
+    #[serde(default)]
+    pub enabled: bool,
+
+    /// Maximum size in bytes for the inlined `<style>` block.
+    /// If the critical CSS exceeds this, fall back to the original
+    /// `<link>` tag (no inlining for that page).
+    /// Default: 50_000 (50 KB).
+    #[serde(default = "default_max_inline_size")]
+    pub max_inline_size: usize,
+
+    /// Whether to keep the original `<link>` tag for async loading of
+    /// the full stylesheet. Default: true.
+    /// When false, the `<link>` is removed entirely (pure tree-shaking mode).
+    #[serde(default = "default_true")]
+    pub preload_full: bool,
+
+    /// Glob patterns for stylesheet paths to exclude from critical CSS
+    /// processing. Matched against the href value.
+    #[serde(default)]
+    pub exclude: Vec<String>,
+}
+
+fn default_max_inline_size() -> usize {
+    50_000
+}
+
+impl Default for CriticalCssConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            max_inline_size: default_max_inline_size(),
+            preload_full: true,
+            exclude: Vec::new(),
+        }
+    }
 }
 
 /// Configuration for an external data source (API).
@@ -500,6 +547,59 @@ minify = false
 "#;
         let config = parse_toml(toml_str).unwrap();
         assert!(!config.build.minify);
+    }
+
+    // --- Critical CSS config tests ---
+
+    #[test]
+    fn test_critical_css_config_defaults() {
+        let toml_str = r#"
+[site]
+name = "CSS Default"
+base_url = "https://example.com"
+"#;
+        let config = parse_toml(toml_str).unwrap();
+        assert!(!config.build.critical_css.enabled);
+        assert_eq!(config.build.critical_css.max_inline_size, 50_000);
+        assert!(config.build.critical_css.preload_full);
+        assert!(config.build.critical_css.exclude.is_empty());
+    }
+
+    #[test]
+    fn test_critical_css_config_custom() {
+        let toml_str = r#"
+[site]
+name = "CSS Custom"
+base_url = "https://example.com"
+
+[build.critical_css]
+enabled = true
+max_inline_size = 30000
+preload_full = false
+exclude = ["**/vendor/**", "**/print.css"]
+"#;
+        let config = parse_toml(toml_str).unwrap();
+        assert!(config.build.critical_css.enabled);
+        assert_eq!(config.build.critical_css.max_inline_size, 30_000);
+        assert!(!config.build.critical_css.preload_full);
+        assert_eq!(config.build.critical_css.exclude.len(), 2);
+    }
+
+    #[test]
+    fn test_critical_css_enabled_only() {
+        let toml_str = r#"
+[site]
+name = "CSS Enabled"
+base_url = "https://example.com"
+
+[build.critical_css]
+enabled = true
+"#;
+        let config = parse_toml(toml_str).unwrap();
+        assert!(config.build.critical_css.enabled);
+        // Other fields should have defaults.
+        assert_eq!(config.build.critical_css.max_inline_size, 50_000);
+        assert!(config.build.critical_css.preload_full);
     }
 
     #[test]
