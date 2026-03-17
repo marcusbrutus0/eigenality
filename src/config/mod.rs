@@ -51,6 +51,9 @@ pub struct BuildConfig {
     /// Critical CSS inlining configuration.
     #[serde(default)]
     pub critical_css: CriticalCssConfig,
+    /// Preload/prefetch resource hints configuration.
+    #[serde(default)]
+    pub hints: HintsConfig,
 }
 
 impl Default for BuildConfig {
@@ -62,6 +65,7 @@ impl Default for BuildConfig {
             oob_blocks: Vec::new(),
             minify: true,
             critical_css: CriticalCssConfig::default(),
+            hints: HintsConfig::default(),
         }
     }
 }
@@ -211,6 +215,62 @@ impl Default for CriticalCssConfig {
             max_inline_size: default_max_inline_size(),
             preload_full: true,
             exclude: Vec::new(),
+        }
+    }
+}
+
+/// Configuration for preload and prefetch resource hints.
+///
+/// Located under `[build.hints]` in site.toml.
+#[derive(Debug, Clone, Deserialize)]
+pub struct HintsConfig {
+    /// Master switch for resource hints. Default: true.
+    /// When false, no preload or prefetch hints are generated.
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+
+    /// Whether to auto-detect the hero image from rendered HTML when
+    /// no `hero_image` is set in frontmatter. Default: true.
+    #[serde(default = "default_true")]
+    pub auto_detect_hero: bool,
+
+    /// Whether to generate prefetch hints for navigation links.
+    /// Default: true.
+    #[serde(default = "default_true")]
+    pub prefetch_links: bool,
+
+    /// Maximum number of `<link rel="prefetch">` hints per page.
+    /// Default: 5.
+    #[serde(default = "default_max_prefetch")]
+    pub max_prefetch: usize,
+
+    /// Fallback value for the `imagesizes` attribute on hero image
+    /// preload hints. Default: "100vw".
+    #[serde(default = "default_image_sizes")]
+    pub hero_image_sizes: String,
+
+    /// Glob patterns for link hrefs to exclude from prefetching.
+    #[serde(default)]
+    pub exclude_prefetch: Vec<String>,
+}
+
+fn default_max_prefetch() -> usize {
+    5
+}
+
+fn default_image_sizes() -> String {
+    "100vw".to_string()
+}
+
+impl Default for HintsConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            auto_detect_hero: true,
+            prefetch_links: true,
+            max_prefetch: default_max_prefetch(),
+            hero_image_sizes: default_image_sizes(),
+            exclude_prefetch: Vec::new(),
         }
     }
 }
@@ -616,5 +676,67 @@ optimize = false
         assert!(!config.assets.images.optimize);
         // Other fields should still have defaults.
         assert_eq!(config.assets.images.quality, 80);
+    }
+
+    // --- Hints config tests ---
+
+    #[test]
+    fn test_hints_config_defaults() {
+        let toml_str = r#"
+[site]
+name = "Hints Default"
+base_url = "https://example.com"
+"#;
+        let config = parse_toml(toml_str).unwrap();
+        assert!(config.build.hints.enabled);
+        assert!(config.build.hints.auto_detect_hero);
+        assert!(config.build.hints.prefetch_links);
+        assert_eq!(config.build.hints.max_prefetch, 5);
+        assert_eq!(config.build.hints.hero_image_sizes, "100vw");
+        assert!(config.build.hints.exclude_prefetch.is_empty());
+    }
+
+    #[test]
+    fn test_hints_config_custom() {
+        let toml_str = r#"
+[site]
+name = "Hints Custom"
+base_url = "https://example.com"
+
+[build.hints]
+enabled = true
+auto_detect_hero = false
+prefetch_links = true
+max_prefetch = 3
+hero_image_sizes = "(max-width: 1200px) 100vw, 1200px"
+exclude_prefetch = ["**/archive/**"]
+"#;
+        let config = parse_toml(toml_str).unwrap();
+        assert!(config.build.hints.enabled);
+        assert!(!config.build.hints.auto_detect_hero);
+        assert!(config.build.hints.prefetch_links);
+        assert_eq!(config.build.hints.max_prefetch, 3);
+        assert_eq!(
+            config.build.hints.hero_image_sizes,
+            "(max-width: 1200px) 100vw, 1200px"
+        );
+        assert_eq!(config.build.hints.exclude_prefetch.len(), 1);
+    }
+
+    #[test]
+    fn test_hints_config_disabled() {
+        let toml_str = r#"
+[site]
+name = "Hints Off"
+base_url = "https://example.com"
+
+[build.hints]
+enabled = false
+"#;
+        let config = parse_toml(toml_str).unwrap();
+        assert!(!config.build.hints.enabled);
+        // Other fields should have defaults.
+        assert!(config.build.hints.auto_detect_hero);
+        assert_eq!(config.build.hints.max_prefetch, 5);
     }
 }
