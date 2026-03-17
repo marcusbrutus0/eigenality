@@ -41,14 +41,14 @@ fn main() -> Result<()> {
             eprintln!("  cd {name} && eigen build");
             Ok(())
         }
-        Command::Dev { project, port } => {
+        Command::Dev { project, port, host } => {
             let project = std::fs::canonicalize(&project)?;
-            tracing::info!("Starting dev server for {} on port {port}...", project.display());
+            tracing::info!("Starting dev server for {} on {host}:{port}...", project.display());
 
             // Build and run the async dev server on the Tokio runtime.
             let rt = tokio::runtime::Runtime::new()?;
             rt.block_on(async {
-                dev::dev_command(&project, port).await
+                dev::dev_command(&project, port, &host).await
             })?;
 
             Ok(())

@@ -36,7 +36,7 @@ use super::watcher::{self, RebuildScope};
 ///    task, since the build uses `reqwest::blocking::Client` which cannot
 ///    run inside an async runtime).
 /// 4. Starts Axum HTTP server.
-pub async fn dev_command(project_root: &Path, port: u16) -> Result<()> {
+pub async fn dev_command(project_root: &Path, port: u16, host: &str) -> Result<()> {
     // Canonicalize the project root.
     let project_root = std::fs::canonicalize(project_root)?;
 
@@ -129,8 +129,9 @@ pub async fn dev_command(project_root: &Path, port: u16) -> Result<()> {
     let app = build_router(dist_dir, &config, reload_tx)?;
 
     // Bind and serve.
-    let addr = SocketAddr::from(([127, 0, 0, 1], port));
-    eprintln!("Dev server running at http://127.0.0.1:{}", port);
+    let addr: SocketAddr = format!("{}:{}", host, port).parse()
+        .map_err(|e| eyre::eyre!("Invalid host:port '{}:{}': {}", host, port, e))?;
+    eprintln!("Dev server running at http://{}:{}", host, port);
     eprintln!("Press Ctrl+C to stop.\n");
 
     let listener = tokio::net::TcpListener::bind(addr).await?;

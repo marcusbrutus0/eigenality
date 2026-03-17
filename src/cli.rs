@@ -38,5 +38,9 @@ pub enum Command {
         /// Port to bind the dev server to
         #[arg(long, default_value_t = 3000)]
         port: u16,
+
+        /// Host address to bind the dev server to
+        #[arg(long, default_value = "127.0.0.1")]
+        host: String,
     },
 }
