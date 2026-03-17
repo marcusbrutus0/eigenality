@@ -2,3 +2,4 @@
 //! images and `<link rel="prefetch">` for navigation links into `<head>`.
 
 pub mod prefetch;
+pub mod preload;
