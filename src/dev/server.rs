@@ -126,7 +126,7 @@ pub async fn dev_command(project_root: &Path, port: u16, host: &str) -> Result<(
 
     // Build Axum router.
     let dist_dir = project_root.join("dist");
-    let app = build_router(dist_dir, &config, reload_tx)?;
+    let app = build_router(dist_dir, &config, reload_tx, rebuild_tx)?;
 
     // Bind and serve.
     let addr: SocketAddr = format!("{}:{}", host, port).parse()
@@ -150,6 +150,7 @@ fn build_router(
     dist_dir: PathBuf,
     config: &SiteConfig,
     reload_tx: broadcast::Sender<()>,
+    rebuild_tx: broadcast::Sender<RebuildScope>,
 ) -> Result<Router> {
     let mut app = Router::new();
 
@@ -160,6 +161,15 @@ fn build_router(
         get(move || {
             let rx = sse_tx.subscribe();
             sse_handler(rx)
+        }),
+    );
+
+    // Webhook rebuild endpoint — POST /_rebuild triggers a full rebuild.
+    app = app.route(
+        "/_rebuild",
+        axum::routing::post(move || async move {
+            let _ = rebuild_tx.send(RebuildScope::Full);
+            axum::http::StatusCode::OK
         }),
     );
 
