@@ -4,6 +4,9 @@
 use std::collections::HashSet;
 use std::sync::LazyLock;
 
+use lightningcss::rules::CssRule;
+use lightningcss::stylesheet::{ParserOptions, PrinterOptions, StyleSheet};
+use lightningcss::traits::ToCss;
 use regex::Regex;
 
 // Pre-compiled regex patterns (compiled once, reused across all calls).
@@ -250,6 +253,241 @@ fn extract_animation_names_from_shorthand(value: &str, names: &mut HashSet<Strin
     }
 }
 
+/// Match CSS rules against an HTML document and return only the rules
+/// whose selectors match at least one element, plus transitively
+/// referenced global rules (@font-face, @keyframes, custom properties).
+///
+/// Returns the critical CSS as a serialized string. Returns an empty
+/// string if no selectors match.
+pub fn extract_critical_css(css: &str, document: &scraper::Html) -> Result<String, String> {
+    let options = ParserOptions {
+        error_recovery: true,
+        ..ParserOptions::default()
+    };
+    let stylesheet = StyleSheet::parse(css, options)
+        .map_err(|e| format!("CSS parse error: {e}"))?;
+
+    let mut matched_rules: Vec<String> = Vec::new();
+    let mut global_deps = GlobalDependencies::default();
+
+    // Collect global rules for later dependency resolution.
+    let mut font_face_rules: Vec<String> = Vec::new();
+    let mut keyframe_rules: Vec<String> = Vec::new();
+    let mut custom_prop_rules: Vec<(String, String)> = Vec::new();
+
+    walk_rules(
+        &stylesheet.rules.0,
+        document,
+        &mut matched_rules,
+        &mut global_deps,
+        &mut font_face_rules,
+        &mut keyframe_rules,
+        &mut custom_prop_rules,
+    );
+
+    if matched_rules.is_empty() {
+        return Ok(String::new());
+    }
+
+    // Second pass: include transitively referenced global rules.
+    let mut critical_parts: Vec<String> = Vec::new();
+
+    // Include referenced @font-face rules.
+    for rule_css in &font_face_rules {
+        for family in &global_deps.font_families {
+            if rule_css.contains(family.as_str()) {
+                critical_parts.push(rule_css.clone());
+                break;
+            }
+        }
+    }
+
+    // Include referenced @keyframes rules.
+    for rule_css in &keyframe_rules {
+        for anim_name in &global_deps.animation_names {
+            if rule_css.contains(anim_name.as_str()) {
+                critical_parts.push(rule_css.clone());
+                break;
+            }
+        }
+    }
+
+    // Include referenced custom property definitions.
+    for (prop_name, rule_css) in &custom_prop_rules {
+        if global_deps.custom_properties.contains(prop_name) {
+            critical_parts.push(rule_css.clone());
+        }
+    }
+
+    // Add matched style rules.
+    critical_parts.extend(matched_rules);
+
+    Ok(critical_parts.join("\n"))
+}
+
+/// Recursively walk CSS rules, matching style rules against the DOM and
+/// collecting global rules for later dependency resolution.
+/// Create default printer options. Helper to avoid repeating the call.
+fn printer() -> PrinterOptions<'static> {
+    PrinterOptions::default()
+}
+
+fn walk_rules(
+    rules: &[CssRule],
+    document: &scraper::Html,
+    matched_rules: &mut Vec<String>,
+    global_deps: &mut GlobalDependencies,
+    font_face_rules: &mut Vec<String>,
+    keyframe_rules: &mut Vec<String>,
+    custom_prop_rules: &mut Vec<(String, String)>,
+) {
+    for rule in rules {
+        match rule {
+            CssRule::Style(style_rule) => {
+                handle_style_rule(
+                    style_rule, document, matched_rules,
+                    global_deps, custom_prop_rules,
+                );
+            }
+            CssRule::Media(media_rule) => {
+                let mut media_matched: Vec<String> = Vec::new();
+                walk_rules(
+                    &media_rule.rules.0, document, &mut media_matched,
+                    global_deps, font_face_rules, keyframe_rules,
+                    custom_prop_rules,
+                );
+                if !media_matched.is_empty() {
+                    let query = media_rule.query
+                        .to_css_string(printer())
+                        .unwrap_or_default();
+                    let inner = media_matched.join("\n");
+                    matched_rules.push(format!("@media {query} {{\n{inner}\n}}"));
+                }
+            }
+            CssRule::Supports(supports_rule) => {
+                let mut supports_matched: Vec<String> = Vec::new();
+                walk_rules(
+                    &supports_rule.rules.0, document, &mut supports_matched,
+                    global_deps, font_face_rules, keyframe_rules,
+                    custom_prop_rules,
+                );
+                if !supports_matched.is_empty() {
+                    let condition = supports_rule.condition
+                        .to_css_string(printer())
+                        .unwrap_or_default();
+                    let inner = supports_matched.join("\n");
+                    matched_rules.push(format!("@supports {condition} {{\n{inner}\n}}"));
+                }
+            }
+            CssRule::LayerBlock(layer_rule) => {
+                let mut layer_matched: Vec<String> = Vec::new();
+                walk_rules(
+                    &layer_rule.rules.0, document, &mut layer_matched,
+                    global_deps, font_face_rules, keyframe_rules,
+                    custom_prop_rules,
+                );
+                if !layer_matched.is_empty() {
+                    let name = layer_rule.name.as_ref()
+                        .and_then(|n| n.to_css_string(printer()).ok())
+                        .unwrap_or_default();
+                    let inner = layer_matched.join("\n");
+                    if name.is_empty() {
+                        matched_rules.push(format!("@layer {{\n{inner}\n}}"));
+                    } else {
+                        matched_rules.push(format!("@layer {name} {{\n{inner}\n}}"));
+                    }
+                }
+            }
+            CssRule::LayerStatement(_) => {
+                if let Ok(css) = rule.to_css_string(printer()) {
+                    matched_rules.push(css);
+                }
+            }
+            CssRule::FontFace(_) => {
+                if let Ok(css) = rule.to_css_string(printer()) {
+                    font_face_rules.push(css);
+                }
+            }
+            CssRule::Keyframes(_) => {
+                if let Ok(css) = rule.to_css_string(printer()) {
+                    keyframe_rules.push(css);
+                }
+            }
+            CssRule::Import(_) | CssRule::Namespace(_) => {
+                if let Ok(css) = rule.to_css_string(printer()) {
+                    matched_rules.push(css);
+                }
+            }
+            _ => {
+                if let Ok(css) = rule.to_css_string(printer()) {
+                    matched_rules.push(css);
+                }
+            }
+        }
+    }
+}
+
+/// Handle a single style rule: check if its selectors match the DOM,
+/// and if so, serialize it and collect its global dependencies.
+/// Also collects custom property definitions from ALL style rules
+/// (matched or not) so they can be included based on var() references.
+fn handle_style_rule(
+    style_rule: &lightningcss::rules::style::StyleRule,
+    document: &scraper::Html,
+    matched_rules: &mut Vec<String>,
+    global_deps: &mut GlobalDependencies,
+    custom_prop_rules: &mut Vec<(String, String)>,
+) {
+    let selector_list = style_rule.selectors
+        .to_css_string(printer())
+        .unwrap_or_default();
+
+    // Serialize the rule text for analysis.
+    let css_text = match style_rule.to_css_string(printer()) {
+        Ok(css) => css,
+        Err(_) => return,
+    };
+
+    // Collect custom property definitions from this rule regardless of
+    // whether it matches. These are needed for var() dependency resolution.
+    for cap in CUSTOM_PROP_DEF_RE.captures_iter(&css_text) {
+        custom_prop_rules.push((cap[1].to_string(), css_text.clone()));
+    }
+
+    // Check each selector in the comma-separated list.
+    let mut any_match = false;
+    for selector in selector_list.split(',') {
+        let selector = selector.trim();
+        if selector.is_empty() {
+            continue;
+        }
+
+        match strip_pseudo_for_matching(selector) {
+            None => {
+                // Pseudo-only selector (e.g. ::selection) -> include unconditionally.
+                any_match = true;
+                break;
+            }
+            Some(stripped) => {
+                if selector_matches(&stripped, document) {
+                    any_match = true;
+                    break;
+                }
+            }
+        }
+    }
+
+    if any_match {
+        // Collect global dependencies from the declaration block.
+        let deps = collect_global_deps(&css_text);
+        global_deps.font_families.extend(deps.font_families);
+        global_deps.animation_names.extend(deps.animation_names);
+        global_deps.custom_properties.extend(deps.custom_properties);
+
+        matched_rules.push(css_text);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -414,5 +652,136 @@ mod tests {
         assert!(deps.font_families.is_empty());
         assert!(deps.animation_names.is_empty());
         assert!(deps.custom_properties.is_empty());
+    }
+
+    // --- extract_critical_css tests ---
+
+    #[test]
+    fn test_extract_simple() {
+        let css = r#"
+            .exists { color: red; }
+            .missing { color: blue; }
+        "#;
+        let html = scraper::Html::parse_document(r#"<div class="exists">Hello</div>"#);
+        let result = extract_critical_css(css, &html).unwrap();
+        assert!(result.contains(".exists"));
+        assert!(result.contains("color"));
+        assert!(!result.contains(".missing"));
+    }
+
+    #[test]
+    fn test_extract_media_query() {
+        let css = r#"
+            @media (max-width: 768px) {
+                .exists { color: red; }
+                .missing { color: blue; }
+            }
+        "#;
+        let html = scraper::Html::parse_document(r#"<div class="exists">Hello</div>"#);
+        let result = extract_critical_css(css, &html).unwrap();
+        assert!(result.contains("@media"));
+        assert!(result.contains(".exists"));
+        assert!(!result.contains(".missing"));
+    }
+
+    #[test]
+    fn test_extract_media_query_no_match() {
+        let css = r#"
+            @media (max-width: 768px) {
+                .missing { color: blue; }
+            }
+        "#;
+        let html = scraper::Html::parse_document(r#"<div class="exists">Hello</div>"#);
+        let result = extract_critical_css(css, &html).unwrap();
+        assert!(!result.contains("@media"));
+        assert!(!result.contains(".missing"));
+    }
+
+    #[test]
+    fn test_extract_font_face_transitive() {
+        let css = r#"
+            @font-face {
+                font-family: "Inter";
+                src: url("/fonts/inter.woff2") format("woff2");
+            }
+            .heading { font-family: "Inter", sans-serif; }
+            .unused { color: green; }
+        "#;
+        let html = scraper::Html::parse_document(r#"<h1 class="heading">Title</h1>"#);
+        let result = extract_critical_css(css, &html).unwrap();
+        assert!(result.contains("@font-face"));
+        assert!(result.contains("Inter"));
+        assert!(result.contains(".heading"));
+        assert!(!result.contains(".unused"));
+    }
+
+    #[test]
+    fn test_extract_keyframes_transitive() {
+        let css = r#"
+            @keyframes spin {
+                from { transform: rotate(0deg); }
+                to { transform: rotate(360deg); }
+            }
+            .spinner { animation-name: spin; }
+            .unused { color: green; }
+        "#;
+        let html = scraper::Html::parse_document(r#"<div class="spinner">Loading</div>"#);
+        let result = extract_critical_css(css, &html).unwrap();
+        assert!(result.contains("@keyframes"));
+        assert!(result.contains("spin"));
+        assert!(result.contains(".spinner"));
+        assert!(!result.contains(".unused"));
+    }
+
+    #[test]
+    fn test_extract_custom_property() {
+        let css = r#"
+            :root { --color-primary: blue; --unused-var: green; }
+            .btn { color: var(--color-primary); }
+        "#;
+        let html = scraper::Html::parse_document(
+            r#"<html><body><button class="btn">Click</button></body></html>"#
+        );
+        let result = extract_critical_css(css, &html).unwrap();
+        // :root matches <html>, so the :root rule should be included via
+        // normal selector matching regardless of var() tracking.
+        assert!(result.contains(":root"));
+        assert!(result.contains(".btn"));
+    }
+
+    #[test]
+    fn test_extract_layer_statement() {
+        let css = r#"
+            @layer reset, base, components;
+            .exists { color: red; }
+        "#;
+        let html = scraper::Html::parse_document(r#"<div class="exists">Hello</div>"#);
+        let result = extract_critical_css(css, &html).unwrap();
+        assert!(result.contains("@layer"));
+        assert!(result.contains(".exists"));
+    }
+
+    #[test]
+    fn test_extract_empty_result() {
+        let css = r#"
+            .missing { color: red; }
+            .also-missing { color: blue; }
+        "#;
+        let html = scraper::Html::parse_document("<div>No matching classes</div>");
+        let result = extract_critical_css(css, &html).unwrap();
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn test_extract_pseudo_selector_included() {
+        let css = r#"
+            .btn { color: blue; }
+            .btn:hover { color: red; }
+        "#;
+        let html = scraper::Html::parse_document(r#"<button class="btn">Click</button>"#);
+        let result = extract_critical_css(css, &html).unwrap();
+        // Both the base rule and the :hover rule should be included.
+        assert!(result.contains(".btn"));
+        assert!(result.contains("red") || result.contains("hover"));
     }
 }
