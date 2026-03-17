@@ -20,6 +20,7 @@ use crate::template::errors::TemplateError;
 use super::context::{self, PageMeta};
 use super::critical_css;
 use super::fragments;
+use super::hints;
 use super::minify;
 use super::output;
 use super::sitemap;
@@ -106,6 +107,10 @@ pub fn build(project_root: &Path) -> Result<()> {
     let mut css_cache = critical_css::StylesheetCache::new();
     if config.build.critical_css.enabled {
         tracing::info!("Critical CSS inlining enabled.");
+    }
+
+    if config.build.hints.enabled {
+        tracing::info!("Resource hints enabled (preload + prefetch).");
     }
 
     // Build timestamp.
@@ -324,7 +329,22 @@ fn render_static_page(
         full_html
     };
 
-    // 4d. Minify HTML (last transformation before writing).
+    // 4d. Preload/prefetch hints (after critical CSS, before minify).
+    let full_html = if config.build.hints.enabled {
+        hints::inject_resource_hints(
+            &full_html,
+            &config.build.hints,
+            dist_dir,
+            page.frontmatter.hero_image.as_deref(),
+            &url_path,
+            &config.build.fragment_dir,
+            config.build.fragments,
+        )
+    } else {
+        full_html
+    };
+
+    // 4e. Minify HTML (last transformation before writing).
     let full_html = if config.build.minify {
         minify::minify_html(&full_html)
     } else {
@@ -568,6 +588,21 @@ fn render_dynamic_page(
                 &config.build.critical_css,
                 dist_dir,
                 css_cache,
+            )
+        } else {
+            full_html
+        };
+
+        // Preload/prefetch hints (after critical CSS, before minify).
+        let full_html = if config.build.hints.enabled {
+            hints::inject_resource_hints(
+                &full_html,
+                &config.build.hints,
+                dist_dir,
+                page.frontmatter.hero_image.as_deref(),
+                &url_path,
+                &config.build.fragment_dir,
+                config.build.fragments,
             )
         } else {
             full_html
