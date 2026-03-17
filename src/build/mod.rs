@@ -2,6 +2,7 @@
 //! extraction, and sitemap generation.
 
 pub mod context;
+pub mod critical_css;
 pub mod fragments;
 pub mod minify;
 pub mod output;
