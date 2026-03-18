@@ -285,9 +285,11 @@ pub fn page_checks(
         },
     );
 
-    // Extract the findings from the Rc<RefCell<>>.
-    let inner = Rc::try_unwrap(findings).expect("all handler references dropped after rewrite_str");
-    inner.into_inner()
+    // Extract findings — Rc should have exactly one reference after rewrite_str completes.
+    match Rc::try_unwrap(findings) {
+        Ok(cell) => cell.into_inner(),
+        Err(rc) => rc.borrow().clone(),
+    }
 }
 
 #[cfg(test)]

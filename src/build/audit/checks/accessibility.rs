@@ -55,8 +55,7 @@ pub fn page_checks(html: &str, page_path: &str, template_path: &str) -> Vec<Find
         empty_links: &Rc<RefCell<Vec<String>>>,
     ) {
         if let Some(h) = href.borrow_mut().take() {
-            let content = text.borrow().trim().to_string();
-            if content.is_empty() && !*has_aria.borrow() {
+            if text.borrow().trim().is_empty() && !*has_aria.borrow() {
                 empty_links.borrow_mut().push(h);
             }
         }
@@ -106,7 +105,8 @@ pub fn page_checks(html: &str, page_path: &str, template_path: &str) -> Vec<Find
     );
 
     // If lol_html fails, return empty — don't crash the audit.
-    if result.is_err() {
+    if let Err(e) = result {
+        tracing::warn!("Accessibility audit: lol_html parsing failed: {e}");
         return Vec::new();
     }
 
