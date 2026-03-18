@@ -125,7 +125,10 @@ impl DevBuildState {
                 }
                 RebuildScope::StaticOnly => {
                     tracing::info!("Re-copying static assets...");
-                    crate::build::output::copy_static_assets(&self.project_root)?;
+                    let _ = crate::build::output::copy_static_assets(
+                        &self.project_root,
+                        &crate::config::ContentHashConfig::default(),
+                    )?;
                     tracing::info!("Static assets copied.");
                 }
             }
@@ -162,7 +165,10 @@ impl DevBuildState {
             config.build.fragments,
             &config.build.fragment_dir,
         )?;
-        crate::build::output::copy_static_assets(project_root)?;
+        let _ = crate::build::output::copy_static_assets(
+            project_root,
+            &crate::config::ContentHashConfig::default(),
+        )?;
 
         // Set up template engine (with plugin extensions).
         let env = template::setup_environment(project_root, config, &pages, Some(&self.plugin_registry))?;

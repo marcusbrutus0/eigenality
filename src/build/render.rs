@@ -69,7 +69,16 @@ pub fn build(project_root: &Path) -> Result<()> {
         config.build.fragments,
         &config.build.fragment_dir,
     )?;
-    output::copy_static_assets(project_root)?;
+    // Phase 1: Copy static assets (with content hashing if enabled).
+    let manifest = output::copy_static_assets(project_root, &config.build.content_hash)?;
+    let manifest = std::sync::Arc::new(manifest);
+
+    if !manifest.is_empty() {
+        tracing::info!(
+            "Content hashing: {} assets fingerprinted.",
+            manifest.len(),
+        );
+    }
     tracing::info!("Copying static assets... ✓");
 
     // Set up template engine (with plugin extensions).
