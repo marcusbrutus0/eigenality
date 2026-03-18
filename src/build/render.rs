@@ -21,6 +21,7 @@ use super::bundling;
 use super::content_hash;
 use super::context::{self, PageMeta};
 use super::critical_css;
+use super::feed;
 use super::fragments;
 use super::hints;
 use super::json_ld;
@@ -197,6 +198,18 @@ pub fn build(project_root: &Path) -> Result<()> {
     // Generate sitemap.
     sitemap::generate_sitemap(&dist_dir, &rendered_pages, &config, &build_time)?;
     tracing::info!("Generating sitemap... ✓");
+
+    // Generate Atom feeds.
+    if !config.feed.is_empty() {
+        let feed_count = feed::generate_feeds(
+            &dist_dir,
+            &config,
+            &mut fetcher,
+            Some(&plugin_registry),
+            &build_time,
+        )?;
+        tracing::info!("Generating {} feed(s)... done", feed_count);
+    }
 
     // Run post-build hooks
     plugin_registry.post_build(&dist_dir, project_root)?;

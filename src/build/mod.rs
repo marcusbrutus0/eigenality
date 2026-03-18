@@ -5,6 +5,7 @@ pub mod bundling;
 pub mod content_hash;
 pub mod context;
 pub mod critical_css;
+pub mod feed;
 pub mod fragments;
 pub mod hints;
 pub mod json_ld;
