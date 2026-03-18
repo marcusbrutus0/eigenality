@@ -204,7 +204,7 @@ mod tests {
     use std::fs;
     use tempfile::TempDir;
 
-    use crate::config::{BuildConfig, SiteMeta, SiteSeoConfig, SourceConfig};
+    use crate::config::{BuildConfig, SiteSchemaConfig, SiteMeta, SiteSeoConfig, SourceConfig};
 
     /// Create a minimal SiteConfig for testing.
     fn test_config() -> SiteConfig {
@@ -221,6 +221,7 @@ mod tests {
                 name: "Test".into(),
                 base_url: "https://test.com".into(),
                 seo: SiteSeoConfig::default(),
+                schema: SiteSchemaConfig::default(),
             },
             build: BuildConfig::default(),
             assets: Default::default(),

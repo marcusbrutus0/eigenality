@@ -29,6 +29,9 @@ pub struct SiteMeta {
     /// Site-level SEO defaults for Open Graph and Twitter Card tags.
     #[serde(default)]
     pub seo: SiteSeoConfig,
+    /// Site-level structured data (JSON-LD) defaults.
+    #[serde(default)]
+    pub schema: SiteSchemaConfig,
 }
 
 /// Build-related configuration.
@@ -438,6 +441,22 @@ impl Default for SiteSeoConfig {
             twitter_card: default_twitter_card(),
         }
     }
+}
+
+/// Site-level structured data (JSON-LD) defaults.
+///
+/// Located under `[site.schema]` in site.toml.
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct SiteSchemaConfig {
+    /// Default author name for Article schemas.
+    /// Used when a page does not specify an author in frontmatter.
+    pub author: Option<String>,
+
+    /// Default schema types to apply to all pages.
+    /// Example: ["BreadcrumbList"]
+    /// Pages can override this with their own `schema` frontmatter field.
+    #[serde(default)]
+    pub default_types: Vec<String>,
 }
 
 /// Configuration for an external data source (API).
@@ -1095,5 +1114,35 @@ twitter_site = "@partial"
         assert_eq!(config.site.seo.og_type, "website");
         assert_eq!(config.site.seo.twitter_site.as_deref(), Some("@partial"));
         assert_eq!(config.site.seo.twitter_card, "summary_large_image");
+    }
+
+    // --- Site schema config tests ---
+
+    #[test]
+    fn test_site_schema_config_defaults() {
+        let toml_str = r#"
+[site]
+name = "Schema Default"
+base_url = "https://example.com"
+"#;
+        let config = parse_toml(toml_str).unwrap();
+        assert!(config.site.schema.author.is_none());
+        assert!(config.site.schema.default_types.is_empty());
+    }
+
+    #[test]
+    fn test_site_schema_config_custom() {
+        let toml_str = r#"
+[site]
+name = "Schema Custom"
+base_url = "https://example.com"
+
+[site.schema]
+author = "Jane Doe"
+default_types = ["BreadcrumbList"]
+"#;
+        let config = parse_toml(toml_str).unwrap();
+        assert_eq!(config.site.schema.author.as_deref(), Some("Jane Doe"));
+        assert_eq!(config.site.schema.default_types, vec!["BreadcrumbList"]);
     }
 }

@@ -110,7 +110,7 @@ fn compute_fragment_path(page_path: &str, fragment_dir: &str, block: &str) -> St
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{BuildConfig, SiteMeta, SiteSeoConfig};
+    use crate::config::{BuildConfig, SiteSchemaConfig, SiteMeta, SiteSeoConfig};
     use minijinja::context;
     use std::collections::HashMap;
 
@@ -120,6 +120,7 @@ mod tests {
                 name: "Test Site".into(),
                 base_url: "https://example.com".into(),
                 seo: SiteSeoConfig::default(),
+                schema: SiteSchemaConfig::default(),
             },
             build: BuildConfig {
                 fragments: true,
@@ -139,6 +140,7 @@ mod tests {
                 name: "Test Site".into(),
                 base_url: "https://example.com".into(),
                 seo: SiteSeoConfig::default(),
+                schema: SiteSchemaConfig::default(),
             },
             build: BuildConfig {
                 fragments: false,

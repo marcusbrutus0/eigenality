@@ -165,7 +165,7 @@ fn collect_underscore_templates(templates_dir: &Path) -> Result<Vec<(String, Str
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{BuildConfig, SiteMeta, SiteSeoConfig};
+    use crate::config::{BuildConfig, SiteSchemaConfig, SiteMeta, SiteSeoConfig};
     use crate::discovery::{PageDef, PageType};
     use crate::frontmatter::Frontmatter;
     use std::path::PathBuf;
@@ -178,6 +178,7 @@ mod tests {
                 name: "Test".into(),
                 base_url: "https://test.com".into(),
                 seo: SiteSeoConfig::default(),
+                schema: SiteSchemaConfig::default(),
             },
             build: BuildConfig {
                 fragments: false,

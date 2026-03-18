@@ -71,7 +71,7 @@ fn escape_xml(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{BuildConfig, SiteMeta, SiteSeoConfig};
+    use crate::config::{BuildConfig, SiteSchemaConfig, SiteMeta, SiteSeoConfig};
     use std::collections::HashMap;
     use std::fs;
     use tempfile::TempDir;
@@ -82,6 +82,7 @@ mod tests {
                 name: "Test".into(),
                 base_url: "https://example.com".into(),
                 seo: SiteSeoConfig::default(),
+                schema: SiteSchemaConfig::default(),
             },
             build: BuildConfig::default(),
             assets: Default::default(),

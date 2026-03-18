@@ -244,6 +244,7 @@ mod tests {
                 name: "Test".into(),
                 base_url: "https://example.com".into(),
                 seo: crate::config::SiteSeoConfig::default(),
+                schema: crate::config::SiteSchemaConfig::default(),
             },
             build: crate::config::BuildConfig::default(),
             assets: Default::default(),

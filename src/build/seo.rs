@@ -420,7 +420,7 @@ pub fn resolve_seo_expressions(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::SiteSeoConfig;
+    use crate::config::{SiteSchemaConfig, SiteSeoConfig};
 
     /// Build a minimal SiteMeta for testing.
     fn test_site(name: &str, base_url: &str) -> SiteMeta {
@@ -428,6 +428,7 @@ mod tests {
             name: name.to_string(),
             base_url: base_url.to_string(),
             seo: SiteSeoConfig::default(),
+            schema: SiteSchemaConfig::default(),
         }
     }
 
@@ -441,6 +442,7 @@ mod tests {
             name: name.to_string(),
             base_url: base_url.to_string(),
             seo,
+            schema: SiteSchemaConfig::default(),
         }
     }
 
