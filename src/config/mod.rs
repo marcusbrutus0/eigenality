@@ -79,6 +79,9 @@ pub struct BuildConfig {
     /// CSS/JS bundling and tree-shaking configuration.
     #[serde(default)]
     pub bundling: BundlingConfig,
+    /// View Transitions API configuration.
+    #[serde(default)]
+    pub view_transitions: ViewTransitionsConfig,
 }
 
 impl Default for BuildConfig {
@@ -93,6 +96,7 @@ impl Default for BuildConfig {
             hints: HintsConfig::default(),
             content_hash: ContentHashConfig::default(),
             bundling: BundlingConfig::default(),
+            view_transitions: ViewTransitionsConfig::default(),
         }
     }
 }
@@ -397,6 +401,25 @@ impl Default for BundlingConfig {
             js_output: default_js_output(),
             exclude: Vec::new(),
         }
+    }
+}
+
+/// View Transitions API configuration.
+///
+/// When enabled, injects a `<meta name="view-transition">` tag and an
+/// inline script that enables `htmx.config.globalViewTransitions` for
+/// smooth animated transitions between HTMX partial swaps.
+#[derive(Debug, Clone, Deserialize)]
+pub struct ViewTransitionsConfig {
+    /// Whether to inject view transition meta tag, script, and
+    /// transition names into rendered pages.
+    #[serde(default)]
+    pub enabled: bool,
+}
+
+impl Default for ViewTransitionsConfig {
+    fn default() -> Self {
+        Self { enabled: false }
     }
 }
 
@@ -1763,5 +1786,31 @@ extra_sitemaps = ["/sitemap-news.xml"]
         assert!(result.is_err());
         let err = result.unwrap_err().to_string();
         assert!(err.contains("absolute URL"));
+    }
+
+    // --- View transitions config tests ---
+
+    #[test]
+    fn test_view_transitions_default_disabled() {
+        let toml_str = r#"
+[site]
+name = "Test"
+base_url = "https://example.com"
+"#;
+        let config: SiteConfig = toml::from_str(toml_str).unwrap();
+        assert!(!config.build.view_transitions.enabled);
+    }
+
+    #[test]
+    fn test_view_transitions_enabled() {
+        let toml_str = r#"
+[site]
+name = "Test"
+base_url = "https://example.com"
+[build.view_transitions]
+enabled = true
+"#;
+        let config: SiteConfig = toml::from_str(toml_str).unwrap();
+        assert!(config.build.view_transitions.enabled);
     }
 }

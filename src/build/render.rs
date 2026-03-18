@@ -30,6 +30,7 @@ use super::output;
 use super::robots;
 use super::seo;
 use super::sitemap;
+use super::view_transitions;
 
 /// A record of a rendered page, used for sitemap generation and auditing.
 #[derive(Debug, Clone)]
@@ -392,6 +393,13 @@ fn render_static_page(
         }
     };
 
+    // Extract fragment block names (before marker stripping) for view transitions.
+    let block_names = if config.build.view_transitions.enabled {
+        fragments::extract_block_names(&rendered)
+    } else {
+        Vec::new()
+    };
+
     // 4. Write full page (with markers stripped, assets localized, images optimized, plugins applied).
     let full_html = fragments::strip_fragment_markers(&rendered);
     let full_html = assets::localize_assets(
@@ -468,7 +476,14 @@ fn render_static_page(
         &url_path,
     );
 
-    // 4g. Minify HTML (last transformation before writing).
+    // 4g. View transitions injection (after JSON-LD, before minify).
+    let full_html = if config.build.view_transitions.enabled {
+        view_transitions::inject_view_transitions(&full_html, &block_names)
+    } else {
+        full_html
+    };
+
+    // 4h. Minify HTML (last transformation before writing).
     let full_html = if config.build.minify {
         minify::minify_html(&full_html)
     } else {
@@ -683,6 +698,13 @@ fn render_dynamic_page(
             }
         };
 
+        // Extract fragment block names (before marker stripping) for view transitions.
+        let block_names = if config.build.view_transitions.enabled {
+            fragments::extract_block_names(&rendered)
+        } else {
+            Vec::new()
+        };
+
         // Write full page (with assets localized, images optimized, plugins applied).
         let full_html = fragments::strip_fragment_markers(&rendered);
         let full_html = assets::localize_assets(
@@ -766,6 +788,13 @@ fn render_dynamic_page(
             &config.site,
             &url_path,
         );
+
+        // View transitions injection (after JSON-LD, before minify).
+        let full_html = if config.build.view_transitions.enabled {
+            view_transitions::inject_view_transitions(&full_html, &block_names)
+        } else {
+            full_html
+        };
 
         // Minify HTML (last transformation before writing).
         let full_html = if config.build.minify {
