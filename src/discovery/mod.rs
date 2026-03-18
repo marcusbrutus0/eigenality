@@ -228,6 +228,7 @@ mod tests {
             sources,
             plugins: HashMap::new(),
             feed: HashMap::new(),
+            robots: None,
         }
     }
 

@@ -100,6 +100,7 @@ mod tests {
             sources: HashMap::new(),
             plugins: HashMap::new(),
             feed: HashMap::new(),
+            robots: None,
         }
     }
 

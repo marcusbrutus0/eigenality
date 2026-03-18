@@ -23,6 +23,11 @@ pub struct SiteConfig {
     /// with its feed-specific config table.
     #[serde(default)]
     pub feed: HashMap<String, FeedConfig>,
+    /// robots.txt generation configuration.
+    /// When present, a robots.txt file is generated during build.
+    /// When absent (`None`), no robots.txt is generated.
+    #[serde(default)]
+    pub robots: Option<RobotsConfig>,
 }
 
 /// Metadata about the site itself.
@@ -461,6 +466,48 @@ fn default_slug_field() -> String {
     "slug".to_string()
 }
 
+/// Configuration for robots.txt generation.
+///
+/// Located under `[robots]` in site.toml. When present (even as an
+/// empty table), a robots.txt file is generated during build.
+#[derive(Debug, Clone, Deserialize)]
+pub struct RobotsConfig {
+    /// Whether to include a `Sitemap:` directive for the generated sitemap.xml.
+    #[serde(default = "default_true")]
+    pub sitemap: bool,
+
+    /// Additional absolute sitemap URLs to include as `Sitemap:` directives.
+    #[serde(default)]
+    pub extra_sitemaps: Vec<String>,
+
+    /// Rule groups. Defaults to a single rule allowing all crawlers.
+    #[serde(default = "default_robots_rules")]
+    pub rules: Vec<RobotsRule>,
+}
+
+/// A single user-agent rule group in robots.txt.
+#[derive(Debug, Clone, Deserialize)]
+pub struct RobotsRule {
+    /// The user-agent string, e.g. `"*"` or `"Googlebot"`.
+    pub user_agent: String,
+
+    /// Paths to allow.
+    #[serde(default)]
+    pub allow: Vec<String>,
+
+    /// Paths to disallow.
+    #[serde(default)]
+    pub disallow: Vec<String>,
+}
+
+fn default_robots_rules() -> Vec<RobotsRule> {
+    vec![RobotsRule {
+        user_agent: "*".to_string(),
+        allow: vec!["/".to_string()],
+        disallow: Vec::new(),
+    }]
+}
+
 /// Site-level SEO defaults for Open Graph and Twitter Card meta tags.
 ///
 /// Located under `[site.seo]` in site.toml. These provide fallback
@@ -617,6 +664,7 @@ fn validate_config(config: &SiteConfig) -> Result<()> {
         bail!("site.name must not be empty in site.toml");
     }
     validate_feed_configs(config)?;
+    validate_robots_config(config)?;
     Ok(())
 }
 
@@ -668,6 +716,46 @@ fn validate_feed_configs(config: &SiteConfig) -> Result<()> {
         // slug_field must not be empty.
         if feed.slug_field.is_empty() {
             bail!("Feed '{}' has an empty `slug_field`.", name);
+        }
+    }
+
+    Ok(())
+}
+
+/// Validate robots.txt configuration.
+fn validate_robots_config(config: &SiteConfig) -> Result<()> {
+    let robots = match &config.robots {
+        Some(r) => r,
+        None => return Ok(()),
+    };
+
+    for (i, rule) in robots.rules.iter().enumerate() {
+        if rule.user_agent.is_empty() {
+            bail!(
+                "robots.rules[{}] has an empty `user_agent`. \
+                 Each rule must specify a user-agent string.",
+                i,
+            );
+        }
+
+        if rule.allow.is_empty() && rule.disallow.is_empty() {
+            tracing::warn!(
+                "robots.rules[{}] (user-agent '{}') has no allow or \
+                 disallow directives. This rule has no effect.",
+                i,
+                rule.user_agent,
+            );
+        }
+    }
+
+    for (i, url) in robots.extra_sitemaps.iter().enumerate() {
+        if !url.starts_with("http://") && !url.starts_with("https://") {
+            bail!(
+                "robots.extra_sitemaps[{}] = '{}' is not an absolute URL. \
+                 Sitemap URLs must start with http:// or https://.",
+                i,
+                url,
+            );
         }
     }
 
@@ -1463,5 +1551,142 @@ limit = 0
         let config = parse_toml(toml_str).unwrap();
         let result = validate_feed_configs(&config);
         assert!(result.is_err());
+    }
+
+    // --- Robots config tests ---
+
+    #[test]
+    fn test_robots_config_absent() {
+        let toml_str = r#"
+[site]
+name = "No Robots"
+base_url = "https://example.com"
+"#;
+        let config = parse_toml(toml_str).unwrap();
+        assert!(config.robots.is_none());
+    }
+
+    #[test]
+    fn test_robots_config_empty_table() {
+        let toml_str = r#"
+[site]
+name = "Robots Default"
+base_url = "https://example.com"
+
+[robots]
+"#;
+        let config = parse_toml(toml_str).unwrap();
+        assert!(config.robots.is_some());
+        let robots = config.robots.unwrap();
+        assert!(robots.sitemap);
+        assert!(robots.extra_sitemaps.is_empty());
+        assert_eq!(robots.rules.len(), 1);
+        assert_eq!(robots.rules[0].user_agent, "*");
+        assert_eq!(robots.rules[0].allow, vec!["/"]);
+        assert!(robots.rules[0].disallow.is_empty());
+    }
+
+    #[test]
+    fn test_robots_config_full() {
+        let toml_str = r#"
+[site]
+name = "Robots Full"
+base_url = "https://example.com"
+
+[robots]
+sitemap = true
+extra_sitemaps = ["https://example.com/news-sitemap.xml"]
+
+[[robots.rules]]
+user_agent = "*"
+allow = ["/"]
+disallow = ["/admin/", "/private/"]
+
+[[robots.rules]]
+user_agent = "BadBot"
+disallow = ["/"]
+"#;
+        let config = parse_toml(toml_str).unwrap();
+        let robots = config.robots.unwrap();
+        assert!(robots.sitemap);
+        assert_eq!(robots.extra_sitemaps, vec!["https://example.com/news-sitemap.xml"]);
+        assert_eq!(robots.rules.len(), 2);
+        assert_eq!(robots.rules[0].user_agent, "*");
+        assert_eq!(robots.rules[0].allow, vec!["/"]);
+        assert_eq!(robots.rules[0].disallow, vec!["/admin/", "/private/"]);
+        assert_eq!(robots.rules[1].user_agent, "BadBot");
+        assert!(robots.rules[1].allow.is_empty());
+        assert_eq!(robots.rules[1].disallow, vec!["/"]);
+    }
+
+    #[test]
+    fn test_robots_config_no_sitemap() {
+        let toml_str = r#"
+[site]
+name = "Robots No Sitemap"
+base_url = "https://example.com"
+
+[robots]
+sitemap = false
+"#;
+        let config = parse_toml(toml_str).unwrap();
+        let robots = config.robots.unwrap();
+        assert!(!robots.sitemap);
+    }
+
+    #[test]
+    fn test_robots_config_multiple_rules() {
+        let toml_str = r#"
+[site]
+name = "Robots Multi"
+base_url = "https://example.com"
+
+[[robots.rules]]
+user_agent = "Googlebot"
+allow = ["/"]
+
+[[robots.rules]]
+user_agent = "Bingbot"
+allow = ["/public/"]
+disallow = ["/private/"]
+"#;
+        let config = parse_toml(toml_str).unwrap();
+        let robots = config.robots.unwrap();
+        assert_eq!(robots.rules.len(), 2);
+    }
+
+    #[test]
+    fn test_robots_validation_empty_user_agent() {
+        let toml_str = r#"
+[site]
+name = "Bad Robots"
+base_url = "https://example.com"
+
+[[robots.rules]]
+user_agent = ""
+allow = ["/"]
+"#;
+        let config = parse_toml(toml_str).unwrap();
+        let result = validate_robots_config(&config);
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("user_agent"));
+    }
+
+    #[test]
+    fn test_robots_validation_bad_extra_sitemap() {
+        let toml_str = r#"
+[site]
+name = "Bad Sitemap URL"
+base_url = "https://example.com"
+
+[robots]
+extra_sitemaps = ["/sitemap-news.xml"]
+"#;
+        let config = parse_toml(toml_str).unwrap();
+        let result = validate_robots_config(&config);
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("absolute URL"));
     }
 }
