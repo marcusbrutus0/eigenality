@@ -54,6 +54,9 @@ pub struct BuildConfig {
     /// Preload/prefetch resource hints configuration.
     #[serde(default)]
     pub hints: HintsConfig,
+    /// Content hashing for static assets.
+    #[serde(default)]
+    pub content_hash: ContentHashConfig,
 }
 
 impl Default for BuildConfig {
@@ -66,6 +69,7 @@ impl Default for BuildConfig {
             minify: true,
             critical_css: CriticalCssConfig::default(),
             hints: HintsConfig::default(),
+            content_hash: ContentHashConfig::default(),
         }
     }
 }
@@ -271,6 +275,42 @@ impl Default for HintsConfig {
             max_prefetch: default_max_prefetch(),
             hero_image_sizes: default_image_sizes(),
             exclude_prefetch: Vec::new(),
+        }
+    }
+}
+
+/// Configuration for content hashing of static assets.
+///
+/// Located under `[build.content_hash]` in site.toml.
+#[derive(Debug, Clone, Deserialize)]
+pub struct ContentHashConfig {
+    /// Master switch. Default: false (opt-in).
+    #[serde(default)]
+    pub enabled: bool,
+
+    /// Glob patterns for files in `static/` to exclude from hashing.
+    /// Matched against the path relative to `static/`.
+    /// Default: common files that must keep stable names.
+    #[serde(default = "default_hash_exclude")]
+    pub exclude: Vec<String>,
+}
+
+fn default_hash_exclude() -> Vec<String> {
+    vec![
+        "favicon.ico".into(),
+        "robots.txt".into(),
+        "CNAME".into(),
+        "_headers".into(),
+        "_redirects".into(),
+        ".well-known/**".into(),
+    ]
+}
+
+impl Default for ContentHashConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            exclude: default_hash_exclude(),
         }
     }
 }
@@ -738,5 +778,54 @@ enabled = false
         // Other fields should have defaults.
         assert!(config.build.hints.auto_detect_hero);
         assert_eq!(config.build.hints.max_prefetch, 5);
+    }
+
+    // --- Content hash config tests ---
+
+    #[test]
+    fn test_content_hash_config_defaults() {
+        let toml_str = r#"
+[site]
+name = "Hash Default"
+base_url = "https://example.com"
+"#;
+        let config = parse_toml(toml_str).unwrap();
+        assert!(!config.build.content_hash.enabled);
+        assert_eq!(config.build.content_hash.exclude.len(), 6);
+        assert!(config.build.content_hash.exclude.contains(&"favicon.ico".to_string()));
+        assert!(config.build.content_hash.exclude.contains(&"CNAME".to_string()));
+    }
+
+    #[test]
+    fn test_content_hash_config_enabled() {
+        let toml_str = r#"
+[site]
+name = "Hash Enabled"
+base_url = "https://example.com"
+
+[build.content_hash]
+enabled = true
+"#;
+        let config = parse_toml(toml_str).unwrap();
+        assert!(config.build.content_hash.enabled);
+        // Other fields should have defaults.
+        assert_eq!(config.build.content_hash.exclude.len(), 6);
+    }
+
+    #[test]
+    fn test_content_hash_config_custom_exclude() {
+        let toml_str = r#"
+[site]
+name = "Hash Custom"
+base_url = "https://example.com"
+
+[build.content_hash]
+enabled = true
+exclude = ["favicon.ico", "sw.js", "manifest.json"]
+"#;
+        let config = parse_toml(toml_str).unwrap();
+        assert!(config.build.content_hash.enabled);
+        assert_eq!(config.build.content_hash.exclude.len(), 3);
+        assert!(config.build.content_hash.exclude.contains(&"sw.js".to_string()));
     }
 }
