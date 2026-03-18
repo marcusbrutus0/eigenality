@@ -333,6 +333,7 @@ fn render_static_page(
         &config.assets.images,
         image_cache,
         dist_dir,
+        page.frontmatter.hero_image.as_deref(),
     ).wrap_err_with(|| format!("Failed to optimize images for '{}'", tmpl_name))?;
     let full_html = assets::rewrite_css_background_images(
         &full_html,
@@ -593,6 +594,7 @@ fn render_dynamic_page(
             &config.assets.images,
             image_cache,
             dist_dir,
+            page.frontmatter.hero_image.as_deref(),
         ).wrap_err_with(|| {
             format!("Failed to optimize images for '{}' slug '{}'", tmpl_name, slug)
         })?;
@@ -763,6 +765,7 @@ fn optimize_fragment_images(
             image_config,
             image_cache,
             dist_dir,
+            None, // No hero image for fragments.
         )?;
         let optimized_html = assets::rewrite_css_background_images(
             &optimized_html,
