@@ -60,7 +60,7 @@ fn normalize_url_path(path: &str) -> String {
 }
 
 /// Escape XML special characters.
-fn escape_xml(s: &str) -> String {
+pub(crate) fn escape_xml(s: &str) -> String {
     s.replace('&', "&amp;")
         .replace('<', "&lt;")
         .replace('>', "&gt;")
