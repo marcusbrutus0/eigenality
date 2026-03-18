@@ -27,6 +27,22 @@ use crate::build::render::RenderedPage;
 use super::inject;
 use super::watcher::RebuildScope;
 
+/// Compute the status banner label for a page's frontmatter.
+///
+/// Returns an empty string if the page is neither draft nor scheduled.
+fn build_draft_label(fm: &crate::frontmatter::Frontmatter) -> String {
+    let today = chrono::Utc::now().date_naive();
+    let is_draft = fm.draft;
+    let is_scheduled = fm.publish_date.is_some_and(|d| d > today);
+
+    match (is_draft, is_scheduled) {
+        (true, true) => format!("DRAFT | SCHEDULED: {}", fm.publish_date.unwrap()),
+        (true, false) => "DRAFT".to_string(),
+        (false, true) => format!("SCHEDULED: {}", fm.publish_date.unwrap()),
+        (false, false) => String::new(),
+    }
+}
+
 /// Result of a dev rebuild: success, or an error with info about whether
 /// an error page was written to dist/ (and the browser should be reloaded
 /// to display it).
@@ -347,6 +363,8 @@ fn render_static_page_dev(
         dist_dir,
     )?;
     let full_html = inject::inject_reload_script(&full_html);
+    let draft_label = build_draft_label(&page.frontmatter);
+    let full_html = inject::inject_status_banner(&full_html, &draft_label);
 
     let full_path = dist_dir.join(&output_path);
     if let Some(parent) = full_path.parent() {
