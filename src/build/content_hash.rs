@@ -149,12 +149,100 @@ fn is_excluded(relative_path: &str, exclude_patterns: &[String]) -> bool {
 ///
 /// Files matching the exclude patterns are left at their original names.
 pub fn build_manifest(
-    _dist_dir: &Path,
-    _static_dir: &Path,
-    _config: &ContentHashConfig,
+    dist_dir: &Path,
+    static_dir: &Path,
+    config: &ContentHashConfig,
 ) -> Result<AssetManifest> {
-    // Implemented in Task 3.
-    Ok(AssetManifest::new())
+    use walkdir::WalkDir;
+
+    if !static_dir.is_dir() {
+        return Ok(AssetManifest::new());
+    }
+
+    // Count files for capacity hint.
+    let file_count = WalkDir::new(static_dir)
+        .into_iter()
+        .filter_map(|e| e.ok())
+        .filter(|e| e.file_type().is_file())
+        .count();
+
+    let mut manifest = AssetManifest::with_capacity(file_count);
+
+    for entry in WalkDir::new(static_dir).into_iter() {
+        let entry = entry.wrap_err("Failed to read entry while building asset manifest")?;
+
+        if !entry.file_type().is_file() {
+            continue;
+        }
+
+        let src_path = entry.path();
+        let rel_path = src_path
+            .strip_prefix(static_dir)
+            .wrap_err("Asset path is not inside static/ directory")?;
+
+        let rel_str = rel_path.to_string_lossy().replace('\\', "/");
+
+        // Check exclusion.
+        if is_excluded(&rel_str, &config.exclude) {
+            tracing::debug!("Content hash: excluding {}", rel_str);
+            continue;
+        }
+
+        // The file in dist/ has the same relative path.
+        let dist_path = dist_dir.join(rel_path);
+        if !dist_path.exists() {
+            tracing::warn!("Content hash: expected file not found in dist: {}", dist_path.display());
+            continue;
+        }
+
+        // Read file and compute hash.
+        let data = match std::fs::read(&dist_path) {
+            Ok(d) => d,
+            Err(e) => {
+                tracing::warn!("Content hash: failed to read {}: {}", dist_path.display(), e);
+                continue;
+            }
+        };
+
+        let hash = content_hash(&data);
+
+        // Build hashed filename.
+        let filename = rel_path
+            .file_name()
+            .and_then(|f| f.to_str())
+            .unwrap_or(&rel_str);
+        let new_filename = hashed_filename(filename, &hash);
+
+        // Build new dist path.
+        let new_dist_path = match dist_path.parent() {
+            Some(parent) => parent.join(&new_filename),
+            None => dist_dir.join(&new_filename),
+        };
+
+        // Rename file in dist.
+        std::fs::rename(&dist_path, &new_dist_path).wrap_err_with(|| {
+            format!(
+                "Failed to rename {} -> {}",
+                dist_path.display(),
+                new_dist_path.display()
+            )
+        })?;
+
+        // Build URL paths (with leading slash).
+        let original_url = format!("/{}", rel_str);
+        let hashed_rel = match rel_path.parent() {
+            Some(parent) if !parent.as_os_str().is_empty() => {
+                let parent_str = parent.to_string_lossy().replace('\\', "/");
+                format!("/{}/{}", parent_str, new_filename)
+            }
+            _ => format!("/{}", new_filename),
+        };
+
+        tracing::debug!("Content hash: {} -> {}", original_url, hashed_rel);
+        manifest.insert(original_url, hashed_rel);
+    }
+
+    Ok(manifest)
 }
 
 /// Rewrite all references to static assets in rendered HTML, CSS, and
@@ -303,5 +391,143 @@ mod tests {
         m.insert("/b.js".into(), "/b.h.js".into());
         assert!(!m.is_empty());
         assert_eq!(m.len(), 2);
+    }
+
+    // --- build_manifest ---
+
+    /// Helper to write a file into a temp directory.
+    fn write_file(dir: &Path, rel: &str, content: &str) {
+        let path = dir.join(rel);
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).unwrap();
+        }
+        std::fs::write(path, content).unwrap();
+    }
+
+    /// Helper to create a default config with hashing enabled.
+    fn hash_config() -> ContentHashConfig {
+        ContentHashConfig {
+            enabled: true,
+            ..ContentHashConfig::default()
+        }
+    }
+
+    #[test]
+    fn test_build_manifest_basic() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let root = tmp.path();
+        let static_dir = root.join("static");
+        let dist_dir = root.join("dist");
+
+        write_file(&static_dir, "css/style.css", "body { color: red; }");
+        write_file(&dist_dir, "css/style.css", "body { color: red; }");
+
+        let config = hash_config();
+        let manifest = build_manifest(&dist_dir, &static_dir, &config).unwrap();
+
+        assert_eq!(manifest.len(), 1);
+        let resolved = manifest.resolve("/css/style.css");
+        assert_ne!(resolved, "/css/style.css", "should be hashed");
+        assert!(resolved.starts_with("/css/style."));
+        assert!(resolved.ends_with(".css"));
+
+        // Original file should no longer exist.
+        assert!(!dist_dir.join("css/style.css").exists());
+        // Hashed file should exist.
+        let hashed_name = resolved.trim_start_matches("/css/");
+        assert!(dist_dir.join("css").join(hashed_name).exists());
+    }
+
+    #[test]
+    fn test_build_manifest_excludes() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let root = tmp.path();
+        let static_dir = root.join("static");
+        let dist_dir = root.join("dist");
+
+        write_file(&static_dir, "favicon.ico", "icon");
+        write_file(&dist_dir, "favicon.ico", "icon");
+        write_file(&static_dir, "robots.txt", "allow all");
+        write_file(&dist_dir, "robots.txt", "allow all");
+
+        let config = hash_config();
+        let manifest = build_manifest(&dist_dir, &static_dir, &config).unwrap();
+
+        assert!(manifest.is_empty(), "excluded files should not be in manifest");
+        // Files should still be at their original names.
+        assert!(dist_dir.join("favicon.ico").exists());
+        assert!(dist_dir.join("robots.txt").exists());
+    }
+
+    #[test]
+    fn test_build_manifest_empty_dir() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let root = tmp.path();
+        let static_dir = root.join("static");
+        let dist_dir = root.join("dist");
+        std::fs::create_dir_all(&static_dir).unwrap();
+        std::fs::create_dir_all(&dist_dir).unwrap();
+
+        let config = hash_config();
+        let manifest = build_manifest(&dist_dir, &static_dir, &config).unwrap();
+
+        assert!(manifest.is_empty());
+    }
+
+    #[test]
+    fn test_build_manifest_no_static_dir() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let root = tmp.path();
+        let static_dir = root.join("static"); // does not exist
+        let dist_dir = root.join("dist");
+        std::fs::create_dir_all(&dist_dir).unwrap();
+
+        let config = hash_config();
+        let manifest = build_manifest(&dist_dir, &static_dir, &config).unwrap();
+
+        assert!(manifest.is_empty());
+    }
+
+    #[test]
+    fn test_build_manifest_nested_dirs() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let root = tmp.path();
+        let static_dir = root.join("static");
+        let dist_dir = root.join("dist");
+
+        write_file(&static_dir, "a/b/c/deep.js", "deep()");
+        write_file(&dist_dir, "a/b/c/deep.js", "deep()");
+
+        let config = hash_config();
+        let manifest = build_manifest(&dist_dir, &static_dir, &config).unwrap();
+
+        assert_eq!(manifest.len(), 1);
+        let resolved = manifest.resolve("/a/b/c/deep.js");
+        assert!(resolved.starts_with("/a/b/c/deep."));
+        assert!(resolved.ends_with(".js"));
+    }
+
+    #[test]
+    fn test_build_manifest_deterministic_hash() {
+        // Same content should produce same hash.
+        let tmp = tempfile::TempDir::new().unwrap();
+        let root = tmp.path();
+        let static_dir = root.join("static");
+        let dist_dir = root.join("dist");
+
+        let content = "body { color: blue; }";
+        write_file(&static_dir, "a.css", content);
+        write_file(&dist_dir, "a.css", content);
+
+        let config = hash_config();
+        let m1 = build_manifest(&dist_dir, &static_dir, &config).unwrap();
+        let r1 = m1.resolve("/a.css").to_string();
+
+        // Rebuild with same content.
+        write_file(&dist_dir, "a.css", content);
+        let m2 = build_manifest(&dist_dir, &static_dir, &config).unwrap();
+        let r2 = m2.resolve("/a.css").to_string();
+
+        assert_eq!(r1, r2, "same content should produce same hash");
     }
 }
