@@ -107,6 +107,7 @@ mod tests {
             plugins: HashMap::new(),
             feed: HashMap::new(),
             robots: Some(robots),
+            audit: None,
         }
     }
 
@@ -291,6 +292,7 @@ mod tests {
             plugins: HashMap::new(),
             feed: HashMap::new(),
             robots: None,
+            audit: None,
         };
         generate_robots_txt(&dist, &config).unwrap();
 

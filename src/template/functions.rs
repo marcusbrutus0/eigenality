@@ -133,6 +133,7 @@ mod tests {
             plugins: HashMap::new(),
             feed: HashMap::new(),
             robots: None,
+            audit: None,
         }
     }
 
@@ -153,6 +154,7 @@ mod tests {
             plugins: HashMap::new(),
             feed: HashMap::new(),
             robots: None,
+            audit: None,
         }
     }
 
