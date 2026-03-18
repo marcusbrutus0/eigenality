@@ -245,6 +245,66 @@ pub fn build_manifest(
     Ok(manifest)
 }
 
+/// Hash and rename additional generated files (e.g., CSS/JS bundles)
+/// and return a manifest of their original-to-hashed path mappings.
+///
+/// These files exist only in dist/ (no static/ counterpart). The returned
+/// manifest is used alongside the main manifest during reference rewriting.
+pub fn hash_additional_files(
+    dist_dir: &Path,
+    relative_paths: &[String],
+) -> Result<AssetManifest> {
+    let mut manifest = AssetManifest::with_capacity(relative_paths.len());
+
+    for rel_path in relative_paths {
+        let file_path = dist_dir.join(rel_path);
+
+        if !file_path.exists() {
+            tracing::warn!(
+                "Content hash: generated file '{}' not found, skipping",
+                file_path.display()
+            );
+            continue;
+        }
+
+        let data = std::fs::read(&file_path)
+            .wrap_err_with(|| format!(
+                "Failed to read generated file '{}'",
+                file_path.display()
+            ))?;
+
+        let hash = content_hash(&data);
+
+        let filename = file_path
+            .file_name()
+            .and_then(|f| f.to_str())
+            .ok_or_else(|| eyre::eyre!(
+                "Invalid filename: {}", file_path.display()
+            ))?;
+
+        let hashed_name = hashed_filename(filename, &hash);
+        let hashed_path = file_path.with_file_name(&hashed_name);
+
+        // Rename the file.
+        std::fs::rename(&file_path, &hashed_path)
+            .wrap_err_with(|| format!(
+                "Failed to rename '{}' to '{}'",
+                file_path.display(), hashed_path.display()
+            ))?;
+
+        // Build URL paths with leading slash.
+        let original_url = format!("/{rel_path}");
+        let hashed_rel = rel_path.rsplit_once('/')
+            .map(|(dir, _)| format!("{dir}/{hashed_name}"))
+            .unwrap_or(hashed_name.clone());
+        let hashed_url = format!("/{hashed_rel}");
+
+        manifest.insert(original_url, hashed_url);
+    }
+
+    Ok(manifest)
+}
+
 /// Rewrite asset references in a single file's content.
 ///
 /// Performs string replacement of all original paths with their hashed
@@ -253,12 +313,11 @@ pub fn build_manifest(
 ///
 /// Returns the rewritten content, or `None` if no replacements were made
 /// (to avoid unnecessary file writes).
-fn rewrite_file_content(content: &str, manifest: &AssetManifest) -> Option<String> {
-    let pairs = manifest.pairs_longest_first();
+fn rewrite_file_content(content: &str, pairs: &[(&str, &str)]) -> Option<String> {
     let mut result = content.to_string();
     let mut changed = false;
 
-    for (original, hashed) in &pairs {
+    for (original, hashed) in pairs {
         if result.contains(original) {
             result = result.replace(original, hashed);
             changed = true;
@@ -275,11 +334,22 @@ fn rewrite_file_content(content: &str, manifest: &AssetManifest) -> Option<Strin
 /// occurrences of original asset paths with their hashed equivalents.
 ///
 /// Fragment HTML files in `_fragments/` ARE rewritten.
-pub fn rewrite_references(dist_dir: &Path, manifest: &AssetManifest) -> Result<()> {
+pub fn rewrite_references(
+    dist_dir: &Path,
+    manifest: &AssetManifest,
+    additional: Option<&AssetManifest>,
+) -> Result<()> {
     use walkdir::WalkDir;
 
-    if manifest.is_empty() {
+    if manifest.is_empty() && additional.map_or(true, |a| a.is_empty()) {
         return Ok(());
+    }
+
+    // Build merged replacement pairs from both manifests, sorted longest-first.
+    let mut all_pairs = manifest.pairs_longest_first();
+    if let Some(add) = additional {
+        all_pairs.extend(add.pairs_longest_first());
+        all_pairs.sort_by(|a, b| b.0.len().cmp(&a.0.len()));
     }
 
     for entry in WalkDir::new(dist_dir).into_iter() {
@@ -312,7 +382,7 @@ pub fn rewrite_references(dist_dir: &Path, manifest: &AssetManifest) -> Result<(
             }
         };
 
-        if let Some(rewritten) = rewrite_file_content(&content, manifest) {
+        if let Some(rewritten) = rewrite_file_content(&content, &all_pairs) {
             std::fs::write(path, rewritten).wrap_err_with(|| {
                 format!(
                     "Content hash rewrite: failed to write {}",
@@ -604,8 +674,9 @@ mod tests {
         m.insert("/css/style.css".into(), "/css/style.abc123.css".into());
         m.insert("/js/app.js".into(), "/js/app.def456.js".into());
 
+        let pairs = m.pairs_longest_first();
         let html = r#"<link href="/css/style.css"><script src="/js/app.js"></script>"#;
-        let result = rewrite_file_content(html, &m).unwrap();
+        let result = rewrite_file_content(html, &pairs).unwrap();
         assert!(result.contains("/css/style.abc123.css"));
         assert!(result.contains("/js/app.def456.js"));
         assert!(!result.contains(r#""/css/style.css""#));
@@ -616,16 +687,18 @@ mod tests {
         let mut m = AssetManifest::new();
         m.insert("/images/icon.png".into(), "/images/icon.abc123.png".into());
 
+        let pairs = m.pairs_longest_first();
         let css = r#".icon { background-image: url('/images/icon.png'); }"#;
-        let result = rewrite_file_content(css, &m).unwrap();
+        let result = rewrite_file_content(css, &pairs).unwrap();
         assert!(result.contains("/images/icon.abc123.png"));
     }
 
     #[test]
     fn test_rewrite_file_content_no_match() {
         let m = AssetManifest::new();
+        let pairs = m.pairs_longest_first();
         let html = "<h1>Hello</h1>";
-        assert!(rewrite_file_content(html, &m).is_none());
+        assert!(rewrite_file_content(html, &pairs).is_none());
     }
 
     #[test]
@@ -633,8 +706,9 @@ mod tests {
         let mut m = AssetManifest::new();
         m.insert("/css/style.css".into(), "/css/style.abc123.css".into());
 
+        let pairs = m.pairs_longest_first();
         let html = "<h1>Hello</h1>";
-        assert!(rewrite_file_content(html, &m).is_none());
+        assert!(rewrite_file_content(html, &pairs).is_none());
     }
 
     #[test]
@@ -642,8 +716,9 @@ mod tests {
         let mut m = AssetManifest::new();
         m.insert("/css/style.css".into(), "/css/style.abc123.css".into());
 
+        let pairs = m.pairs_longest_first();
         let html = r#"<link href="/css/style.css"><link href="/css/style.css">"#;
-        let result = rewrite_file_content(html, &m).unwrap();
+        let result = rewrite_file_content(html, &pairs).unwrap();
         // Both occurrences should be replaced.
         assert!(!result.contains(r#""/css/style.css""#));
         assert_eq!(result.matches("/css/style.abc123.css").count(), 2);
@@ -654,10 +729,11 @@ mod tests {
         let mut m = AssetManifest::new();
         m.insert("/css/style.css".into(), "/css/style.abc123.css".into());
 
+        let pairs = m.pairs_longest_first();
         let html = r#"<link href="/css/style.css">"#;
-        let first = rewrite_file_content(html, &m).unwrap();
+        let first = rewrite_file_content(html, &pairs).unwrap();
         // Second pass should produce no changes.
-        assert!(rewrite_file_content(&first, &m).is_none());
+        assert!(rewrite_file_content(&first, &pairs).is_none());
     }
 
     // --- rewrite_references ---
@@ -672,7 +748,7 @@ mod tests {
         let mut m = AssetManifest::new();
         m.insert("/css/style.css".into(), "/css/style.abc123.css".into());
 
-        rewrite_references(dist, &m).unwrap();
+        rewrite_references(dist, &m, None).unwrap();
 
         let content = std::fs::read_to_string(dist.join("index.html")).unwrap();
         assert!(content.contains("/css/style.abc123.css"));
@@ -688,7 +764,7 @@ mod tests {
         let mut m = AssetManifest::new();
         m.insert("/images/bg.png".into(), "/images/bg.abc123.png".into());
 
-        rewrite_references(dist, &m).unwrap();
+        rewrite_references(dist, &m, None).unwrap();
 
         let content = std::fs::read_to_string(dist.join("css/style.css")).unwrap();
         assert!(content.contains("/images/bg.abc123.png"));
@@ -704,7 +780,7 @@ mod tests {
         let mut m = AssetManifest::new();
         m.insert("/images/logo.png".into(), "/images/logo.abc123.png".into());
 
-        rewrite_references(dist, &m).unwrap();
+        rewrite_references(dist, &m, None).unwrap();
 
         let content = std::fs::read_to_string(dist.join("js/app.js")).unwrap();
         assert!(content.contains("/images/logo.abc123.png"));
@@ -721,7 +797,7 @@ mod tests {
         let mut m = AssetManifest::new();
         m.insert("/css/style.css".into(), "/css/style.abc123.css".into());
 
-        rewrite_references(dist, &m).unwrap();
+        rewrite_references(dist, &m, None).unwrap();
 
         // The .png file should be untouched.
         let content = std::fs::read_to_string(dist.join("images/logo.png")).unwrap();
@@ -738,7 +814,7 @@ mod tests {
         let mut m = AssetManifest::new();
         m.insert("/images/photo.jpg".into(), "/images/photo.abc123.jpg".into());
 
-        rewrite_references(dist, &m).unwrap();
+        rewrite_references(dist, &m, None).unwrap();
 
         let content = std::fs::read_to_string(dist.join("_fragments/about.html")).unwrap();
         assert!(content.contains("/images/photo.abc123.jpg"));
@@ -753,7 +829,7 @@ mod tests {
 
         let m = AssetManifest::new();
         // Should be a no-op, not an error.
-        rewrite_references(dist, &m).unwrap();
+        rewrite_references(dist, &m, None).unwrap();
 
         let content = std::fs::read_to_string(dist.join("index.html")).unwrap();
         assert_eq!(content, "<h1>Hello</h1>");
@@ -800,7 +876,7 @@ mod tests {
         write_file(&dist_dir, "index.html", html);
 
         // Phase 3: Rewrite references.
-        rewrite_references(&dist_dir, &manifest).unwrap();
+        rewrite_references(&dist_dir, &manifest, None).unwrap();
 
         // Verify HTML was rewritten.
         let result = std::fs::read_to_string(dist_dir.join("index.html")).unwrap();

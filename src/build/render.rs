@@ -200,7 +200,7 @@ pub fn build(project_root: &Path) -> Result<()> {
     plugin_registry.post_build(&dist_dir, project_root)?;
 
     // Phase 2.5: CSS/JS bundling and tree-shaking.
-    let _bundled_files = if config.build.bundling.enabled {
+    let bundled_files = if config.build.bundling.enabled {
         let files = bundling::bundle_assets(
             &dist_dir, &config.build.bundling, config.build.minify,
         ).wrap_err("CSS/JS bundling failed")?;
@@ -215,10 +215,25 @@ pub fn build(project_root: &Path) -> Result<()> {
         Vec::new()
     };
 
-    // Phase 3: Rewrite remaining asset references in HTML/CSS/JS.
-    if config.build.content_hash.enabled && !manifest.is_empty() {
-        content_hash::rewrite_references(&dist_dir, &manifest)?;
-        tracing::info!("Asset references rewritten.");
+    // Phase 3: Content hash rewrite.
+    if config.build.content_hash.enabled {
+        // Hash bundled files (generated, not from static/).
+        let bundle_manifest = if !bundled_files.is_empty() {
+            Some(content_hash::hash_additional_files(
+                &dist_dir, &bundled_files,
+            ).wrap_err("Failed to hash bundled files")?)
+        } else {
+            None
+        };
+
+        if !manifest.is_empty() || bundle_manifest.is_some() {
+            content_hash::rewrite_references(
+                &dist_dir,
+                &manifest,
+                bundle_manifest.as_ref(),
+            )?;
+            tracing::info!("Asset references rewritten.");
+        }
     }
 
     tracing::info!(
