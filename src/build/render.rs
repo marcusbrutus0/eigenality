@@ -23,6 +23,7 @@ use super::context::{self, PageMeta};
 use super::critical_css;
 use super::fragments;
 use super::hints;
+use super::json_ld;
 use super::minify;
 use super::output;
 use super::seo;
@@ -346,6 +347,13 @@ fn render_static_page(
         &ctx,
     );
 
+    // Resolve schema template expressions.
+    let resolved_schema = json_ld::resolve_schema_expressions(
+        &page.frontmatter.schema,
+        env,
+        &ctx,
+    );
+
     // 3. Render template.
     let tmpl = env.get_template(&tmpl_name)
         .wrap_err_with(|| format!("Template '{}' not found in environment", tmpl_name))?;
@@ -429,7 +437,16 @@ fn render_static_page(
         &url_path,
     );
 
-    // 4f. Minify HTML (last transformation before writing).
+    // 4f. JSON-LD structured data injection (after SEO, before minify).
+    let full_html = json_ld::inject_json_ld(
+        &full_html,
+        &resolved_schema,
+        &resolved_seo,
+        &config.site,
+        &url_path,
+    );
+
+    // 4g. Minify HTML (last transformation before writing).
     let full_html = if config.build.minify {
         minify::minify_html(&full_html)
     } else {
@@ -623,6 +640,13 @@ fn render_dynamic_page(
             &ctx,
         );
 
+        // Resolve schema template expressions for this item.
+        let resolved_schema = json_ld::resolve_schema_expressions(
+            &page.frontmatter.schema,
+            env,
+            &ctx,
+        );
+
         // Render.
         let rendered = match tmpl.render(&ctx) {
             Ok(html) => html,
@@ -706,6 +730,15 @@ fn render_dynamic_page(
         // SEO meta tag injection (after hints, before minify).
         let full_html = seo::inject_seo_tags(
             &full_html,
+            &resolved_seo,
+            &config.site,
+            &url_path,
+        );
+
+        // JSON-LD structured data injection (after SEO, before minify).
+        let full_html = json_ld::inject_json_ld(
+            &full_html,
+            &resolved_schema,
             &resolved_seo,
             &config.site,
             &url_path,

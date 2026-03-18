@@ -402,6 +402,7 @@ fn resolve_field(
 mod tests {
     use super::*;
     use crate::config::{SiteSeoConfig, SiteSchemaConfig};
+    use crate::frontmatter::SchemaTypes;
 
     fn test_site(name: &str, base_url: &str) -> SiteMeta {
         SiteMeta {
