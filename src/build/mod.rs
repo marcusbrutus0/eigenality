@@ -16,5 +16,6 @@ pub mod render;
 pub mod robots;
 pub mod seo;
 pub mod sitemap;
+pub mod view_transitions;
 
 pub use render::build;
