@@ -243,6 +243,7 @@ mod tests {
             site: crate::config::SiteMeta {
                 name: "Test".into(),
                 base_url: "https://example.com".into(),
+                seo: crate::config::SiteSeoConfig::default(),
             },
             build: crate::config::BuildConfig::default(),
             assets: Default::default(),

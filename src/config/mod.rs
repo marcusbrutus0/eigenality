@@ -26,6 +26,9 @@ pub struct SiteConfig {
 pub struct SiteMeta {
     pub name: String,
     pub base_url: String,
+    /// Site-level SEO defaults for Open Graph and Twitter Card tags.
+    #[serde(default)]
+    pub seo: SiteSeoConfig,
 }
 
 /// Build-related configuration.
@@ -377,6 +380,62 @@ impl Default for BundlingConfig {
             css_output: default_css_output(),
             js_output: default_js_output(),
             exclude: Vec::new(),
+        }
+    }
+}
+
+/// Site-level SEO defaults for Open Graph and Twitter Card meta tags.
+///
+/// Located under `[site.seo]` in site.toml. These provide fallback
+/// values for pages that do not set explicit `[seo]` in frontmatter.
+#[derive(Debug, Clone, Deserialize)]
+pub struct SiteSeoConfig {
+    /// Default page title for `og:title` / `twitter:title`.
+    /// Falls back to `site.name` if not set.
+    pub title: Option<String>,
+
+    /// Default meta description for pages without one.
+    pub description: Option<String>,
+
+    /// Default share image URL (absolute or site-relative path).
+    /// Used when a page has no `seo.image` in frontmatter.
+    pub image: Option<String>,
+
+    /// Default `og:type`. Default: "website".
+    #[serde(default = "default_og_type")]
+    pub og_type: String,
+
+    /// Twitter/X @handle for `twitter:site`.
+    /// Example: "@mysite"
+    pub twitter_site: Option<String>,
+
+    /// Default `twitter:card` type when an image IS available.
+    /// Default: "summary_large_image".
+    ///
+    /// When no image is available (neither from frontmatter nor from
+    /// this config), `twitter:card` is forced to `"summary"` regardless
+    /// of this setting.
+    #[serde(default = "default_twitter_card")]
+    pub twitter_card: String,
+}
+
+fn default_og_type() -> String {
+    "website".to_string()
+}
+
+fn default_twitter_card() -> String {
+    "summary_large_image".to_string()
+}
+
+impl Default for SiteSeoConfig {
+    fn default() -> Self {
+        Self {
+            title: None,
+            description: None,
+            image: None,
+            og_type: default_og_type(),
+            twitter_site: None,
+            twitter_card: default_twitter_card(),
         }
     }
 }
@@ -974,5 +1033,67 @@ js = false
         assert!(config.build.bundling.enabled);
         assert!(config.build.bundling.css);
         assert!(!config.build.bundling.js);
+    }
+
+    // --- Site SEO config tests ---
+
+    #[test]
+    fn test_site_seo_config_defaults() {
+        let toml_str = r#"
+[site]
+name = "SEO Default"
+base_url = "https://example.com"
+"#;
+        let config = parse_toml(toml_str).unwrap();
+        assert!(config.site.seo.title.is_none());
+        assert!(config.site.seo.description.is_none());
+        assert!(config.site.seo.image.is_none());
+        assert_eq!(config.site.seo.og_type, "website");
+        assert!(config.site.seo.twitter_site.is_none());
+        assert_eq!(config.site.seo.twitter_card, "summary_large_image");
+    }
+
+    #[test]
+    fn test_site_seo_config_custom() {
+        let toml_str = r#"
+[site]
+name = "SEO Custom"
+base_url = "https://example.com"
+
+[site.seo]
+title = "My Custom Title"
+description = "A description of the site"
+image = "/assets/default-share.jpg"
+og_type = "article"
+twitter_site = "@mysite"
+twitter_card = "summary"
+"#;
+        let config = parse_toml(toml_str).unwrap();
+        assert_eq!(config.site.seo.title.as_deref(), Some("My Custom Title"));
+        assert_eq!(config.site.seo.description.as_deref(), Some("A description of the site"));
+        assert_eq!(config.site.seo.image.as_deref(), Some("/assets/default-share.jpg"));
+        assert_eq!(config.site.seo.og_type, "article");
+        assert_eq!(config.site.seo.twitter_site.as_deref(), Some("@mysite"));
+        assert_eq!(config.site.seo.twitter_card, "summary");
+    }
+
+    #[test]
+    fn test_site_seo_config_partial() {
+        let toml_str = r#"
+[site]
+name = "SEO Partial"
+base_url = "https://example.com"
+
+[site.seo]
+description = "Only description set"
+twitter_site = "@partial"
+"#;
+        let config = parse_toml(toml_str).unwrap();
+        assert!(config.site.seo.title.is_none());
+        assert_eq!(config.site.seo.description.as_deref(), Some("Only description set"));
+        assert!(config.site.seo.image.is_none());
+        assert_eq!(config.site.seo.og_type, "website");
+        assert_eq!(config.site.seo.twitter_site.as_deref(), Some("@partial"));
+        assert_eq!(config.site.seo.twitter_card, "summary_large_image");
     }
 }
