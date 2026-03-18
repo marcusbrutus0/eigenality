@@ -29,6 +29,11 @@ pub struct Frontmatter {
     pub seo: SeoMeta,
     /// Structured data (JSON-LD) configuration.
     pub schema: SchemaConfig,
+    /// Whether this page is a draft (excluded from production builds).
+    pub draft: bool,
+    /// Scheduled publication date. Pages with a future date are excluded
+    /// from production builds.
+    pub publish_date: Option<chrono::NaiveDate>,
 }
 
 impl Default for Frontmatter {
@@ -42,6 +47,8 @@ impl Default for Frontmatter {
             hero_image: None,
             seo: SeoMeta::default(),
             schema: None,
+            draft: false,
+            publish_date: None,
         }
     }
 }
@@ -188,6 +195,9 @@ struct RawFrontmatter {
     seo: SeoMeta,
     #[serde(default)]
     schema: SchemaConfig,
+    #[serde(default)]
+    draft: bool,
+    publish_date: Option<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -255,6 +265,20 @@ pub fn parse_frontmatter(raw_yaml: &str, file_path: &str) -> Result<Frontmatter>
     let raw: RawFrontmatter = serde_yaml::from_str(raw_yaml)
         .wrap_err_with(|| format!("Failed to parse frontmatter YAML in {file_path}"))?;
 
+    let publish_date = match raw.publish_date {
+        Some(ref s) => {
+            let date = chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d")
+                .wrap_err_with(|| {
+                    format!(
+                        "Invalid publish_date '{}' in {file_path} (expected YYYY-MM-DD)",
+                        s
+                    )
+                })?;
+            Some(date)
+        }
+        None => None,
+    };
+
     Ok(Frontmatter {
         collection: raw.collection,
         slug_field: raw.slug_field.unwrap_or_else(|| "slug".into()),
@@ -264,6 +288,8 @@ pub fn parse_frontmatter(raw_yaml: &str, file_path: &str) -> Result<Frontmatter>
         hero_image: raw.hero_image,
         seo: raw.seo,
         schema: raw.schema,
+        draft: raw.draft,
+        publish_date,
     })
 }
 
@@ -614,5 +640,52 @@ mod tests {
     fn test_default_schema_is_none() {
         let fm = Frontmatter::default();
         assert!(fm.schema.is_none());
+    }
+
+    // --- Draft and publish_date frontmatter tests ---
+
+    #[test]
+    fn test_parse_draft_true() {
+        let yaml = "draft: true\n";
+        let fm = parse_frontmatter(yaml, "test.html").unwrap();
+        assert!(fm.draft);
+    }
+
+    #[test]
+    fn test_parse_draft_false() {
+        let yaml = "draft: false\n";
+        let fm = parse_frontmatter(yaml, "test.html").unwrap();
+        assert!(!fm.draft);
+    }
+
+    #[test]
+    fn test_parse_draft_default() {
+        let yaml = "";
+        let fm = parse_frontmatter(yaml, "test.html").unwrap();
+        assert!(!fm.draft);
+    }
+
+    #[test]
+    fn test_parse_publish_date() {
+        let yaml = "publish_date: \"2026-04-01\"\n";
+        let fm = parse_frontmatter(yaml, "test.html").unwrap();
+        assert_eq!(
+            fm.publish_date,
+            Some(chrono::NaiveDate::from_ymd_opt(2026, 4, 1).unwrap())
+        );
+    }
+
+    #[test]
+    fn test_parse_publish_date_absent() {
+        let yaml = "";
+        let fm = parse_frontmatter(yaml, "test.html").unwrap();
+        assert!(fm.publish_date.is_none());
+    }
+
+    #[test]
+    fn test_parse_publish_date_invalid() {
+        let yaml = "publish_date: \"not-a-date\"\n";
+        let result = parse_frontmatter(yaml, "test.html");
+        assert!(result.is_err());
     }
 }
