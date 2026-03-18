@@ -58,6 +58,18 @@ pub fn strip_fragment_markers(html: &str) -> String {
     re.replace_all(html, "").to_string()
 }
 
+/// Extract fragment block names from rendered HTML (before marker stripping).
+///
+/// Returns the block names found in `<!--FRAG:name:START-->` markers.
+/// Used by view transitions to know which element IDs to add
+/// `view-transition-name` to.
+pub fn extract_block_names(html: &str) -> Vec<String> {
+    let re = Regex::new(r"<!--FRAG:(\w+):START-->").unwrap();
+    re.captures_iter(html)
+        .map(|cap| cap[1].to_string())
+        .collect()
+}
+
 /// Compute the output path for a fragment file.
 ///
 /// - Default content block: mirrors the page path.
@@ -355,5 +367,19 @@ mod tests {
 
         // OOB block should NOT be written as a separate fragment file.
         assert!(!dist.join("_fragments/about/nav_header.html").exists());
+    }
+
+    #[test]
+    fn test_extract_block_names() {
+        let html = "<!--FRAG:content:START--><h1>Hi</h1><!--FRAG:content:END--><!--FRAG:nav:START-->Nav<!--FRAG:nav:END-->";
+        let names = extract_block_names(html);
+        assert_eq!(names, vec!["content", "nav"]);
+    }
+
+    #[test]
+    fn test_extract_block_names_empty() {
+        let html = "<html><body>No markers</body></html>";
+        let names = extract_block_names(html);
+        assert!(names.is_empty());
     }
 }
