@@ -74,10 +74,10 @@ pub fn page_checks(html: &str, page_path: &str, template_path: &str) -> Vec<Find
                     Ok(())
                 }),
                 lol_html::element!("meta[name='viewport']", move |el| {
-                    if let Some(content) = el.get_attribute("content") {
-                        if content.contains("width=device-width") {
-                            *has_viewport_c.borrow_mut() = true;
-                        }
+                    if let Some(content) = el.get_attribute("content")
+                        && content.contains("width=device-width")
+                    {
+                        *has_viewport_c.borrow_mut() = true;
                     }
                     Ok(())
                 }),

@@ -153,7 +153,9 @@ pub fn render_html(report: &AuditReport) -> String {
     html.push_str("  <meta charset=\"utf-8\">\n");
     html.push_str("  <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n");
     html.push_str("  <title>Eigen Audit Report</title>\n");
-    let _ = write!(html, "  <style>{CSS}</style>\n");
+    html.push_str("  <style>");
+    html.push_str(CSS);
+    html.push_str("</style>\n");
     html.push_str("</head>\n<body>\n");
     html.push_str("<div class=\"__eigen_audit_container\">\n");
     html.push_str("<h1>Eigen Audit Report</h1>\n");
@@ -174,7 +176,9 @@ pub fn render_html(report: &AuditReport) -> String {
     }
 
     html.push_str("</div>\n");
-    let _ = write!(html, "<script>{JS}</script>\n");
+    html.push_str("<script>");
+    html.push_str(JS);
+    html.push_str("</script>\n");
     html.push_str("</body>\n</html>\n");
 
     html

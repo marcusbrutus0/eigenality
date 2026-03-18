@@ -62,13 +62,12 @@ pub fn page_checks(html: &str, page_path: &str, template_path: &str) -> Vec<Find
     let _ = lol_html::rewrite_str(html, lol_html::RewriteStrSettings {
         element_content_handlers: vec![
             lol_html::element!("a[href]", move |el| {
-                if let Some(href) = el.get_attribute("href") {
-                    if href.starts_with("http://")
-                        && !href.starts_with("http://localhost")
-                        && !href.starts_with("http://127.0.0.1")
-                    {
-                        hl.borrow_mut().push(href);
-                    }
+                if let Some(href) = el.get_attribute("href")
+                    && href.starts_with("http://")
+                    && !href.starts_with("http://localhost")
+                    && !href.starts_with("http://127.0.0.1")
+                {
+                    hl.borrow_mut().push(href);
                 }
                 Ok(())
             }),
