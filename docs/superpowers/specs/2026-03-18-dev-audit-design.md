@@ -47,7 +47,30 @@ Two entry points invoke the same audit module:
    - `eigen audit --project . --format json` — prints JSON to stdout
    - `eigen audit --project . --output audit-report` — writes `audit-report.json` + `audit-report.md` to disk
 
-The audit module is shared between both entry points. The `eigen audit` command performs a full build first (or reads existing `dist/` if already built), then runs the audit phase.
+The audit module is shared between both entry points. The `eigen audit` command performs a full build first (or reads existing `dist/` if `--no-build` flag is passed), then runs the audit phase.
+
+#### CLI Definition
+
+```rust
+/// Run SEO, performance, and accessibility audit
+Audit {
+    /// Path to the project root (default: current directory)
+    #[arg(short, long, default_value = ".")]
+    project: PathBuf,
+
+    /// Output format: "markdown" (default) or "json"
+    #[arg(short, long, default_value = "markdown")]
+    format: String,
+
+    /// Write report files to this path prefix (e.g., "audit-report" writes audit-report.json + audit-report.md)
+    #[arg(short, long)]
+    output: Option<PathBuf>,
+
+    /// Skip building and audit existing dist/ directory
+    #[arg(long)]
+    no_build: bool,
+}
+```
 
 ---
 
@@ -90,6 +113,7 @@ pub struct Finding {
     pub fix: Fix,                // actionable fix info
 }
 
+/// Derives: Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize
 pub enum Category {
     Seo,
     Performance,
@@ -97,6 +121,8 @@ pub enum Category {
     BestPractices,
 }
 
+/// Derives: Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize
+/// Ordering: Critical > High > Medium > Low (Critical sorts first in BTreeMap)
 pub enum Severity {
     Critical,
     High,
@@ -110,7 +136,7 @@ pub enum Scope {
 }
 
 pub struct Fix {
-    pub file: String,            // "site.toml" or "templates/index.html"
+    pub file: String,            // "site.toml" or "templates/about.html"
     pub instruction: String,     // "Add description = \"...\" under [site.seo]"
 }
 
@@ -118,6 +144,26 @@ pub struct AuditSummary {
     pub total: usize,
     pub by_severity: BTreeMap<Severity, usize>,
     pub by_category: BTreeMap<Category, usize>,
+}
+```
+
+### `Fix.file` Semantics
+
+For **site-level checks**, `Fix.file` points to `site.toml` since these checks inspect config.
+
+For **page-level checks**, `Fix.file` points to the source template path (e.g., `templates/about.html`). The audit receives the list of rendered pages from the build pipeline, which includes the source template path alongside the output path. This avoids needing a separate dist-to-source mapping — the build already tracks this.
+
+### Config Type
+
+```rust
+/// Optional audit configuration in site.toml.
+/// Added to SiteConfig as: `pub audit: Option<AuditConfig>`
+/// with `#[serde(default)]`.
+#[derive(Debug, Clone, Deserialize, Default)]
+pub struct AuditConfig {
+    /// Check IDs to suppress (e.g., ["seo/twitter-tags", "a11y/color-contrast-hint"])
+    #[serde(default)]
+    pub ignore: Vec<String>,
 }
 ```
 
@@ -187,9 +233,9 @@ Add a function to the appropriate category module, register it in `checks/mod.rs
 |----|----------|-------|-------------|
 | `a11y/img-alt-text` | high | page | `<img>` missing `alt` attribute |
 | `a11y/html-lang` | critical | page | `<html>` missing `lang` attribute |
-| `a11y/viewport-meta` | critical | page | Missing `<meta name="viewport">` |
+| `a11y/viewport-meta` | critical | page | Missing or misconfigured `<meta name="viewport">` (covers both presence and mobile-friendliness) |
 | `a11y/link-text` | medium | page | Links with empty or generic text |
-| `a11y/color-contrast-hint` | low | site | Reminder to verify color contrast |
+| `a11y/color-contrast-hint` | low | site | Advisory reminder to verify color contrast (not an automated check — eigen cannot measure rendered contrast without a browser) |
 
 ### Best Practices (`bp/`)
 
@@ -197,8 +243,9 @@ Add a function to the appropriate category module, register it in `checks/mod.rs
 |----|----------|-------|-------------|
 | `bp/https-links` | medium | page | Page contains `http://` links |
 | `bp/favicon` | medium | site | No favicon detected |
-| `bp/mobile-viewport` | high | page | Viewport meta not configured for mobile |
 | `bp/base-url` | critical | site | `site.base_url` not set |
+
+Note: viewport meta is handled by `a11y/viewport-meta` which covers both presence and mobile configuration. No separate `bp/mobile-viewport` check.
 
 ---
 
@@ -328,18 +375,30 @@ Minimal, non-intrusive. Uses `position: fixed`, high `z-index`, `prefers-color-s
 ### In `eigen dev` (dev mode)
 
 After the existing final build phase:
-1. `audit::run_audit(config, dist_path)` → `AuditReport`
+1. `audit::run_audit(config, dist_path, rendered_pages)` → `AuditReport`
 2. `audit::output::write_html(report, dist_path)` → `dist/_audit.html`
 3. `audit::output::write_json(report, dist_path)` → `dist/_audit.json`
 4. `audit::output::write_markdown(report, dist_path)` → `dist/_audit.md`
-5. `audit::overlay::inject_badges(report, dist_path)` → modifies each HTML file in `dist/`
+5. `audit::overlay::inject_badges(report, dist_path, rendered_pages)` → modifies each page HTML file in `dist/`
 
 The overlay injection happens **after** the audit report files are written but uses the same `AuditReport` data. It must run after minification (since it modifies HTML) — this is already the case since audit is the last phase.
+
+**Overlay injection** re-reads each page HTML from disk, appends the overlay script before `</body>` (same approach as `inject_reload_script`), and writes it back. This is a second pass over page HTML files but is acceptable in dev mode. The overlay is injected **after** the reload script — order does not matter since both are independent `<script>` blocks before `</body>`.
+
+**Page source:** The audit uses the `rendered_pages` list from the build pipeline (not a `dist/` directory walk) to know which HTML files are actual pages vs. generated files (sitemap, robots.txt, audit reports). This avoids scanning `_audit.*` files, `_fragments/`, or other non-page HTML.
+
+**Fragment exclusion:** Overlay badges are NOT injected into fragment files (`_fragments/`). Fragments are partial HTML without `<html>`/`<body>` structure. Page-level checks also skip fragments.
+
+**Build failure handling:** If the build fails (e.g., template error), the audit phase is skipped entirely. The `DevBuildState` already tracks build success/failure — audit only runs on successful builds.
+
+**Sync execution:** `run_audit` is synchronous (not async). It runs on the same blocking OS thread as the dev build (the build uses `reqwest::blocking::Client` and cannot run on the async runtime). All audit operations (file I/O, HTML parsing) are naturally sync.
+
+**File watcher safety:** Writing `_audit.*` files to `dist/` does not trigger the file watcher, since the watcher monitors `templates/`, `_data/`, `static/`, and `site.toml` — not `dist/`.
 
 ### In `eigen audit` (CLI command)
 
 1. Build the site (full `eigen build` pipeline) OR read existing `dist/` if `--no-build` flag
-2. `audit::run_audit(config, dist_path)` → `AuditReport`
+2. `audit::run_audit(config, dist_path, rendered_pages)` → `AuditReport`
 3. Output based on flags:
    - Default: print markdown to stdout
    - `--format json`: print JSON to stdout
@@ -353,16 +412,36 @@ Audit does **not** run. No `_audit.*` files are written. No overlay is injected.
 
 ## HTML Parsing for Page-Level Checks
 
-Page-level checks need to inspect rendered HTML. Rather than pulling in a full DOM parser, use `lol_html` (already a dependency) for streaming HTML inspection where possible. For checks that need to look at multiple elements in context (e.g., heading hierarchy), use simple regex or string matching on the already-rendered HTML — these pages are small and the checks are simple.
+Page-level checks use `lol_html` (already a dependency) for streaming HTML inspection, consistent with the rest of the codebase (`seo.rs`, `json_ld.rs`, `hints/`, `bundling/`, `critical_css/`). Each page-level check function runs a single `lol_html::rewrite_str` pass over the HTML using element and text content handlers to detect issues.
 
-Checks that scan HTML:
-- Tag presence: regex for `<meta name="description"`, `<title>`, `<link rel="canonical"`, etc.
-- Attribute presence: regex for `<img` without `alt=`, `<html` without `lang=`
-- Script position: regex for `<head>.*<script` without `defer`/`async`
-- Link text: regex for `<a[^>]*>(\s*|click here|here|read more)</a>`
-- Image srcset: regex for `<img` without `srcset=`
+For checks that need to track state across multiple elements (e.g., heading hierarchy counting `h1` through `h6`), use stateful `lol_html` handlers that accumulate findings during the streaming pass.
 
-This avoids adding new dependencies and keeps the audit phase fast.
+All page-level checks for a given page should be combined into a single `lol_html::rewrite_str` call with multiple handlers to avoid redundant parsing passes. The check registry collects handlers from each check module and runs them together.
+
+### Dev Mode vs. Production: False Positive Prevention
+
+In `eigen dev`, several post-render phases are skipped (image optimization, critical CSS, hints, minification, bundling, content hashing). Page-level HTML checks that inspect features only present after these phases would produce false positives.
+
+**Strategy:** Checks that inspect HTML for features applied by eigen's own build phases are classified as **config-only** checks. They inspect `SiteConfig` fields (site-level scope), not the HTML output. This applies to:
+- `perf/image-optimization`, `perf/image-formats` — check `config.assets.images.optimize`
+- `perf/minification` — check `config.build.minify`
+- `perf/critical-css` — check `config.build.critical_css.enabled`
+- `perf/bundling` — check `config.build.bundling.enabled`
+- `perf/content-hash` — check `config.build.content_hash.enabled`
+- `perf/preload-hints` — check `config.build.hints.enabled`
+
+Checks that inspect HTML for things the **user** controls (not eigen's pipeline) are safe to run on dev output:
+- `perf/render-blocking-scripts` — user-authored `<script>` tags
+- `perf/large-image` — checks for `<img>` without `srcset` when image optimization is **disabled** (if enabled, eigen adds srcset in production, so this check is suppressed)
+- `perf/font-preload` — checks for font `<link>` tags without preload (only fires when hints are disabled)
+
+---
+
+## Known Limitations
+
+- **No browser rendering:** Checks inspect static HTML only. Contrast ratios, actual paint timing, and JS-dependent content cannot be verified.
+- **HTML entities in link text:** Checks for generic link text (e.g., "click here") match plain text, not HTML entities like `&#8230;`. Accepted for a first-pass tool.
+- **Dev mode skips some build phases:** Image optimization, critical CSS, hints, minification, bundling, and content hashing don't run in dev mode. The audit handles this by checking config flags (site-level) rather than HTML output for these features. See "Dev Mode vs. Production" section.
 
 ---
 
