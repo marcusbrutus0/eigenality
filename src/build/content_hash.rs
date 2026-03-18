@@ -245,6 +245,29 @@ pub fn build_manifest(
     Ok(manifest)
 }
 
+/// Rewrite asset references in a single file's content.
+///
+/// Performs string replacement of all original paths with their hashed
+/// equivalents, using longest-match-first ordering to prevent partial
+/// matches.
+///
+/// Returns the rewritten content, or `None` if no replacements were made
+/// (to avoid unnecessary file writes).
+fn rewrite_file_content(content: &str, manifest: &AssetManifest) -> Option<String> {
+    let pairs = manifest.pairs_longest_first();
+    let mut result = content.to_string();
+    let mut changed = false;
+
+    for (original, hashed) in &pairs {
+        if result.contains(original) {
+            result = result.replace(original, hashed);
+            changed = true;
+        }
+    }
+
+    if changed { Some(result) } else { None }
+}
+
 /// Rewrite all references to static assets in rendered HTML, CSS, and
 /// JS files in dist_dir.
 ///
@@ -252,11 +275,53 @@ pub fn build_manifest(
 /// occurrences of original asset paths with their hashed equivalents.
 ///
 /// Fragment HTML files in `_fragments/` ARE rewritten.
-pub fn rewrite_references(
-    _dist_dir: &Path,
-    _manifest: &AssetManifest,
-) -> Result<()> {
-    // Implemented in Task 5.
+pub fn rewrite_references(dist_dir: &Path, manifest: &AssetManifest) -> Result<()> {
+    use walkdir::WalkDir;
+
+    if manifest.is_empty() {
+        return Ok(());
+    }
+
+    for entry in WalkDir::new(dist_dir).into_iter() {
+        let entry = entry.wrap_err("Failed to read entry while rewriting asset references")?;
+
+        if !entry.file_type().is_file() {
+            continue;
+        }
+
+        let path = entry.path();
+        let ext = path
+            .extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or("");
+
+        // Only process text files that may contain asset references.
+        if ext != "html" && ext != "css" && ext != "js" {
+            continue;
+        }
+
+        let content = match std::fs::read_to_string(path) {
+            Ok(c) => c,
+            Err(e) => {
+                tracing::warn!(
+                    "Content hash rewrite: failed to read {}: {}",
+                    path.display(),
+                    e,
+                );
+                continue;
+            }
+        };
+
+        if let Some(rewritten) = rewrite_file_content(&content, manifest) {
+            std::fs::write(path, rewritten).wrap_err_with(|| {
+                format!(
+                    "Content hash rewrite: failed to write {}",
+                    path.display(),
+                )
+            })?;
+        }
+    }
+
     Ok(())
 }
 
@@ -529,5 +594,168 @@ mod tests {
         let r2 = m2.resolve("/a.css").to_string();
 
         assert_eq!(r1, r2, "same content should produce same hash");
+    }
+
+    // --- rewrite_file_content ---
+
+    #[test]
+    fn test_rewrite_file_content_html() {
+        let mut m = AssetManifest::new();
+        m.insert("/css/style.css".into(), "/css/style.abc123.css".into());
+        m.insert("/js/app.js".into(), "/js/app.def456.js".into());
+
+        let html = r#"<link href="/css/style.css"><script src="/js/app.js"></script>"#;
+        let result = rewrite_file_content(html, &m).unwrap();
+        assert!(result.contains("/css/style.abc123.css"));
+        assert!(result.contains("/js/app.def456.js"));
+        assert!(!result.contains(r#""/css/style.css""#));
+    }
+
+    #[test]
+    fn test_rewrite_file_content_css_url() {
+        let mut m = AssetManifest::new();
+        m.insert("/images/icon.png".into(), "/images/icon.abc123.png".into());
+
+        let css = r#".icon { background-image: url('/images/icon.png'); }"#;
+        let result = rewrite_file_content(css, &m).unwrap();
+        assert!(result.contains("/images/icon.abc123.png"));
+    }
+
+    #[test]
+    fn test_rewrite_file_content_no_match() {
+        let m = AssetManifest::new();
+        let html = "<h1>Hello</h1>";
+        assert!(rewrite_file_content(html, &m).is_none());
+    }
+
+    #[test]
+    fn test_rewrite_file_content_no_match_with_entries() {
+        let mut m = AssetManifest::new();
+        m.insert("/css/style.css".into(), "/css/style.abc123.css".into());
+
+        let html = "<h1>Hello</h1>";
+        assert!(rewrite_file_content(html, &m).is_none());
+    }
+
+    #[test]
+    fn test_rewrite_file_content_multiple_refs() {
+        let mut m = AssetManifest::new();
+        m.insert("/css/style.css".into(), "/css/style.abc123.css".into());
+
+        let html = r#"<link href="/css/style.css"><link href="/css/style.css">"#;
+        let result = rewrite_file_content(html, &m).unwrap();
+        // Both occurrences should be replaced.
+        assert!(!result.contains(r#""/css/style.css""#));
+        assert_eq!(result.matches("/css/style.abc123.css").count(), 2);
+    }
+
+    #[test]
+    fn test_rewrite_file_content_idempotent() {
+        let mut m = AssetManifest::new();
+        m.insert("/css/style.css".into(), "/css/style.abc123.css".into());
+
+        let html = r#"<link href="/css/style.css">"#;
+        let first = rewrite_file_content(html, &m).unwrap();
+        // Second pass should produce no changes.
+        assert!(rewrite_file_content(&first, &m).is_none());
+    }
+
+    // --- rewrite_references ---
+
+    #[test]
+    fn test_rewrite_references_html() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let dist = tmp.path();
+
+        write_file(dist, "index.html", r#"<link href="/css/style.css">"#);
+
+        let mut m = AssetManifest::new();
+        m.insert("/css/style.css".into(), "/css/style.abc123.css".into());
+
+        rewrite_references(dist, &m).unwrap();
+
+        let content = std::fs::read_to_string(dist.join("index.html")).unwrap();
+        assert!(content.contains("/css/style.abc123.css"));
+    }
+
+    #[test]
+    fn test_rewrite_references_css() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let dist = tmp.path();
+
+        write_file(dist, "css/style.css", r#"body { background: url('/images/bg.png'); }"#);
+
+        let mut m = AssetManifest::new();
+        m.insert("/images/bg.png".into(), "/images/bg.abc123.png".into());
+
+        rewrite_references(dist, &m).unwrap();
+
+        let content = std::fs::read_to_string(dist.join("css/style.css")).unwrap();
+        assert!(content.contains("/images/bg.abc123.png"));
+    }
+
+    #[test]
+    fn test_rewrite_references_js() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let dist = tmp.path();
+
+        write_file(dist, "js/app.js", r#"const url = '/images/logo.png';"#);
+
+        let mut m = AssetManifest::new();
+        m.insert("/images/logo.png".into(), "/images/logo.abc123.png".into());
+
+        rewrite_references(dist, &m).unwrap();
+
+        let content = std::fs::read_to_string(dist.join("js/app.js")).unwrap();
+        assert!(content.contains("/images/logo.abc123.png"));
+    }
+
+    #[test]
+    fn test_rewrite_references_skips_binary() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let dist = tmp.path();
+
+        // Write a .png file -- should NOT be processed.
+        write_file(dist, "images/logo.png", "binary-data-/css/style.css");
+
+        let mut m = AssetManifest::new();
+        m.insert("/css/style.css".into(), "/css/style.abc123.css".into());
+
+        rewrite_references(dist, &m).unwrap();
+
+        // The .png file should be untouched.
+        let content = std::fs::read_to_string(dist.join("images/logo.png")).unwrap();
+        assert!(content.contains("/css/style.css"));
+    }
+
+    #[test]
+    fn test_rewrite_references_fragments() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let dist = tmp.path();
+
+        write_file(dist, "_fragments/about.html", r#"<img src="/images/photo.jpg">"#);
+
+        let mut m = AssetManifest::new();
+        m.insert("/images/photo.jpg".into(), "/images/photo.abc123.jpg".into());
+
+        rewrite_references(dist, &m).unwrap();
+
+        let content = std::fs::read_to_string(dist.join("_fragments/about.html")).unwrap();
+        assert!(content.contains("/images/photo.abc123.jpg"));
+    }
+
+    #[test]
+    fn test_rewrite_references_empty_manifest() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let dist = tmp.path();
+
+        write_file(dist, "index.html", "<h1>Hello</h1>");
+
+        let m = AssetManifest::new();
+        // Should be a no-op, not an error.
+        rewrite_references(dist, &m).unwrap();
+
+        let content = std::fs::read_to_string(dist.join("index.html")).unwrap();
+        assert_eq!(content, "<h1>Hello</h1>");
     }
 }
