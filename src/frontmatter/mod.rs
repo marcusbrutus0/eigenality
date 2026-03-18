@@ -25,6 +25,8 @@ pub struct Frontmatter {
     /// for this image, improving Largest Contentful Paint.
     /// The path should be relative to the site root (e.g. "/assets/hero.jpg").
     pub hero_image: Option<String>,
+    /// SEO metadata for Open Graph and Twitter Card tags.
+    pub seo: SeoMeta,
 }
 
 impl Default for Frontmatter {
@@ -36,6 +38,7 @@ impl Default for Frontmatter {
             data: HashMap::new(),
             fragment_blocks: None,
             hero_image: None,
+            seo: SeoMeta::default(),
         }
     }
 }
@@ -61,6 +64,46 @@ pub struct DataQuery {
     pub filter: Option<HashMap<String, String>>,
 }
 
+/// Per-page SEO metadata for Open Graph and Twitter Card tags.
+///
+/// All fields are optional. When absent, site-level defaults from
+/// `[site.seo]` in site.toml are used.
+///
+/// For dynamic pages, field values may contain minijinja template
+/// expressions (e.g. `{{ post.title }}`) which are resolved per-item
+/// during rendering.
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct SeoMeta {
+    /// Page title for `og:title` and `twitter:title`.
+    /// Falls back to `site.seo.title`, then `site.name`.
+    pub title: Option<String>,
+
+    /// Page description for `og:description` and `twitter:description`.
+    /// Falls back to `site.seo.description`.
+    pub description: Option<String>,
+
+    /// Share image URL for `og:image` and `twitter:image`.
+    /// Can be a site-relative path (e.g. "/assets/hero.jpg") or
+    /// absolute URL. Relative paths are resolved to absolute URLs
+    /// using `site.base_url` during injection.
+    /// Falls back to `site.seo.image`.
+    pub image: Option<String>,
+
+    /// Open Graph type for `og:type`.
+    /// Falls back to `site.seo.og_type`, then "website".
+    pub og_type: Option<String>,
+
+    /// Twitter card type for `twitter:card`.
+    /// Falls back to `site.seo.twitter_card`, then
+    /// "summary_large_image". Forced to "summary" when no image
+    /// is available at any level.
+    pub twitter_card: Option<String>,
+
+    /// Override the canonical URL. By default, this is auto-generated
+    /// from `site.base_url` + page URL path.
+    pub canonical_url: Option<String>,
+}
+
 // ---------------------------------------------------------------------------
 // Raw serde types for YAML deserialization (before mapping to the public types)
 // ---------------------------------------------------------------------------
@@ -74,6 +117,8 @@ struct RawFrontmatter {
     data: HashMap<String, DataQuery>,
     fragment_blocks: Option<Vec<String>>,
     hero_image: Option<String>,
+    #[serde(default)]
+    seo: SeoMeta,
 }
 
 // ---------------------------------------------------------------------------
@@ -148,6 +193,7 @@ pub fn parse_frontmatter(raw_yaml: &str, file_path: &str) -> Result<Frontmatter>
         data: raw.data,
         fragment_blocks: raw.fragment_blocks,
         hero_image: raw.hero_image,
+        seo: raw.seo,
     })
 }
 
@@ -345,5 +391,81 @@ mod tests {
     fn test_default_hero_image_is_none() {
         let fm = Frontmatter::default();
         assert!(fm.hero_image.is_none());
+    }
+
+    // --- SEO frontmatter tests ---
+
+    #[test]
+    fn test_parse_seo_frontmatter_full() {
+        let yaml = concat!(
+            "seo:\n",
+            "  title: \"About Us\"\n",
+            "  description: \"Learn about our team\"\n",
+            "  image: /assets/about-hero.jpg\n",
+            "  og_type: website\n",
+            "  twitter_card: summary_large_image\n",
+            "  canonical_url: https://example.com/about\n",
+        );
+        let fm = parse_frontmatter(yaml, "about.html").unwrap();
+        assert_eq!(fm.seo.title.as_deref(), Some("About Us"));
+        assert_eq!(fm.seo.description.as_deref(), Some("Learn about our team"));
+        assert_eq!(fm.seo.image.as_deref(), Some("/assets/about-hero.jpg"));
+        assert_eq!(fm.seo.og_type.as_deref(), Some("website"));
+        assert_eq!(fm.seo.twitter_card.as_deref(), Some("summary_large_image"));
+        assert_eq!(fm.seo.canonical_url.as_deref(), Some("https://example.com/about"));
+    }
+
+    #[test]
+    fn test_parse_seo_frontmatter_partial() {
+        let yaml = concat!(
+            "seo:\n",
+            "  title: \"My Page\"\n",
+            "  description: \"A description\"\n",
+        );
+        let fm = parse_frontmatter(yaml, "page.html").unwrap();
+        assert_eq!(fm.seo.title.as_deref(), Some("My Page"));
+        assert_eq!(fm.seo.description.as_deref(), Some("A description"));
+        assert!(fm.seo.image.is_none());
+        assert!(fm.seo.og_type.is_none());
+        assert!(fm.seo.twitter_card.is_none());
+        assert!(fm.seo.canonical_url.is_none());
+    }
+
+    #[test]
+    fn test_parse_seo_frontmatter_absent() {
+        let yaml = "data:\n  nav:\n    file: \"nav.yaml\"\n";
+        let fm = parse_frontmatter(yaml, "index.html").unwrap();
+        assert!(fm.seo.title.is_none());
+        assert!(fm.seo.description.is_none());
+        assert!(fm.seo.image.is_none());
+        assert!(fm.seo.og_type.is_none());
+        assert!(fm.seo.twitter_card.is_none());
+        assert!(fm.seo.canonical_url.is_none());
+    }
+
+    #[test]
+    fn test_parse_seo_with_template_expressions() {
+        let yaml = concat!(
+            "seo:\n",
+            "  title: \"{{ post.title }} | My Blog\"\n",
+            "  description: \"{{ post.excerpt }}\"\n",
+            "  image: \"{{ post.cover_image }}\"\n",
+        );
+        let fm = parse_frontmatter(yaml, "post.html").unwrap();
+        // Expressions are stored as literal strings, not evaluated at parse time.
+        assert_eq!(fm.seo.title.as_deref(), Some("{{ post.title }} | My Blog"));
+        assert_eq!(fm.seo.description.as_deref(), Some("{{ post.excerpt }}"));
+        assert_eq!(fm.seo.image.as_deref(), Some("{{ post.cover_image }}"));
+    }
+
+    #[test]
+    fn test_default_seo_is_empty() {
+        let fm = Frontmatter::default();
+        assert!(fm.seo.title.is_none());
+        assert!(fm.seo.description.is_none());
+        assert!(fm.seo.image.is_none());
+        assert!(fm.seo.og_type.is_none());
+        assert!(fm.seo.twitter_card.is_none());
+        assert!(fm.seo.canonical_url.is_none());
     }
 }
