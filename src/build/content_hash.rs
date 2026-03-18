@@ -758,4 +758,55 @@ mod tests {
         let content = std::fs::read_to_string(dist.join("index.html")).unwrap();
         assert_eq!(content, "<h1>Hello</h1>");
     }
+
+    // --- end-to-end ---
+
+    #[test]
+    fn test_end_to_end_hash_and_rewrite() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let root = tmp.path();
+        let static_dir = root.join("static");
+        let dist_dir = root.join("dist");
+
+        // Set up static files.
+        let css_content = "body { color: red; }";
+        let js_content = "console.log('hello');";
+        write_file(&static_dir, "css/style.css", css_content);
+        write_file(&static_dir, "js/app.js", js_content);
+        write_file(&static_dir, "favicon.ico", "icon-data");
+
+        // Copy to dist (simulating copy_static_assets).
+        write_file(&dist_dir, "css/style.css", css_content);
+        write_file(&dist_dir, "js/app.js", js_content);
+        write_file(&dist_dir, "favicon.ico", "icon-data");
+
+        // Phase 1: Build manifest.
+        let config = hash_config();
+        let manifest = build_manifest(&dist_dir, &static_dir, &config).unwrap();
+
+        // favicon.ico should be excluded.
+        assert_eq!(manifest.len(), 2);
+        assert!(dist_dir.join("favicon.ico").exists());
+
+        // CSS and JS should be hashed.
+        let css_hashed = manifest.resolve("/css/style.css");
+        let js_hashed = manifest.resolve("/js/app.js");
+        assert_ne!(css_hashed, "/css/style.css");
+        assert_ne!(js_hashed, "/js/app.js");
+
+        // Write an HTML file that references the original paths (simulating
+        // a template that does not use asset()).
+        let html = r#"<html><head><link href="/css/style.css"><script src="/js/app.js"></script></head></html>"#;
+        write_file(&dist_dir, "index.html", html);
+
+        // Phase 3: Rewrite references.
+        rewrite_references(&dist_dir, &manifest).unwrap();
+
+        // Verify HTML was rewritten.
+        let result = std::fs::read_to_string(dist_dir.join("index.html")).unwrap();
+        assert!(result.contains(css_hashed), "CSS reference should be rewritten");
+        assert!(result.contains(js_hashed), "JS reference should be rewritten");
+        assert!(!result.contains(r#"href="/css/style.css""#), "original CSS ref should be gone");
+        assert!(!result.contains(r#"src="/js/app.js""#), "original JS ref should be gone");
+    }
 }
