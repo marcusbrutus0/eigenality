@@ -27,6 +27,7 @@ use super::hints;
 use super::json_ld;
 use super::minify;
 use super::output;
+use super::robots;
 use super::seo;
 use super::sitemap;
 
@@ -198,6 +199,12 @@ pub fn build(project_root: &Path) -> Result<()> {
     // Generate sitemap.
     sitemap::generate_sitemap(&dist_dir, &rendered_pages, &config, &build_time)?;
     tracing::info!("Generating sitemap... ✓");
+
+    // Generate robots.txt.
+    if config.robots.is_some() {
+        robots::generate_robots_txt(&dist_dir, &config)?;
+        tracing::info!("Generating robots.txt... done");
+    }
 
     // Generate Atom feeds.
     if !config.feed.is_empty() {

@@ -12,6 +12,7 @@ pub mod json_ld;
 pub mod minify;
 pub mod output;
 pub mod render;
+pub mod robots;
 pub mod seo;
 pub mod sitemap;
 
