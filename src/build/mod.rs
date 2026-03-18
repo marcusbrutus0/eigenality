@@ -10,6 +10,7 @@ pub mod hints;
 pub mod minify;
 pub mod output;
 pub mod render;
+pub mod seo;
 pub mod sitemap;
 
 pub use render::build;
