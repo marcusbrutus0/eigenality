@@ -160,6 +160,7 @@ pub fn build(project_root: &Path) -> Result<()> {
                     &plugin_registry,
                     &image_cache,
                     &mut css_cache,
+                    &manifest,
                 )?;
                 rendered_pages.push(result);
             }
@@ -179,6 +180,7 @@ pub fn build(project_root: &Path) -> Result<()> {
                     &plugin_registry,
                     &image_cache,
                     &mut css_cache,
+                    &manifest,
                 )?;
                 rendered_pages.extend(results);
             }
@@ -264,6 +266,7 @@ fn render_static_page(
     plugin_registry: &PluginRegistry,
     image_cache: &ImageCache,
     css_cache: &mut critical_css::StylesheetCache,
+    manifest: &std::sync::Arc<content_hash::AssetManifest>,
 ) -> Result<RenderedPage> {
     let tmpl_name = page.template_path.to_string_lossy().to_string();
 
@@ -351,6 +354,7 @@ fn render_static_page(
             &config.build.critical_css,
             dist_dir,
             css_cache,
+            if manifest.is_empty() { None } else { Some(manifest.as_ref()) },
         )
     } else {
         full_html
@@ -450,6 +454,7 @@ fn render_dynamic_page(
     plugin_registry: &PluginRegistry,
     image_cache: &ImageCache,
     css_cache: &mut critical_css::StylesheetCache,
+    manifest: &std::sync::Arc<content_hash::AssetManifest>,
 ) -> Result<Vec<RenderedPage>> {
     let tmpl_name = page.template_path.to_string_lossy().to_string();
     let item_as = &page.frontmatter.item_as;
@@ -615,6 +620,7 @@ fn render_dynamic_page(
                 &config.build.critical_css,
                 dist_dir,
                 css_cache,
+                if manifest.is_empty() { None } else { Some(manifest.as_ref()) },
             )
         } else {
             full_html

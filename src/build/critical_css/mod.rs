@@ -45,9 +45,14 @@ impl StylesheetCache {
     ///
     /// Returns `Some(&str)` if the stylesheet is cached or can be loaded,
     /// `None` if loading fails.
-    fn get_or_load(&mut self, href: &str, dist_dir: &Path) -> Option<&str> {
+    fn get_or_load(
+        &mut self,
+        href: &str,
+        dist_dir: &Path,
+        manifest: Option<&crate::build::content_hash::AssetManifest>,
+    ) -> Option<&str> {
         if !self.cache.contains_key(href) {
-            match load_stylesheet(href, dist_dir) {
+            match load_stylesheet(href, dist_dir, manifest) {
                 Ok(css) => {
                     self.cache.insert(href.to_string(), css);
                 }
@@ -71,6 +76,7 @@ pub fn inline_critical_css(
     config: &CriticalCssConfig,
     dist_dir: &Path,
     css_cache: &mut StylesheetCache,
+    manifest: Option<&crate::build::content_hash::AssetManifest>,
 ) -> String {
     if !config.enabled {
         return html.to_string();
@@ -90,7 +96,7 @@ pub fn inline_critical_css(
     let mut processed_hrefs: Vec<String> = Vec::new();
 
     for href in &hrefs {
-        let css_content = match css_cache.get_or_load(href, dist_dir) {
+        let css_content = match css_cache.get_or_load(href, dist_dir, manifest) {
             Some(css) => css.to_string(),
             None => continue, // Warning already logged by get_or_load.
         };
@@ -147,11 +153,33 @@ pub fn inline_critical_css(
 /// a `SourceProvider` trait implementation).
 ///
 /// External `@import` URLs (http/https) are left as-is.
-fn load_stylesheet(href: &str, dist_dir: &Path) -> Result<String, String> {
+fn load_stylesheet(
+    href: &str,
+    dist_dir: &Path,
+    manifest: Option<&crate::build::content_hash::AssetManifest>,
+) -> Result<String, String> {
     let relative = href.trim_start_matches('/');
     let css_path = dist_dir.join(relative);
 
     if !css_path.exists() {
+        // Try resolving through manifest (file may have been renamed by content hashing).
+        if let Some(m) = manifest {
+            let url_path = if href.starts_with('/') {
+                href.to_string()
+            } else {
+                format!("/{}", href)
+            };
+            let resolved = m.resolve(&url_path);
+            if resolved != url_path {
+                let resolved_relative = resolved.trim_start_matches('/');
+                let resolved_path = dist_dir.join(resolved_relative);
+                if resolved_path.exists() {
+                    let css = std::fs::read_to_string(&resolved_path)
+                        .map_err(|e| format!("Failed to read {}: {e}", resolved_path.display()))?;
+                    return resolve_imports(&css, &resolved_path, dist_dir, 0);
+                }
+            }
+        }
         return Err(format!("File not found: {}", css_path.display()));
     }
 
@@ -255,7 +283,7 @@ mod tests {
         let config = CriticalCssConfig::default(); // enabled: false
         let mut cache = StylesheetCache::new();
         let html = r#"<html><head><link rel="stylesheet" href="/css/style.css"></head></html>"#;
-        let result = inline_critical_css(html, &config, Path::new("/tmp"), &mut cache);
+        let result = inline_critical_css(html, &config, Path::new("/tmp"), &mut cache, None);
         assert_eq!(result, html);
     }
 
@@ -264,7 +292,7 @@ mod tests {
         let config = CriticalCssConfig { enabled: true, ..Default::default() };
         let mut cache = StylesheetCache::new();
         let html = "<html><head><title>No CSS</title></head><body><p>Hi</p></body></html>";
-        let result = inline_critical_css(html, &config, Path::new("/tmp"), &mut cache);
+        let result = inline_critical_css(html, &config, Path::new("/tmp"), &mut cache, None);
         assert_eq!(result, html);
     }
 
@@ -274,7 +302,7 @@ mod tests {
         let config = CriticalCssConfig { enabled: true, ..Default::default() };
         let mut cache = StylesheetCache::new();
         let html = r#"<html><head><link rel="stylesheet" href="/css/missing.css"></head></html>"#;
-        let result = inline_critical_css(html, &config, tmp.path(), &mut cache);
+        let result = inline_critical_css(html, &config, tmp.path(), &mut cache, None);
         // Should return original HTML unchanged.
         assert_eq!(result, html);
     }
@@ -293,7 +321,7 @@ mod tests {
         let mut cache = StylesheetCache::new();
         let html = r#"<html><head><link rel="stylesheet" href="/css/style.css"></head><body><div class="hero">Hello</div></body></html>"#;
 
-        let result = inline_critical_css(html, &config, dist, &mut cache);
+        let result = inline_critical_css(html, &config, dist, &mut cache, None);
 
         assert!(result.contains("<style>"));
         assert!(result.contains(".hero"));
@@ -318,7 +346,7 @@ mod tests {
         let mut cache = StylesheetCache::new();
         let html = r#"<html><head><link rel="stylesheet" href="/css/style.css"></head><body><div class="exists">Hello</div></body></html>"#;
 
-        let result = inline_critical_css(html, &config, dist, &mut cache);
+        let result = inline_critical_css(html, &config, dist, &mut cache, None);
 
         // Should return original HTML unchanged (no inlining).
         assert_eq!(result, html);
@@ -339,7 +367,7 @@ mod tests {
         let mut cache = StylesheetCache::new();
         let html = r#"<html><head><link rel="stylesheet" href="/css/vendor/bootstrap.css"></head><body><div class="btn">Click</div></body></html>"#;
 
-        let result = inline_critical_css(html, &config, dist, &mut cache);
+        let result = inline_critical_css(html, &config, dist, &mut cache, None);
 
         // Excluded stylesheet should not be processed.
         assert_eq!(result, html);
@@ -360,7 +388,7 @@ mod tests {
         let mut cache = StylesheetCache::new();
         let html = r#"<html><head><link rel="stylesheet" href="/css/style.css"></head><body><div class="hero">Hello</div></body></html>"#;
 
-        let result = inline_critical_css(html, &config, dist, &mut cache);
+        let result = inline_critical_css(html, &config, dist, &mut cache, None);
 
         assert!(result.contains("<style>"));
         assert!(result.contains(".hero"));
@@ -385,7 +413,7 @@ mod tests {
         let mut cache = StylesheetCache::new();
         let html = r#"<html><head><link rel="stylesheet" href="/css/style.css"></head><body><div class="hero base">Hello</div></body></html>"#;
 
-        let result = inline_critical_css(html, &config, dist, &mut cache);
+        let result = inline_critical_css(html, &config, dist, &mut cache, None);
 
         assert!(result.contains("<style>"));
         assert!(result.contains(".hero"));
@@ -403,15 +431,57 @@ mod tests {
         let mut cache = StylesheetCache::new();
 
         // First load.
-        let css1 = cache.get_or_load("/css/style.css", dist)
+        let css1 = cache.get_or_load("/css/style.css", dist, None)
             .map(|s| s.to_string());
         assert!(css1.is_some());
 
         // Second load should hit cache (even if file is deleted).
         fs::remove_file(dist.join("css/style.css")).unwrap();
-        let css2 = cache.get_or_load("/css/style.css", dist)
+        let css2 = cache.get_or_load("/css/style.css", dist, None)
             .map(|s| s.to_string());
         assert!(css2.is_some());
         assert_eq!(css1, css2);
+    }
+
+    #[test]
+    fn test_get_or_load_with_manifest_fallback() {
+        use crate::build::content_hash::AssetManifest;
+
+        let tmp = TempDir::new().unwrap();
+        let dist = tmp.path();
+
+        // File exists at hashed path, not at original.
+        let css = "body { color: red; }";
+        let hashed_dir = dist.join("css");
+        fs::create_dir_all(&hashed_dir).unwrap();
+        fs::write(hashed_dir.join("style.abc123.css"), css).unwrap();
+
+        let mut manifest = AssetManifest::new();
+        manifest.insert(
+            "/css/style.css".into(),
+            "/css/style.abc123.css".into(),
+        );
+
+        let mut cache = StylesheetCache::new();
+        let result = cache.get_or_load("/css/style.css", dist, Some(&manifest));
+        assert!(result.is_some(), "should resolve via manifest fallback");
+        assert_eq!(result.unwrap(), css);
+    }
+
+    #[test]
+    fn test_get_or_load_without_manifest() {
+        let tmp = TempDir::new().unwrap();
+        let dist = tmp.path();
+
+        // File exists at original path.
+        let css = "body { color: blue; }";
+        let css_dir = dist.join("css");
+        fs::create_dir_all(&css_dir).unwrap();
+        fs::write(css_dir.join("style.css"), css).unwrap();
+
+        let mut cache = StylesheetCache::new();
+        let result = cache.get_or_load("/css/style.css", dist, None);
+        assert!(result.is_some());
+        assert_eq!(result.unwrap(), css);
     }
 }
