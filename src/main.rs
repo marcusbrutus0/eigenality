@@ -29,7 +29,7 @@ fn main() -> Result<()> {
             let project = std::fs::canonicalize(&project)?;
             let start = Instant::now();
             tracing::info!("Building site at {}...", project.display());
-            build::build(&project)?;
+            build::build(&project, false)?;
             let elapsed = start.elapsed();
             eprintln!("Built site in {:.1?}", elapsed);
             Ok(())
@@ -59,7 +59,7 @@ fn main() -> Result<()> {
 
             if !no_build {
                 tracing::info!("Building site...");
-                build::build(&project)?;
+                build::build(&project, false)?;
             }
 
             let config = config::load_config(&project)?;

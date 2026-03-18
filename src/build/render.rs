@@ -48,7 +48,7 @@ pub struct RenderedPage {
 /// Run the full build process.
 ///
 /// This is the main entry point for `eigen build`.
-pub fn build(project_root: &Path) -> Result<()> {
+pub fn build(project_root: &Path, dev: bool) -> Result<()> {
     let config = crate::config::load_config(project_root)?;
     tracing::info!("Loading config... ✓ ({})", config.site.name);
 
@@ -71,6 +71,25 @@ pub fn build(project_root: &Path) -> Result<()> {
         static_count,
         dynamic_count,
     );
+
+    // Filter out draft and future-scheduled static pages in production builds.
+    let total_discovered = pages.len();
+    let pages: Vec<PageDef> = if dev {
+        pages
+    } else {
+        let today = chrono::Utc::now().date_naive();
+        pages
+            .into_iter()
+            .filter(|p| {
+                matches!(p.page_type, PageType::Dynamic { .. })
+                    || is_published(&p.frontmatter, today)
+            })
+            .collect()
+    };
+    let skipped = total_discovered - pages.len();
+    if skipped > 0 {
+        tracing::info!("Skipped {} draft/scheduled page(s).", skipped);
+    }
 
     // Set up output directory.
     output::setup_output_dir(
@@ -272,6 +291,20 @@ pub fn build(project_root: &Path) -> Result<()> {
         rendered_pages.len(),
     );
     Ok(())
+}
+
+/// Check whether a page should be included in production builds.
+///
+/// A page is unpublished if `draft == true` or if `publish_date` is
+/// set and is after `today`.
+fn is_published(fm: &crate::frontmatter::Frontmatter, today: chrono::NaiveDate) -> bool {
+    if fm.draft {
+        return false;
+    }
+    match fm.publish_date {
+        Some(date) if date > today => false,
+        _ => true,
+    }
 }
 
 /// Count static vs dynamic pages.
@@ -1013,7 +1046,7 @@ minify = false
 
         setup_minimal_project(root);
 
-        build(root).unwrap();
+        build(root, true).unwrap();
 
         // Check dist/ exists and has the output.
         assert!(root.join("dist/index.html").exists());
@@ -1081,7 +1114,7 @@ data:
             "- label: Home\n  url: /\n- label: About\n  url: /about\n",
         );
 
-        build(root).unwrap();
+        build(root, true).unwrap();
 
         let html = fs::read_to_string(root.join("dist/index.html")).unwrap();
         assert!(html.contains(r#"<a href="/">Home</a>"#));
@@ -1134,7 +1167,7 @@ item_as: post
             ]"#,
         );
 
-        build(root).unwrap();
+        build(root, true).unwrap();
 
         // Check generated pages.
         assert!(root.join("dist/posts/hello-world.html").exists());
@@ -1189,7 +1222,7 @@ collection:
 
         write(root, "_data/items.json", "[]");
 
-        build(root).unwrap();
+        build(root, true).unwrap();
 
         // No pages should be generated for empty collection.
         let sitemap = fs::read_to_string(root.join("dist/sitemap.xml")).unwrap();
@@ -1205,7 +1238,7 @@ collection:
         write(root, "static/css/style.css", "body { color: red; }");
         write(root, "static/favicon.ico", "icon");
 
-        build(root).unwrap();
+        build(root, true).unwrap();
 
         assert!(root.join("dist/css/style.css").exists());
         assert!(root.join("dist/favicon.ico").exists());
@@ -1245,7 +1278,7 @@ fragments = false
 {% block content %}<h1>Home</h1>{% endblock %}"#,
         );
 
-        build(root).unwrap();
+        build(root, true).unwrap();
 
         assert!(root.join("dist/index.html").exists());
         assert!(!root.join("dist/_fragments").exists());
@@ -1265,7 +1298,7 @@ fragments = false
         // Create stale file in dist/.
         write(root, "dist/stale.html", "old content");
 
-        build(root).unwrap();
+        build(root, true).unwrap();
 
         // Stale file should be gone.
         assert!(!root.join("dist/stale.html").exists());
@@ -1308,7 +1341,7 @@ fragments = false
             r#"{% extends "_base.html" %}{% block content %}Guide{% endblock %}"#,
         );
 
-        build(root).unwrap();
+        build(root, true).unwrap();
 
         assert!(root.join("dist/index.html").exists());
         assert!(root.join("dist/about.html").exists());
@@ -1358,7 +1391,7 @@ slug_field: id
             r#"[{"id": 1, "title": "First"}, {"id": 2, "title": "Second"}]"#,
         );
 
-        build(root).unwrap();
+        build(root, true).unwrap();
 
         assert!(root.join("dist/1.html").exists());
         assert!(root.join("dist/2.html").exists());
@@ -1391,7 +1424,7 @@ fragments = false
 {% block content %}URL:{{ page.current_url }} PATH:{{ page.current_path }}{% endblock %}"#,
         );
 
-        build(root).unwrap();
+        build(root, true).unwrap();
 
         let html = fs::read_to_string(root.join("dist/about.html")).unwrap();
         assert!(html.contains("URL:/about.html"));
@@ -1439,7 +1472,7 @@ slug_field: slug
             ]"#,
         );
 
-        let result = build(root);
+        let result = build(root, true);
         assert!(result.is_err());
         let err = format!("{:#}", result.unwrap_err());
         assert!(err.contains("Duplicate slug"));
@@ -1484,7 +1517,7 @@ slug_field: slug
             r#"[{"slug": "Hello World / Special!", "title": "Test"}]"#,
         );
 
-        build(root).unwrap();
+        build(root, true).unwrap();
 
         // The slug should be sanitized to something safe.
         assert!(root.join("dist/hello-world-special.html").exists());
@@ -1516,7 +1549,7 @@ fragments = false
 {% block content %}<h1>Home</h1>{% endblock %}"#,
         );
 
-        let result = build(root);
+        let result = build(root, true);
         assert!(result.is_err());
         let err = format!("{:#}", result.unwrap_err());
         // Should mention the template and the missing layout.
@@ -1543,7 +1576,7 @@ fragments = false
 
         write(root, "templates/index.html", "<h1>{{ undefined_var }}</h1>");
 
-        let result = build(root);
+        let result = build(root, true);
         assert!(result.is_err());
         let err = format!("{:#}", result.unwrap_err());
         assert!(err.contains("undefined") || err.contains("unknown variable"));
@@ -1571,7 +1604,7 @@ fragments = false
         std::fs::create_dir_all(root.join("templates")).unwrap();
 
         // Should succeed, producing empty dist with just static assets.
-        build(root).unwrap();
+        build(root, true).unwrap();
 
         assert!(root.join("dist").is_dir());
         let sitemap = fs::read_to_string(root.join("dist/sitemap.xml")).unwrap();
@@ -1583,7 +1616,7 @@ fragments = false
         let tmp = TempDir::new().unwrap();
         let root = tmp.path();
 
-        let result = build(root);
+        let result = build(root, true);
         assert!(result.is_err());
         let err = format!("{:#}", result.unwrap_err());
         assert!(err.contains("site.toml"));
@@ -1636,7 +1669,7 @@ enabled = true
 "#,
         );
 
-        build(root).unwrap();
+        build(root, true).unwrap();
 
         let html = fs::read_to_string(root.join("dist/index.html")).unwrap();
 
@@ -1687,7 +1720,7 @@ minify = false
 
         write(root, "static/css/style.css", ".hero { color: red; }");
 
-        build(root).unwrap();
+        build(root, true).unwrap();
 
         let html = fs::read_to_string(root.join("dist/index.html")).unwrap();
 
@@ -1695,5 +1728,65 @@ minify = false
         assert!(!html.contains("<style>"));
         // Original <link> should be intact.
         assert!(html.contains(r#"rel="stylesheet""#));
+    }
+
+    // --- is_published tests ---
+
+    #[test]
+    fn test_is_published_default() {
+        let fm = crate::frontmatter::Frontmatter::default();
+        let today = chrono::NaiveDate::from_ymd_opt(2026, 3, 18).unwrap();
+        assert!(is_published(&fm, today));
+    }
+
+    #[test]
+    fn test_is_published_draft() {
+        let fm = crate::frontmatter::Frontmatter {
+            draft: true,
+            ..Default::default()
+        };
+        let today = chrono::NaiveDate::from_ymd_opt(2026, 3, 18).unwrap();
+        assert!(!is_published(&fm, today));
+    }
+
+    #[test]
+    fn test_is_published_future_date() {
+        let fm = crate::frontmatter::Frontmatter {
+            publish_date: Some(chrono::NaiveDate::from_ymd_opt(2026, 4, 1).unwrap()),
+            ..Default::default()
+        };
+        let today = chrono::NaiveDate::from_ymd_opt(2026, 3, 18).unwrap();
+        assert!(!is_published(&fm, today));
+    }
+
+    #[test]
+    fn test_is_published_past_date() {
+        let fm = crate::frontmatter::Frontmatter {
+            publish_date: Some(chrono::NaiveDate::from_ymd_opt(2026, 1, 1).unwrap()),
+            ..Default::default()
+        };
+        let today = chrono::NaiveDate::from_ymd_opt(2026, 3, 18).unwrap();
+        assert!(is_published(&fm, today));
+    }
+
+    #[test]
+    fn test_is_published_today() {
+        let fm = crate::frontmatter::Frontmatter {
+            publish_date: Some(chrono::NaiveDate::from_ymd_opt(2026, 3, 18).unwrap()),
+            ..Default::default()
+        };
+        let today = chrono::NaiveDate::from_ymd_opt(2026, 3, 18).unwrap();
+        assert!(is_published(&fm, today));
+    }
+
+    #[test]
+    fn test_is_published_draft_and_future() {
+        let fm = crate::frontmatter::Frontmatter {
+            draft: true,
+            publish_date: Some(chrono::NaiveDate::from_ymd_opt(2026, 4, 1).unwrap()),
+            ..Default::default()
+        };
+        let today = chrono::NaiveDate::from_ymd_opt(2026, 3, 18).unwrap();
+        assert!(!is_published(&fm, today));
     }
 }
