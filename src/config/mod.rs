@@ -28,6 +28,10 @@ pub struct SiteConfig {
     /// When absent (`None`), no robots.txt is generated.
     #[serde(default)]
     pub robots: Option<RobotsConfig>,
+    /// Audit configuration for post-build HTML quality checks.
+    /// When present, checks are run after rendering.
+    #[serde(default)]
+    pub audit: Option<AuditConfig>,
 }
 
 /// Metadata about the site itself.
@@ -500,6 +504,18 @@ pub struct RobotsRule {
     pub disallow: Vec<String>,
 }
 
+/// Audit configuration for post-build HTML quality checks.
+///
+/// Located under `[audit]` in site.toml. When present, the build will
+/// run SEO, performance, accessibility, and best-practices checks on
+/// rendered pages.
+#[derive(Debug, Clone, Deserialize, Default)]
+pub struct AuditConfig {
+    /// Check IDs to ignore (e.g. `["seo-title", "perf-image-size"]`).
+    #[serde(default)]
+    pub ignore: Vec<String>,
+}
+
 fn default_robots_rules() -> Vec<RobotsRule> {
     vec![RobotsRule {
         user_agent: "*".to_string(),
@@ -665,6 +681,7 @@ fn validate_config(config: &SiteConfig) -> Result<()> {
     }
     validate_feed_configs(config)?;
     validate_robots_config(config)?;
+    validate_audit_config(config)?;
     Ok(())
 }
 
@@ -759,6 +776,20 @@ fn validate_robots_config(config: &SiteConfig) -> Result<()> {
         }
     }
 
+    Ok(())
+}
+
+/// Validate audit configuration.
+fn validate_audit_config(config: &SiteConfig) -> Result<()> {
+    let _audit = match &config.audit {
+        Some(a) => a,
+        None => return Ok(()),
+    };
+
+    // Currently no constraints to validate — the ignore list accepts
+    // arbitrary check IDs and unknown ones are silently skipped at
+    // runtime.  This hook exists so future constraints (e.g. validating
+    // known check IDs) can be added without touching `validate_config`.
     Ok(())
 }
 
@@ -1671,6 +1702,50 @@ allow = ["/"]
         assert!(result.is_err());
         let err = result.unwrap_err().to_string();
         assert!(err.contains("user_agent"));
+    }
+
+    // --- Audit config tests ---
+
+    #[test]
+    fn test_audit_config_default_absent() {
+        let toml_str = r#"
+[site]
+name = "No Audit"
+base_url = "https://example.com"
+"#;
+        let config = parse_toml(toml_str).unwrap();
+        assert!(config.audit.is_none());
+    }
+
+    #[test]
+    fn test_audit_config_with_ignore() {
+        let toml_str = r#"
+[site]
+name = "Audit Ignore"
+base_url = "https://example.com"
+
+[audit]
+ignore = ["seo-title", "perf-image-size"]
+"#;
+        let config = parse_toml(toml_str).unwrap();
+        assert!(config.audit.is_some());
+        let audit = config.audit.unwrap();
+        assert_eq!(audit.ignore, vec!["seo-title", "perf-image-size"]);
+    }
+
+    #[test]
+    fn test_audit_config_empty_table() {
+        let toml_str = r#"
+[site]
+name = "Audit Empty"
+base_url = "https://example.com"
+
+[audit]
+"#;
+        let config = parse_toml(toml_str).unwrap();
+        assert!(config.audit.is_some());
+        let audit = config.audit.unwrap();
+        assert!(audit.ignore.is_empty());
     }
 
     #[test]

@@ -31,7 +31,7 @@ use super::robots;
 use super::seo;
 use super::sitemap;
 
-/// A record of a rendered page, used for sitemap generation.
+/// A record of a rendered page, used for sitemap generation and auditing.
 #[derive(Debug, Clone)]
 pub struct RenderedPage {
     /// URL path relative to site root, e.g. `/about.html`.
@@ -40,6 +40,8 @@ pub struct RenderedPage {
     pub is_index: bool,
     /// Whether this page was generated from a dynamic template.
     pub is_dynamic: bool,
+    /// Source template path (for audit diagnostics). `None` in tests.
+    pub template_path: Option<String>,
 }
 
 /// Run the full build process.
@@ -522,6 +524,7 @@ fn render_static_page(
         url_path,
         is_index,
         is_dynamic: false,
+        template_path: Some(page.template_path.display().to_string()),
     })
 }
 
@@ -818,6 +821,7 @@ fn render_dynamic_page(
             url_path,
             is_index: false,
             is_dynamic: true,
+            template_path: Some(page.template_path.display().to_string()),
         });
     }
 

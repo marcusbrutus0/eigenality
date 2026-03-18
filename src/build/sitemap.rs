@@ -90,6 +90,7 @@ mod tests {
             plugins: HashMap::new(),
             feed: HashMap::new(),
             robots: None,
+            audit: None,
         }
     }
 
@@ -104,11 +105,13 @@ mod tests {
                 url_path: "/index.html".into(),
                 is_index: true,
                 is_dynamic: false,
+                template_path: None,
             },
             RenderedPage {
                 url_path: "/about.html".into(),
                 is_index: false,
                 is_dynamic: false,
+                template_path: None,
             },
         ];
 
@@ -135,6 +138,7 @@ mod tests {
                 url_path: "/posts/hello.html".into(),
                 is_index: false,
                 is_dynamic: true,
+                template_path: None,
             },
         ];
 
@@ -187,6 +191,7 @@ mod tests {
                 url_path: "/about.html".into(),
                 is_index: false,
                 is_dynamic: false,
+                template_path: None,
             },
         ];
 

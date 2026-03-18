@@ -368,6 +368,7 @@ fn render_static_page_dev(
         url_path,
         is_index,
         is_dynamic: false,
+        template_path: Some(page.template_path.display().to_string()),
     })
 }
 
@@ -546,6 +547,7 @@ fn render_dynamic_page_dev(
             url_path,
             is_index: false,
             is_dynamic: true,
+            template_path: Some(page.template_path.display().to_string()),
         });
     }
 
