@@ -1,14 +1,7 @@
-//! JSON audit report output.
-
+use super::super::AuditReport;
+use eyre::Result;
 use std::path::Path;
 
-use eyre::Result;
-
-use crate::build::audit::AuditReport;
-
-/// Write the audit report as a JSON file.
-///
-/// Implementation will be added in a follow-up task.
-pub fn write_json_report(_dist_dir: &Path, _report: &AuditReport) -> Result<()> {
+pub fn write_json(_report: &AuditReport, _dist_path: &Path) -> Result<()> {
     Ok(())
 }

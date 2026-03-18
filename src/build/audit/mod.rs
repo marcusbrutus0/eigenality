@@ -1,44 +1,31 @@
-//! Post-build HTML auditor.
+//! Build-time audit: SEO, performance, accessibility, and best-practice checks.
 //!
-//! Runs SEO, performance, accessibility, and best-practices checks on
-//! rendered pages and produces reports in multiple output formats.
+//! Runs as the final build phase. Inspects `SiteConfig` and rendered HTML
+//! in `dist/` to produce an `AuditReport` with actionable findings.
 
 pub mod checks;
 pub mod output;
 pub mod overlay;
 
-use std::path::Path;
-
+use crate::build::render::RenderedPage;
+use crate::config::SiteConfig;
 use eyre::Result;
 use serde::Serialize;
+use std::collections::BTreeMap;
+use std::path::Path;
 
-use crate::build::render::RenderedPage;
-use crate::config::AuditConfig;
-
-/// Severity level for an audit finding.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+/// Severity of an audit finding.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Severity {
-    Error,
-    Warning,
-    Info,
+    Critical,
+    High,
+    Medium,
+    Low,
 }
 
-/// A single audit finding attached to one page.
-#[derive(Debug, Clone, Serialize)]
-pub struct Finding {
-    /// Machine-readable check identifier, e.g. `"seo-title"`.
-    pub check_id: String,
-    /// Human-readable one-line description of the issue.
-    pub message: String,
-    /// Severity level.
-    pub severity: Severity,
-    /// The category this check belongs to.
-    pub category: Category,
-}
-
-/// Audit category.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+/// Category of an audit check.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Category {
     Seo,
@@ -47,99 +34,175 @@ pub enum Category {
     BestPractices,
 }
 
-/// Aggregated audit results for one page.
-#[derive(Debug, Clone, Serialize)]
-pub struct PageAudit {
-    /// URL path of the page, e.g. `/about.html`.
-    pub url_path: String,
-    /// Source template path (if available).
-    pub template_path: Option<String>,
-    /// Findings for this page.
-    pub findings: Vec<Finding>,
+impl Category {
+    pub fn display_name(&self) -> &'static str {
+        match self {
+            Self::Seo => "SEO",
+            Self::Performance => "Performance",
+            Self::Accessibility => "Accessibility",
+            Self::BestPractices => "Best Practices",
+        }
+    }
 }
 
-/// Full audit report across all pages.
+impl Severity {
+    pub fn display_name(&self) -> &'static str {
+        match self {
+            Self::Critical => "CRITICAL",
+            Self::High => "HIGH",
+            Self::Medium => "MEDIUM",
+            Self::Low => "LOW",
+        }
+    }
+}
+
+/// Scope of a check: site-wide or per-page.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Scope {
+    Site,
+    Page,
+}
+
+/// Actionable fix information for a finding.
+#[derive(Debug, Clone, Serialize)]
+pub struct Fix {
+    /// File to modify (e.g., "site.toml" or "templates/about.html").
+    pub file: String,
+    /// Human-readable instruction for the fix.
+    pub instruction: String,
+}
+
+/// A single audit finding.
+#[derive(Debug, Clone, Serialize)]
+pub struct Finding {
+    /// Stable check ID (e.g., "seo/meta-description").
+    pub id: &'static str,
+    pub category: Category,
+    pub severity: Severity,
+    pub scope: Scope,
+    /// Human-readable issue description.
+    pub message: String,
+    /// Actionable fix.
+    pub fix: Fix,
+}
+
+/// Summary counts for the audit report.
+#[derive(Debug, Clone, Serialize)]
+pub struct AuditSummary {
+    pub total: usize,
+    pub by_severity: BTreeMap<Severity, usize>,
+    pub by_category: BTreeMap<Category, usize>,
+}
+
+/// The complete audit report.
 #[derive(Debug, Clone, Serialize)]
 pub struct AuditReport {
-    /// Per-page results.
-    pub pages: Vec<PageAudit>,
-    /// Total number of findings.
-    pub total_findings: usize,
-    /// Counts by severity.
-    pub errors: usize,
-    pub warnings: usize,
-    pub infos: usize,
+    pub summary: AuditSummary,
+    pub site_findings: Vec<Finding>,
+    pub page_findings: BTreeMap<String, Vec<Finding>>,
 }
 
-/// Run all audit checks on the rendered pages.
-///
-/// Returns an `AuditReport` with findings filtered by the ignore list
-/// in `audit_config`.
-pub fn run_audit(
-    dist_dir: &Path,
-    rendered_pages: &[RenderedPage],
-    audit_config: &AuditConfig,
-) -> Result<AuditReport> {
-    let mut pages = Vec::with_capacity(rendered_pages.len());
+impl AuditReport {
+    /// Build summary counts from the findings.
+    fn compute_summary(
+        site_findings: &[Finding],
+        page_findings: &BTreeMap<String, Vec<Finding>>,
+    ) -> AuditSummary {
+        let mut by_severity: BTreeMap<Severity, usize> = BTreeMap::new();
+        let mut by_category: BTreeMap<Category, usize> = BTreeMap::new();
+        let mut total = 0;
 
-    for rp in rendered_pages {
-        let html_path = dist_dir.join(rp.url_path.trim_start_matches('/'));
-        let html = match std::fs::read_to_string(&html_path) {
-            Ok(h) => h,
-            Err(_) => continue, // skip pages we can't read
-        };
+        let all_findings = site_findings
+            .iter()
+            .chain(page_findings.values().flatten());
 
-        let mut findings = Vec::new();
-        findings.extend(checks::seo::check(&html, &rp.url_path));
-        findings.extend(checks::performance::check(&html, &rp.url_path));
-        findings.extend(checks::accessibility::check(&html, &rp.url_path));
-        findings.extend(checks::best_practices::check(&html, &rp.url_path));
-
-        // Filter out ignored checks.
-        if !audit_config.ignore.is_empty() {
-            findings.retain(|f| !audit_config.ignore.contains(&f.check_id));
+        for f in all_findings {
+            total += 1;
+            *by_severity.entry(f.severity).or_default() += 1;
+            *by_category.entry(f.category).or_default() += 1;
         }
 
-        pages.push(PageAudit {
-            url_path: rp.url_path.clone(),
-            template_path: rp.template_path.clone(),
-            findings,
-        });
+        AuditSummary {
+            total,
+            by_severity,
+            by_category,
+        }
+    }
+}
+
+/// Run the full audit against the built site.
+///
+/// Inspects config for site-level checks, then reads each rendered page's
+/// HTML from `dist/` for page-level checks. Filters out any check IDs
+/// listed in `config.audit.ignore`.
+pub fn run_audit(
+    config: &SiteConfig,
+    dist_path: &Path,
+    rendered_pages: &[RenderedPage],
+) -> Result<AuditReport> {
+    let ignore_ids: Vec<&str> = config
+        .audit
+        .as_ref()
+        .map(|a| a.ignore.iter().map(|s| s.as_str()).collect())
+        .unwrap_or_default();
+
+    // Run site-level checks.
+    let mut site_findings = checks::run_site_checks(config, dist_path);
+    site_findings.retain(|f| !ignore_ids.contains(&f.id));
+
+    // Run page-level checks.
+    let mut page_findings: BTreeMap<String, Vec<Finding>> = BTreeMap::new();
+    for page in rendered_pages {
+        let html_path = dist_path.join(page.url_path.trim_start_matches('/'));
+        let html = match std::fs::read_to_string(&html_path) {
+            Ok(h) => h,
+            Err(_) => continue,
+        };
+
+        let template_path = page
+            .template_path
+            .as_deref()
+            .unwrap_or("(unknown)");
+
+        let mut findings =
+            checks::run_page_checks(&html, &page.url_path, template_path, config);
+        findings.retain(|f| !ignore_ids.contains(&f.id));
+
+        if !findings.is_empty() {
+            page_findings.insert(page.url_path.clone(), findings);
+        }
     }
 
-    let total_findings: usize = pages.iter().map(|p| p.findings.len()).sum();
-    let errors = pages
-        .iter()
-        .flat_map(|p| &p.findings)
-        .filter(|f| f.severity == Severity::Error)
-        .count();
-    let warnings = pages
-        .iter()
-        .flat_map(|p| &p.findings)
-        .filter(|f| f.severity == Severity::Warning)
-        .count();
-    let infos = total_findings - errors - warnings;
+    let summary = AuditReport::compute_summary(&site_findings, &page_findings);
 
     Ok(AuditReport {
-        pages,
-        total_findings,
-        errors,
-        warnings,
-        infos,
+        summary,
+        site_findings,
+        page_findings,
     })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::SiteConfig;
+
+    fn test_config() -> SiteConfig {
+        let toml_str = r#"
+            [site]
+            name = "Test"
+            base_url = "https://example.com"
+        "#;
+        toml::from_str(toml_str).unwrap()
+    }
 
     #[test]
     fn test_run_audit_empty_pages() {
         let tmp = tempfile::tempdir().unwrap();
-        let config = AuditConfig::default();
-        let report = run_audit(tmp.path(), &[], &config).unwrap();
-        assert_eq!(report.total_findings, 0);
-        assert!(report.pages.is_empty());
+        let config = test_config();
+        let report = run_audit(&config, tmp.path(), &[]).unwrap();
+        assert_eq!(report.page_findings.len(), 0);
     }
 
     #[test]
@@ -147,7 +210,6 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let dist = tmp.path();
 
-        // Write a minimal HTML file (no <title> — should trigger seo-title).
         std::fs::write(dist.join("index.html"), "<html><body>hi</body></html>").unwrap();
 
         let pages = vec![RenderedPage {
@@ -157,23 +219,30 @@ mod tests {
             template_path: None,
         }];
 
-        // Without ignore — should have findings.
-        let config = AuditConfig::default();
-        let report = run_audit(dist, &pages, &config).unwrap();
-        let has_findings = report.total_findings > 0;
+        // Without ignore — run audit to see what findings exist.
+        let config = test_config();
+        let report = run_audit(&config, dist, &pages).unwrap();
 
-        // With ignore list covering all findings — should filter them out.
-        let all_ids: Vec<String> = report.pages[0]
-            .findings
+        // With ignore list covering all site findings.
+        let all_site_ids: Vec<String> = report.site_findings
             .iter()
-            .map(|f| f.check_id.clone())
+            .map(|f| f.id.to_string())
             .collect();
-        let ignore_config = AuditConfig { ignore: all_ids };
-        let filtered = run_audit(dist, &pages, &ignore_config).unwrap();
 
-        // If there were findings before, they should now be gone.
-        if has_findings {
-            assert_eq!(filtered.total_findings, 0);
+        if !all_site_ids.is_empty() {
+            let toml_str = format!(
+                r#"
+                [site]
+                name = "Test"
+                base_url = "https://example.com"
+                [audit]
+                ignore = {:?}
+                "#,
+                all_site_ids,
+            );
+            let config2: SiteConfig = toml::from_str(&toml_str).unwrap();
+            let filtered = run_audit(&config2, dist, &pages).unwrap();
+            assert!(filtered.site_findings.is_empty());
         }
     }
 }

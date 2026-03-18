@@ -1,10 +1,15 @@
 //! SEO audit checks.
 
-use crate::build::audit::Finding;
+use super::super::{Category, Finding, Fix, Scope, Severity};
+use crate::config::SiteConfig;
+use std::path::Path;
 
-/// Run SEO checks on the rendered HTML of a single page.
-///
-/// Checks will be implemented in a follow-up task.
-pub fn check(_html: &str, _url_path: &str) -> Vec<Finding> {
+/// Site-level SEO checks (config + dist inspection).
+pub fn site_checks(_config: &SiteConfig, _dist_path: &Path) -> Vec<Finding> {
+    Vec::new()
+}
+
+/// Page-level SEO checks (HTML inspection).
+pub fn page_checks(_html: &str, _page_path: &str, _template_path: &str) -> Vec<Finding> {
     Vec::new()
 }

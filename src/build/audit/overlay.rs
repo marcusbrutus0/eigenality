@@ -1,13 +1,18 @@
 //! Audit overlay badge injection.
 //!
 //! Injects a small floating badge into rendered HTML pages during dev
-//! builds showing the audit score / finding count.
+//! builds showing the audit finding count per page.
 
-use crate::build::audit::AuditReport;
+use super::{AuditReport, Finding};
+use crate::build::render::RenderedPage;
+use eyre::Result;
+use std::path::Path;
 
-/// Inject an audit overlay badge into the given HTML string.
-///
-/// Implementation will be added in a follow-up task.
-pub fn inject_overlay(_html: &str, _report: &AuditReport, _url_path: &str) -> String {
-    _html.to_string()
+/// Inject audit overlay badges into all rendered page HTML files.
+pub fn inject_badges(
+    _report: &AuditReport,
+    _dist_path: &Path,
+    _rendered_pages: &[RenderedPage],
+) -> Result<()> {
+    Ok(())
 }
