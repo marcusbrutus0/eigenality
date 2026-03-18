@@ -7,6 +7,7 @@ pub mod context;
 pub mod critical_css;
 pub mod fragments;
 pub mod hints;
+pub mod json_ld;
 pub mod minify;
 pub mod output;
 pub mod render;
