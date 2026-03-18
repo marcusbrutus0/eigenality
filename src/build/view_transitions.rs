@@ -90,33 +90,31 @@ fn rewrite_html(
                 }),
                 // Add view-transition-name to elements with matching IDs.
                 lol_html::element!("*[id]", move |el| {
-                    if let Some(id) = el.get_attribute("id") {
-                        if names.contains(&id) {
-                            let existing_style =
-                                el.get_attribute("style").unwrap_or_default();
+                    if let Some(id) = el.get_attribute("id") && names.contains(&id) {
+                        let existing_style =
+                            el.get_attribute("style").unwrap_or_default();
 
-                            // Skip if already has a view-transition-name.
-                            if existing_style.contains("view-transition-name") {
-                                return Ok(());
-                            }
+                        // Skip if already has a view-transition-name.
+                        if existing_style.contains("view-transition-name") {
+                            return Ok(());
+                        }
 
-                            let new_style = if existing_style.is_empty() {
-                                format!("view-transition-name: {};", id)
-                            } else {
-                                let trimmed =
-                                    existing_style.trim_end().trim_end_matches(';');
-                                format!(
-                                    "{}; view-transition-name: {};",
-                                    trimmed, id
-                                )
-                            };
+                        let new_style = if existing_style.is_empty() {
+                            format!("view-transition-name: {};", id)
+                        } else {
+                            let trimmed =
+                                existing_style.trim_end().trim_end_matches(';');
+                            format!(
+                                "{}; view-transition-name: {};",
+                                trimmed, id
+                            )
+                        };
 
-                            if let Err(e) = el.set_attribute("style", &new_style) {
-                                tracing::warn!(
-                                    "Failed to set style on #{}: {}",
-                                    id, e
-                                );
-                            }
+                        if let Err(e) = el.set_attribute("style", &new_style) {
+                            tracing::warn!(
+                                "Failed to set style on #{}: {}",
+                                id, e
+                            );
                         }
                     }
                     Ok(())
