@@ -17,6 +17,7 @@ use crate::plugins::registry::{self, PluginRegistry};
 use crate::template;
 use crate::template::errors::TemplateError;
 
+use super::content_hash;
 use super::context::{self, PageMeta};
 use super::critical_css;
 use super::fragments;
@@ -190,6 +191,12 @@ pub fn build(project_root: &Path) -> Result<()> {
 
     // Run post-build hooks
     plugin_registry.post_build(&dist_dir, project_root)?;
+
+    // Phase 3: Rewrite remaining asset references in HTML/CSS/JS.
+    if config.build.content_hash.enabled && !manifest.is_empty() {
+        content_hash::rewrite_references(&dist_dir, &manifest)?;
+        tracing::info!("Asset references rewritten.");
+    }
 
     tracing::info!(
         "Rendering pages... ✓ ({} pages, {} data queries)",
