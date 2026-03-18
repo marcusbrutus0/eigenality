@@ -17,6 +17,7 @@ use crate::plugins::registry::{self, PluginRegistry};
 use crate::template;
 use crate::template::errors::TemplateError;
 
+use super::bundling;
 use super::content_hash;
 use super::context::{self, PageMeta};
 use super::critical_css;
@@ -134,6 +135,10 @@ pub fn build(project_root: &Path) -> Result<()> {
         tracing::info!("Resource hints enabled (preload + prefetch).");
     }
 
+    if config.build.bundling.enabled {
+        tracing::info!("CSS/JS bundling enabled.");
+    }
+
     // Build timestamp.
     let build_time = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
 
@@ -193,6 +198,22 @@ pub fn build(project_root: &Path) -> Result<()> {
 
     // Run post-build hooks
     plugin_registry.post_build(&dist_dir, project_root)?;
+
+    // Phase 2.5: CSS/JS bundling and tree-shaking.
+    let _bundled_files = if config.build.bundling.enabled {
+        let files = bundling::bundle_assets(
+            &dist_dir, &config.build.bundling, config.build.minify,
+        ).wrap_err("CSS/JS bundling failed")?;
+        if !files.is_empty() {
+            tracing::info!(
+                "Bundling: {} file(s) generated.",
+                files.len(),
+            );
+        }
+        files
+    } else {
+        Vec::new()
+    };
 
     // Phase 3: Rewrite remaining asset references in HTML/CSS/JS.
     if config.build.content_hash.enabled && !manifest.is_empty() {
