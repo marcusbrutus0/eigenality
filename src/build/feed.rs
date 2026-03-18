@@ -233,10 +233,10 @@ fn render_entry(
     write_tag(&mut entry, "    ", "updated", &updated);
 
     // Optional summary.
-    if let Some(ref summary_field) = config.summary_field {
-        if let Some(serde_json::Value::String(summary)) = item.get(summary_field) {
-            write_tag(&mut entry, "    ", "summary", summary);
-        }
+    if let Some(ref summary_field) = config.summary_field
+        && let Some(serde_json::Value::String(summary)) = item.get(summary_field)
+    {
+        write_tag(&mut entry, "    ", "summary", summary);
     }
 
     entry.push_str("  </entry>\n");

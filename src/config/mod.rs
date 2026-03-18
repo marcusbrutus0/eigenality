@@ -633,23 +633,23 @@ fn validate_feed_configs(config: &SiteConfig) -> Result<()> {
         }
 
         // Source must exist in [sources.*].
-        if let Some(ref source_name) = feed.source {
-            if !config.sources.contains_key(source_name) {
-                let available: Vec<&str> = config.sources.keys()
-                    .map(|s| s.as_str()).collect();
-                bail!(
-                    "Feed '{}' references source '{}', but it is not \
-                     defined in site.toml [sources.*].\n\
-                     Available sources: {}",
-                    name,
-                    source_name,
-                    if available.is_empty() {
-                        "(none)".to_string()
-                    } else {
-                        available.join(", ")
-                    },
-                );
-            }
+        if let Some(ref source_name) = feed.source
+            && !config.sources.contains_key(source_name)
+        {
+            let available: Vec<&str> = config.sources.keys()
+                .map(|s| s.as_str()).collect();
+            bail!(
+                "Feed '{}' references source '{}', but it is not \
+                 defined in site.toml [sources.*].\n\
+                 Available sources: {}",
+                name,
+                source_name,
+                if available.is_empty() {
+                    "(none)".to_string()
+                } else {
+                    available.join(", ")
+                },
+            );
         }
 
         // Path must not be empty.
