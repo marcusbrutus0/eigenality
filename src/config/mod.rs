@@ -57,6 +57,9 @@ pub struct BuildConfig {
     /// Content hashing for static assets.
     #[serde(default)]
     pub content_hash: ContentHashConfig,
+    /// CSS/JS bundling and tree-shaking configuration.
+    #[serde(default)]
+    pub bundling: BundlingConfig,
 }
 
 impl Default for BuildConfig {
@@ -70,6 +73,7 @@ impl Default for BuildConfig {
             critical_css: CriticalCssConfig::default(),
             hints: HintsConfig::default(),
             content_hash: ContentHashConfig::default(),
+            bundling: BundlingConfig::default(),
         }
     }
 }
@@ -311,6 +315,68 @@ impl Default for ContentHashConfig {
         Self {
             enabled: false,
             exclude: default_hash_exclude(),
+        }
+    }
+}
+
+/// Configuration for CSS/JS bundling and tree-shaking.
+///
+/// Located under `[build.bundling]` in site.toml.
+#[derive(Debug, Clone, Deserialize)]
+pub struct BundlingConfig {
+    /// Master switch. Default: false (opt-in).
+    #[serde(default)]
+    pub enabled: bool,
+
+    /// Whether to bundle CSS files. Default: true (when bundling is enabled).
+    #[serde(default = "default_true")]
+    pub css: bool,
+
+    /// Whether to tree-shake CSS (remove unused selectors). Default: true.
+    /// Only applies when CSS bundling is enabled.
+    /// When false, CSS files are merged but no selectors are removed.
+    #[serde(default = "default_true")]
+    pub tree_shake_css: bool,
+
+    /// Whether to bundle JS files. Default: true (when bundling is enabled).
+    #[serde(default = "default_true")]
+    pub js: bool,
+
+    /// Output filename for the bundled CSS file.
+    /// Written to `dist/{css_output}`. Default: "css/bundle.css".
+    #[serde(default = "default_css_output")]
+    pub css_output: String,
+
+    /// Output filename for the bundled JS file.
+    /// Written to `dist/{js_output}`. Default: "js/bundle.js".
+    #[serde(default = "default_js_output")]
+    pub js_output: String,
+
+    /// Glob patterns for stylesheet/script paths to exclude from bundling.
+    /// Matched against the href/src value. Excluded files remain as
+    /// separate `<link>`/`<script>` tags in the HTML.
+    #[serde(default)]
+    pub exclude: Vec<String>,
+}
+
+fn default_css_output() -> String {
+    "css/bundle.css".to_string()
+}
+
+fn default_js_output() -> String {
+    "js/bundle.js".to_string()
+}
+
+impl Default for BundlingConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            css: true,
+            tree_shake_css: true,
+            js: true,
+            css_output: default_css_output(),
+            js_output: default_js_output(),
+            exclude: Vec::new(),
         }
     }
 }
@@ -827,5 +893,86 @@ exclude = ["favicon.ico", "sw.js", "manifest.json"]
         assert!(config.build.content_hash.enabled);
         assert_eq!(config.build.content_hash.exclude.len(), 3);
         assert!(config.build.content_hash.exclude.contains(&"sw.js".to_string()));
+    }
+
+    // --- Bundling config tests ---
+
+    #[test]
+    fn test_bundling_config_defaults() {
+        let toml_str = r#"
+[site]
+name = "Bundle Default"
+base_url = "https://example.com"
+"#;
+        let config = parse_toml(toml_str).unwrap();
+        assert!(!config.build.bundling.enabled);
+        assert!(config.build.bundling.css);
+        assert!(config.build.bundling.tree_shake_css);
+        assert!(config.build.bundling.js);
+        assert_eq!(config.build.bundling.css_output, "css/bundle.css");
+        assert_eq!(config.build.bundling.js_output, "js/bundle.js");
+        assert!(config.build.bundling.exclude.is_empty());
+    }
+
+    #[test]
+    fn test_bundling_config_enabled_only() {
+        let toml_str = r#"
+[site]
+name = "Bundle Enabled"
+base_url = "https://example.com"
+
+[build.bundling]
+enabled = true
+"#;
+        let config = parse_toml(toml_str).unwrap();
+        assert!(config.build.bundling.enabled);
+        // Other fields should have defaults.
+        assert!(config.build.bundling.css);
+        assert!(config.build.bundling.tree_shake_css);
+        assert!(config.build.bundling.js);
+        assert_eq!(config.build.bundling.css_output, "css/bundle.css");
+    }
+
+    #[test]
+    fn test_bundling_config_custom() {
+        let toml_str = r#"
+[site]
+name = "Bundle Custom"
+base_url = "https://example.com"
+
+[build.bundling]
+enabled = true
+css = true
+tree_shake_css = false
+js = false
+css_output = "assets/styles.css"
+js_output = "assets/scripts.js"
+exclude = ["**/vendor/**", "**/print.css"]
+"#;
+        let config = parse_toml(toml_str).unwrap();
+        assert!(config.build.bundling.enabled);
+        assert!(config.build.bundling.css);
+        assert!(!config.build.bundling.tree_shake_css);
+        assert!(!config.build.bundling.js);
+        assert_eq!(config.build.bundling.css_output, "assets/styles.css");
+        assert_eq!(config.build.bundling.js_output, "assets/scripts.js");
+        assert_eq!(config.build.bundling.exclude.len(), 2);
+    }
+
+    #[test]
+    fn test_bundling_config_css_only() {
+        let toml_str = r#"
+[site]
+name = "CSS Only"
+base_url = "https://example.com"
+
+[build.bundling]
+enabled = true
+js = false
+"#;
+        let config = parse_toml(toml_str).unwrap();
+        assert!(config.build.bundling.enabled);
+        assert!(config.build.bundling.css);
+        assert!(!config.build.bundling.js);
     }
 }
