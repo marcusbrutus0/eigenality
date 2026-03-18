@@ -82,7 +82,18 @@ pub fn build(project_root: &Path) -> Result<()> {
     tracing::info!("Copying static assets... ✓");
 
     // Set up template engine (with plugin extensions).
-    let env = template::setup_environment(project_root, &config, &pages, Some(&plugin_registry))?;
+    // Phase 2: Setup template engine (pass manifest for asset() function).
+    let env = template::setup_environment(
+        project_root,
+        &config,
+        &pages,
+        Some(&plugin_registry),
+        if config.build.content_hash.enabled {
+            Some(manifest.clone())
+        } else {
+            None
+        },
+    )?;
     tracing::debug!("Template engine configured.");
 
     // Data fetcher.

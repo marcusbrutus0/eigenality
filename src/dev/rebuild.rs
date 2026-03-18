@@ -171,7 +171,13 @@ impl DevBuildState {
         )?;
 
         // Set up template engine (with plugin extensions).
-        let env = template::setup_environment(project_root, config, &pages, Some(&self.plugin_registry))?;
+        let env = template::setup_environment(
+            project_root,
+            config,
+            &pages,
+            Some(&self.plugin_registry),
+            None, // No content hashing in dev mode.
+        )?;
 
         // Build timestamp.
         let build_time =
