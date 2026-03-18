@@ -3,20 +3,11 @@ use eyre::Result;
 use std::fmt::Write;
 use std::path::Path;
 
-fn severity_color(severity: &Severity) -> &'static str {
-    match severity {
-        Severity::Critical => "#dc2626",
-        Severity::High => "#ea580c",
-        Severity::Medium => "#ca8a04",
-        Severity::Low => "#2563eb",
-    }
-}
-
 fn write_severity_badge(out: &mut String, severity: &Severity) {
     let _ = write!(
         out,
         r#"<span class="__eigen_audit_badge" style="background:{color}">{name}</span>"#,
-        color = severity_color(severity),
+        color = severity.color(),
         name = severity.display_name(),
     );
 }
@@ -192,7 +183,7 @@ fn write_summary_bar(out: &mut String, report: &AuditReport) {
             let _ = write!(
                 out,
                 r#"<div class="__eigen_audit_summary_item" style="background:{color}">{count} {name}</div>"#,
-                color = severity_color(sev),
+                color = sev.color(),
                 name = sev.display_name(),
             );
             out.push('\n');

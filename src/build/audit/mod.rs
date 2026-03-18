@@ -56,6 +56,18 @@ impl Severity {
     }
 }
 
+impl Severity {
+    /// CSS color for this severity level.
+    pub fn color(&self) -> &'static str {
+        match self {
+            Self::Critical => "#dc2626",
+            Self::High => "#ea580c",
+            Self::Medium => "#ca8a04",
+            Self::Low => "#2563eb",
+        }
+    }
+}
+
 /// Scope of a check: site-wide or per-page.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "lowercase")]

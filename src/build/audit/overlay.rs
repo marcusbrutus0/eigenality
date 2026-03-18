@@ -11,26 +11,19 @@ use eyre::Result;
 use std::fmt::Write;
 use std::path::Path;
 
+/// Green color for the "all clear" badge.
+const COLOR_SUCCESS: &str = "#16a34a";
+
 /// Determine the badge background color from the worst severity present.
 fn badge_color(findings: &[Finding]) -> &'static str {
     if findings.iter().any(|f| f.severity == Severity::Critical) {
-        "#dc2626" // red
+        Severity::Critical.color()
     } else if findings.iter().any(|f| f.severity == Severity::High) {
-        "#ea580c" // orange
+        Severity::High.color()
     } else if findings.iter().any(|f| f.severity == Severity::Medium) {
-        "#ca8a04" // yellow
+        Severity::Medium.color()
     } else {
-        "#16a34a" // green
-    }
-}
-
-/// Map a severity to a CSS color for inline badges in the panel.
-fn severity_color(severity: &Severity) -> &'static str {
-    match severity {
-        Severity::Critical => "#dc2626",
-        Severity::High => "#ea580c",
-        Severity::Medium => "#ca8a04",
-        Severity::Low => "#2563eb",
+        COLOR_SUCCESS
     }
 }
 
@@ -76,7 +69,7 @@ pub fn generate_overlay_script(findings: &[Finding]) -> String {
             r#"{{"id":"{}","severity":"{}","severityColor":"{}","category":"{}","message":"{}","fix":"{}"}}"#,
             f.id,
             f.severity.display_name(),
-            severity_color(&f.severity),
+            f.severity.color(),
             f.category.display_name(),
             escaped_msg,
             escaped_fix,
