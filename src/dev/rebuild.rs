@@ -243,6 +243,25 @@ impl DevBuildState {
         // Run post-build plugin hooks.
         self.plugin_registry.post_build(&dist_dir, project_root)?;
 
+        // Run audit checks (dev mode only).
+        let audit_report = crate::build::audit::run_audit(
+            config,
+            &dist_dir,
+            &rendered_pages,
+        )?;
+        crate::build::audit::output::write_all(&audit_report, &dist_dir)?;
+        crate::build::audit::overlay::inject_badges(
+            &audit_report,
+            &dist_dir,
+            &rendered_pages,
+        )?;
+        if audit_report.summary.total > 0 {
+            tracing::info!(
+                "Audit: {} issue(s) found. See /_audit for details.",
+                audit_report.summary.total,
+            );
+        }
+
         tracing::info!("Dev build: {} page(s).", rendered_pages.len());
         Ok(())
     }
