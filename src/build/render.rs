@@ -25,6 +25,7 @@ use super::fragments;
 use super::hints;
 use super::minify;
 use super::output;
+use super::seo;
 use super::sitemap;
 
 /// A record of a rendered page, used for sitemap generation.
@@ -337,6 +338,14 @@ fn render_static_page(
 
     let ctx = context::build_page_context(config, global_data, &page_data, meta, None);
 
+    // Resolve SEO template expressions (static pages rarely use these,
+    // but support them for consistency).
+    let resolved_seo = seo::resolve_seo_expressions(
+        &page.frontmatter.seo,
+        env,
+        &ctx,
+    );
+
     // 3. Render template.
     let tmpl = env.get_template(&tmpl_name)
         .wrap_err_with(|| format!("Template '{}' not found in environment", tmpl_name))?;
@@ -412,7 +421,15 @@ fn render_static_page(
         full_html
     };
 
-    // 4e. Minify HTML (last transformation before writing).
+    // 4e. SEO meta tag injection (after hints, before minify).
+    let full_html = seo::inject_seo_tags(
+        &full_html,
+        &resolved_seo,
+        &config.site,
+        &url_path,
+    );
+
+    // 4f. Minify HTML (last transformation before writing).
     let full_html = if config.build.minify {
         minify::minify_html(&full_html)
     } else {
@@ -599,6 +616,13 @@ fn render_dynamic_page(
             Some((item_as, item)),
         );
 
+        // Resolve SEO template expressions for this item.
+        let resolved_seo = seo::resolve_seo_expressions(
+            &page.frontmatter.seo,
+            env,
+            &ctx,
+        );
+
         // Render.
         let rendered = match tmpl.render(&ctx) {
             Ok(html) => html,
@@ -678,6 +702,14 @@ fn render_dynamic_page(
         } else {
             full_html
         };
+
+        // SEO meta tag injection (after hints, before minify).
+        let full_html = seo::inject_seo_tags(
+            &full_html,
+            &resolved_seo,
+            &config.site,
+            &url_path,
+        );
 
         // Minify HTML (last transformation before writing).
         let full_html = if config.build.minify {
