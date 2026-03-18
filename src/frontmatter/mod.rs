@@ -27,6 +27,8 @@ pub struct Frontmatter {
     pub hero_image: Option<String>,
     /// SEO metadata for Open Graph and Twitter Card tags.
     pub seo: SeoMeta,
+    /// Structured data (JSON-LD) configuration.
+    pub schema: SchemaConfig,
 }
 
 impl Default for Frontmatter {
@@ -39,6 +41,7 @@ impl Default for Frontmatter {
             fragment_blocks: None,
             hero_image: None,
             seo: SeoMeta::default(),
+            schema: None,
         }
     }
 }
@@ -104,6 +107,70 @@ pub struct SeoMeta {
     pub canonical_url: Option<String>,
 }
 
+/// Per-page structured data (JSON-LD) configuration.
+///
+/// `None` when absent from frontmatter. When present, contains the
+/// schema type(s) and optional field overrides.
+pub type SchemaConfig = Option<SchemaConfigValue>;
+
+/// Schema configuration value, deserialized via `#[serde(untagged)]`.
+///
+/// Supported YAML formats:
+/// - `schema: Article`  (single type)
+/// - `schema: [Article, BreadcrumbList]`  (multiple types)
+/// - `schema: { type: Article, author: "Jane" }`  (type with overrides)
+#[derive(Debug, Clone, Deserialize)]
+#[serde(untagged)]
+pub enum SchemaConfigValue {
+    /// Single schema type name (e.g. "Article").
+    TypeName(String),
+    /// List of schema type names.
+    TypeList(Vec<String>),
+    /// Full configuration with type and field overrides.
+    Full(SchemaFullConfig),
+}
+
+/// Full schema configuration with type and field overrides.
+#[derive(Debug, Clone, Deserialize)]
+pub struct SchemaFullConfig {
+    /// The schema.org type(s) to generate.
+    /// YAML key can be `type` (singular) or `types` (plural).
+    #[serde(alias = "type")]
+    pub types: SchemaTypes,
+
+    /// Author name override for Article schema.
+    pub author: Option<String>,
+
+    /// Date published override (ISO 8601 string).
+    pub date_published: Option<String>,
+
+    /// Date modified override (ISO 8601 string).
+    pub date_modified: Option<String>,
+
+    /// Breadcrumb display name overrides.
+    /// Maps path segment name to a display label.
+    /// Example: { "blog": "Blog Posts" }
+    pub breadcrumb_names: Option<HashMap<String, String>>,
+}
+
+/// Schema type specification -- single string or list.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(untagged)]
+pub enum SchemaTypes {
+    Single(String),
+    Multiple(Vec<String>),
+}
+
+impl SchemaTypes {
+    /// Return the type names as a vec of string slices.
+    pub fn to_vec(&self) -> Vec<&str> {
+        match self {
+            SchemaTypes::Single(s) => vec![s.as_str()],
+            SchemaTypes::Multiple(v) => v.iter().map(|s| s.as_str()).collect(),
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Raw serde types for YAML deserialization (before mapping to the public types)
 // ---------------------------------------------------------------------------
@@ -119,6 +186,8 @@ struct RawFrontmatter {
     hero_image: Option<String>,
     #[serde(default)]
     seo: SeoMeta,
+    #[serde(default)]
+    schema: SchemaConfig,
 }
 
 // ---------------------------------------------------------------------------
@@ -194,6 +263,7 @@ pub fn parse_frontmatter(raw_yaml: &str, file_path: &str) -> Result<Frontmatter>
         fragment_blocks: raw.fragment_blocks,
         hero_image: raw.hero_image,
         seo: raw.seo,
+        schema: raw.schema,
     })
 }
 
@@ -467,5 +537,82 @@ mod tests {
         assert!(fm.seo.og_type.is_none());
         assert!(fm.seo.twitter_card.is_none());
         assert!(fm.seo.canonical_url.is_none());
+    }
+
+    // --- Schema frontmatter tests ---
+
+    #[test]
+    fn test_parse_schema_frontmatter_string() {
+        let yaml = "schema: Article\n";
+        let fm = parse_frontmatter(yaml, "post.html").unwrap();
+        match &fm.schema {
+            Some(SchemaConfigValue::TypeName(t)) => assert_eq!(t, "Article"),
+            other => panic!("Expected Some(TypeName), got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_parse_schema_frontmatter_list() {
+        let yaml = "schema:\n  - Article\n  - BreadcrumbList\n";
+        let fm = parse_frontmatter(yaml, "post.html").unwrap();
+        match &fm.schema {
+            Some(SchemaConfigValue::TypeList(types)) => {
+                assert_eq!(types, &["Article", "BreadcrumbList"]);
+            }
+            other => panic!("Expected Some(TypeList), got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_parse_schema_frontmatter_full() {
+        let yaml = concat!(
+            "schema:\n",
+            "  type: Article\n",
+            "  author: \"Jane Doe\"\n",
+            "  date_published: \"2026-03-15\"\n",
+        );
+        let fm = parse_frontmatter(yaml, "post.html").unwrap();
+        match &fm.schema {
+            Some(SchemaConfigValue::Full(full)) => {
+                match &full.types {
+                    SchemaTypes::Single(t) => assert_eq!(t, "Article"),
+                    other => panic!("Expected Single type, got {:?}", other),
+                }
+                assert_eq!(full.author.as_deref(), Some("Jane Doe"));
+                assert_eq!(full.date_published.as_deref(), Some("2026-03-15"));
+            }
+            other => panic!("Expected Some(Full), got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_parse_schema_frontmatter_absent() {
+        let yaml = "data:\n  nav:\n    file: \"nav.yaml\"\n";
+        let fm = parse_frontmatter(yaml, "index.html").unwrap();
+        assert!(fm.schema.is_none());
+    }
+
+    #[test]
+    fn test_parse_schema_with_template_expressions() {
+        let yaml = concat!(
+            "schema:\n",
+            "  type: Article\n",
+            "  author: \"{{ post.author_name }}\"\n",
+            "  date_published: \"{{ post.published_at }}\"\n",
+        );
+        let fm = parse_frontmatter(yaml, "post.html").unwrap();
+        match &fm.schema {
+            Some(SchemaConfigValue::Full(full)) => {
+                assert_eq!(full.author.as_deref(), Some("{{ post.author_name }}"));
+                assert_eq!(full.date_published.as_deref(), Some("{{ post.published_at }}"));
+            }
+            other => panic!("Expected Some(Full), got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_default_schema_is_none() {
+        let fm = Frontmatter::default();
+        assert!(fm.schema.is_none());
     }
 }
