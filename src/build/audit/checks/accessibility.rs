@@ -27,15 +27,18 @@ pub fn page_checks(html: &str, page_path: &str, template_path: &str) -> Vec<Find
     let has_lang = Rc::new(RefCell::new(false));
     let has_viewport = Rc::new(RefCell::new(false));
     let imgs_missing_alt: Rc<RefCell<Vec<String>>> = Rc::new(RefCell::new(Vec::new()));
+    // For link-text: collect (href, has_aria_label) for each anchor,
+    // then check accumulated text when the next anchor starts.
     let empty_links: Rc<RefCell<Vec<String>>> = Rc::new(RefCell::new(Vec::new()));
     let current_link_text: Rc<RefCell<String>> = Rc::new(RefCell::new(String::new()));
-    let current_link_href: Rc<RefCell<String>> = Rc::new(RefCell::new(String::new()));
+    let current_link_href: Rc<RefCell<Option<String>>> = Rc::new(RefCell::new(None));
     let current_link_has_aria = Rc::new(RefCell::new(false));
 
-    // Clone references for element handler closures.
     let has_lang_c = has_lang.clone();
     let has_viewport_c = has_viewport.clone();
     let imgs_c = imgs_missing_alt.clone();
+
+    // Clones for the anchor element handler.
     let link_text_c = current_link_text.clone();
     let link_href_c = current_link_href.clone();
     let link_aria_c = current_link_has_aria.clone();
@@ -44,18 +47,32 @@ pub fn page_checks(html: &str, page_path: &str, template_path: &str) -> Vec<Find
     // Clone for text handler.
     let link_text_t = current_link_text.clone();
 
+    /// Check the previous anchor's accumulated text and record if empty.
+    fn flush_anchor(
+        href: &Rc<RefCell<Option<String>>>,
+        text: &Rc<RefCell<String>>,
+        has_aria: &Rc<RefCell<bool>>,
+        empty_links: &Rc<RefCell<Vec<String>>>,
+    ) {
+        if let Some(h) = href.borrow_mut().take() {
+            let content = text.borrow().trim().to_string();
+            if content.is_empty() && !*has_aria.borrow() {
+                empty_links.borrow_mut().push(h);
+            }
+        }
+        text.borrow_mut().clear();
+    }
+
     let result = lol_html::rewrite_str(
         html,
         lol_html::RewriteStrSettings {
             element_content_handlers: vec![
-                // Check <html lang="...">
                 lol_html::element!("html", move |el| {
                     if el.get_attribute("lang").is_some() {
                         *has_lang_c.borrow_mut() = true;
                     }
                     Ok(())
                 }),
-                // Check <meta name="viewport" content="...width=device-width...">
                 lol_html::element!("meta[name='viewport']", move |el| {
                     if let Some(content) = el.get_attribute("content") {
                         if content.contains("width=device-width") {
@@ -64,7 +81,6 @@ pub fn page_checks(html: &str, page_path: &str, template_path: &str) -> Vec<Find
                     }
                     Ok(())
                 }),
-                // Check <img> for alt attribute
                 lol_html::element!("img", move |el| {
                     if !el.has_attribute("alt") {
                         let src = el.get_attribute("src").unwrap_or_default();
@@ -72,36 +88,14 @@ pub fn page_checks(html: &str, page_path: &str, template_path: &str) -> Vec<Find
                     }
                     Ok(())
                 }),
-                // Check <a href="..."> for empty text content
+                // On each <a>, flush the previous anchor, then start tracking new one.
                 lol_html::element!("a[href]", move |el| {
-                    link_text_c.borrow_mut().clear();
-                    let href = el.get_attribute("href").unwrap_or_default();
-                    *link_href_c.borrow_mut() = href;
+                    flush_anchor(&link_href_c, &link_text_c, &link_aria_c, &empty_links_c);
+                    *link_href_c.borrow_mut() = el.get_attribute("href");
                     *link_aria_c.borrow_mut() = el.has_attribute("aria-label");
-
-                    let text_end = current_link_text.clone();
-                    let href_end = current_link_href.clone();
-                    let aria_end = current_link_has_aria.clone();
-                    let links_end = empty_links_c.clone();
-
-                    if let Some(handlers) = el.end_tag_handlers() {
-                        let handler: lol_html::EndTagHandler<'static> =
-                            Box::new(move |_end| {
-                                let content = text_end.borrow().trim().to_string();
-                                if content.is_empty() && !*aria_end.borrow() {
-                                    links_end
-                                        .borrow_mut()
-                                        .push(href_end.borrow().clone());
-                                }
-                                text_end.borrow_mut().clear();
-                                Ok(())
-                            });
-                        handlers.push(handler);
-                    }
-
+                    link_text_c.borrow_mut().clear();
                     Ok(())
                 }),
-                // Text handler to accumulate text inside <a>
                 lol_html::text!("a", move |text| {
                     link_text_t.borrow_mut().push_str(text.as_str());
                     Ok(())
@@ -115,6 +109,14 @@ pub fn page_checks(html: &str, page_path: &str, template_path: &str) -> Vec<Find
     if result.is_err() {
         return Vec::new();
     }
+
+    // Flush the last anchor (if any).
+    flush_anchor(
+        &current_link_href,
+        &current_link_text,
+        &current_link_has_aria,
+        &empty_links,
+    );
 
     let mut findings = Vec::new();
 
