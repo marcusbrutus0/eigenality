@@ -19,6 +19,10 @@ pub struct SiteConfig {
     /// can parse their own config.
     #[serde(default)]
     pub plugins: HashMap<String, toml::Value>,
+    /// Feed generation configuration. Each key is a feed name
+    /// with its feed-specific config table.
+    #[serde(default)]
+    pub feed: HashMap<String, FeedConfig>,
 }
 
 /// Metadata about the site itself.
@@ -387,6 +391,76 @@ impl Default for BundlingConfig {
     }
 }
 
+/// Configuration for a single Atom feed.
+///
+/// Located under `[feed.<name>]` in site.toml.
+#[derive(Debug, Clone, Deserialize)]
+pub struct FeedConfig {
+    // -- Data source (inline DataQuery-like fields) --
+
+    /// Local file in `_data/`, e.g. `"posts.json"`.
+    pub file: Option<String>,
+    /// Source name from `[sources.*]`.
+    pub source: Option<String>,
+    /// URL path appended to the source's base URL.
+    /// Named `query_path` to avoid collision with the output `path` field.
+    pub query_path: Option<String>,
+    /// Dot-path into the response JSON to extract the array from.
+    pub root: Option<String>,
+    /// Sort spec: `"field"` ascending, `"-field"` descending.
+    pub sort: Option<String>,
+
+    // -- Feed metadata --
+
+    /// Feed title. Defaults to `site.name` at generation time.
+    pub title: Option<String>,
+    /// Output path relative to `dist/`. Defaults to `"feed.xml"`.
+    #[serde(default = "default_feed_path")]
+    pub path: String,
+    /// Feed author name. Defaults to `site.schema.author` at generation time.
+    pub author: Option<String>,
+    /// Maximum number of entries. Defaults to 50.
+    #[serde(default = "default_feed_limit")]
+    pub limit: usize,
+
+    // -- Entry field mapping --
+
+    /// Field on each item for the entry `<title>`. Defaults to `"title"`.
+    #[serde(default = "default_title_field")]
+    pub title_field: String,
+    /// Field on each item for the entry `<updated>` date. Defaults to `"date"`.
+    #[serde(default = "default_date_field")]
+    pub date_field: String,
+    /// Field on each item for `<summary>`. Omitted from entries when unset.
+    pub summary_field: Option<String>,
+    /// Field on each item for the URL slug. Defaults to `"slug"`.
+    #[serde(default = "default_slug_field")]
+    pub slug_field: String,
+    /// URL path prefix for entry links. E.g. `"blog"` produces
+    /// `{base_url}/blog/{slug}.html`.
+    pub link_prefix: Option<String>,
+}
+
+fn default_feed_path() -> String {
+    "feed.xml".to_string()
+}
+
+fn default_feed_limit() -> usize {
+    50
+}
+
+fn default_title_field() -> String {
+    "title".to_string()
+}
+
+fn default_date_field() -> String {
+    "date".to_string()
+}
+
+fn default_slug_field() -> String {
+    "slug".to_string()
+}
+
 /// Site-level SEO defaults for Open Graph and Twitter Card meta tags.
 ///
 /// Located under `[site.seo]` in site.toml. These provide fallback
@@ -542,6 +616,61 @@ fn validate_config(config: &SiteConfig) -> Result<()> {
     if config.site.name.is_empty() {
         bail!("site.name must not be empty in site.toml");
     }
+    validate_feed_configs(config)?;
+    Ok(())
+}
+
+/// Validate feed configurations.
+fn validate_feed_configs(config: &SiteConfig) -> Result<()> {
+    for (name, feed) in &config.feed {
+        // Must have at least one data source.
+        if feed.file.is_none() && feed.source.is_none() {
+            bail!(
+                "Feed '{}' must specify either `file` or `source` \
+                 for its data source.",
+                name,
+            );
+        }
+
+        // Source must exist in [sources.*].
+        if let Some(ref source_name) = feed.source {
+            if !config.sources.contains_key(source_name) {
+                let available: Vec<&str> = config.sources.keys()
+                    .map(|s| s.as_str()).collect();
+                bail!(
+                    "Feed '{}' references source '{}', but it is not \
+                     defined in site.toml [sources.*].\n\
+                     Available sources: {}",
+                    name,
+                    source_name,
+                    if available.is_empty() {
+                        "(none)".to_string()
+                    } else {
+                        available.join(", ")
+                    },
+                );
+            }
+        }
+
+        // Path must not be empty.
+        if feed.path.is_empty() {
+            bail!("Feed '{}' has an empty `path`.", name);
+        }
+
+        // Limit must be > 0.
+        if feed.limit == 0 {
+            bail!(
+                "Feed '{}' has `limit = 0`. Must be at least 1.",
+                name,
+            );
+        }
+
+        // slug_field must not be empty.
+        if feed.slug_field.is_empty() {
+            bail!("Feed '{}' has an empty `slug_field`.", name);
+        }
+    }
+
     Ok(())
 }
 
@@ -1144,5 +1273,195 @@ default_types = ["BreadcrumbList"]
         let config = parse_toml(toml_str).unwrap();
         assert_eq!(config.site.schema.author.as_deref(), Some("Jane Doe"));
         assert_eq!(config.site.schema.default_types, vec!["BreadcrumbList"]);
+    }
+
+    // --- Feed config tests ---
+
+    #[test]
+    fn test_feed_config_defaults() {
+        let toml_str = r#"
+[site]
+name = "Feed Default"
+base_url = "https://example.com"
+"#;
+        let config = parse_toml(toml_str).unwrap();
+        assert!(config.feed.is_empty());
+    }
+
+    #[test]
+    fn test_feed_config_parsing() {
+        let toml_str = r#"
+[site]
+name = "Feed Test"
+base_url = "https://example.com"
+
+[feed.blog]
+file = "posts.json"
+title = "Blog Feed"
+path = "blog/feed.xml"
+author = "Jane Doe"
+limit = 20
+title_field = "name"
+date_field = "publishedAt"
+summary_field = "excerpt"
+slug_field = "id"
+link_prefix = "blog"
+sort = "-publishedAt"
+"#;
+        let config = parse_toml(toml_str).unwrap();
+        assert_eq!(config.feed.len(), 1);
+        let blog = &config.feed["blog"];
+        assert_eq!(blog.file.as_deref(), Some("posts.json"));
+        assert_eq!(blog.title.as_deref(), Some("Blog Feed"));
+        assert_eq!(blog.path, "blog/feed.xml");
+        assert_eq!(blog.author.as_deref(), Some("Jane Doe"));
+        assert_eq!(blog.limit, 20);
+        assert_eq!(blog.title_field, "name");
+        assert_eq!(blog.date_field, "publishedAt");
+        assert_eq!(blog.summary_field.as_deref(), Some("excerpt"));
+        assert_eq!(blog.slug_field, "id");
+        assert_eq!(blog.link_prefix.as_deref(), Some("blog"));
+        assert_eq!(blog.sort.as_deref(), Some("-publishedAt"));
+    }
+
+    #[test]
+    fn test_feed_config_multiple() {
+        let toml_str = r#"
+[site]
+name = "Multi Feed"
+base_url = "https://example.com"
+
+[feed.blog]
+file = "posts.json"
+
+[feed.changelog]
+file = "releases.json"
+path = "changelog/feed.xml"
+"#;
+        let config = parse_toml(toml_str).unwrap();
+        assert_eq!(config.feed.len(), 2);
+        assert!(config.feed.contains_key("blog"));
+        assert!(config.feed.contains_key("changelog"));
+        // blog should have default path
+        assert_eq!(config.feed["blog"].path, "feed.xml");
+        assert_eq!(config.feed["changelog"].path, "changelog/feed.xml");
+    }
+
+    #[test]
+    fn test_feed_config_field_defaults() {
+        let toml_str = r#"
+[site]
+name = "Feed Defaults"
+base_url = "https://example.com"
+
+[feed.blog]
+file = "posts.json"
+"#;
+        let config = parse_toml(toml_str).unwrap();
+        let blog = &config.feed["blog"];
+        assert_eq!(blog.path, "feed.xml");
+        assert_eq!(blog.limit, 50);
+        assert_eq!(blog.title_field, "title");
+        assert_eq!(blog.date_field, "date");
+        assert_eq!(blog.slug_field, "slug");
+        assert!(blog.title.is_none());
+        assert!(blog.author.is_none());
+        assert!(blog.summary_field.is_none());
+        assert!(blog.link_prefix.is_none());
+        assert!(blog.source.is_none());
+        assert!(blog.query_path.is_none());
+        assert!(blog.root.is_none());
+        assert!(blog.sort.is_none());
+    }
+
+    #[test]
+    fn test_feed_config_with_source() {
+        let toml_str = r#"
+[site]
+name = "Feed Source"
+base_url = "https://example.com"
+
+[sources.cms]
+url = "https://cms.example.com/api"
+
+[feed.blog]
+source = "cms"
+query_path = "/posts"
+root = "data.posts"
+sort = "-date"
+link_prefix = "blog"
+"#;
+        let config = parse_toml(toml_str).unwrap();
+        let blog = &config.feed["blog"];
+        assert_eq!(blog.source.as_deref(), Some("cms"));
+        assert_eq!(blog.query_path.as_deref(), Some("/posts"));
+        assert_eq!(blog.root.as_deref(), Some("data.posts"));
+    }
+
+    #[test]
+    fn test_feed_validation_no_source() {
+        let toml_str = r#"
+[site]
+name = "Bad Feed"
+base_url = "https://example.com"
+
+[feed.blog]
+title = "Blog"
+"#;
+        let config = parse_toml(toml_str).unwrap();
+        let result = validate_feed_configs(&config);
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("blog"));
+        assert!(err.contains("file"));
+    }
+
+    #[test]
+    fn test_feed_validation_bad_source() {
+        let toml_str = r#"
+[site]
+name = "Bad Source Feed"
+base_url = "https://example.com"
+
+[feed.blog]
+source = "nonexistent"
+"#;
+        let config = parse_toml(toml_str).unwrap();
+        let result = validate_feed_configs(&config);
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("nonexistent"));
+    }
+
+    #[test]
+    fn test_feed_validation_empty_path() {
+        let toml_str = r#"
+[site]
+name = "Empty Path Feed"
+base_url = "https://example.com"
+
+[feed.blog]
+file = "posts.json"
+path = ""
+"#;
+        let config = parse_toml(toml_str).unwrap();
+        let result = validate_feed_configs(&config);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_feed_validation_zero_limit() {
+        let toml_str = r#"
+[site]
+name = "Zero Limit Feed"
+base_url = "https://example.com"
+
+[feed.blog]
+file = "posts.json"
+limit = 0
+"#;
+        let config = parse_toml(toml_str).unwrap();
+        let result = validate_feed_configs(&config);
+        assert!(result.is_err());
     }
 }

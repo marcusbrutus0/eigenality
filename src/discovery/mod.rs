@@ -227,6 +227,7 @@ mod tests {
             assets: Default::default(),
             sources,
             plugins: HashMap::new(),
+            feed: HashMap::new(),
         }
     }
 

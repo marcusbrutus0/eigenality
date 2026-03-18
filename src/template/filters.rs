@@ -250,6 +250,7 @@ mod tests {
             assets: Default::default(),
             sources: std::collections::HashMap::new(),
             plugins: std::collections::HashMap::new(),
+            feed: std::collections::HashMap::new(),
         };
 
         let mut env = Environment::new();
