@@ -156,10 +156,8 @@ pub fn collect_references(
                         {
                             return Ok(());
                         }
-                        if let Some(type_attr) = el.get_attribute("type") {
-                            if type_attr == "module" {
-                                return Ok(());
-                            }
+                        if el.get_attribute("type").as_deref() == Some("module") {
+                            return Ok(());
                         }
 
                         // Check exclude patterns.

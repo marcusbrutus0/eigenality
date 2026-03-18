@@ -184,10 +184,8 @@ fn rewrite_single_html(
                     {
                         return Ok(());
                     }
-                    if let Some(type_attr) = el.get_attribute("type") {
-                        if type_attr == "module" {
-                            return Ok(());
-                        }
+                    if el.get_attribute("type").as_deref() == Some("module") {
+                        return Ok(());
                     }
 
                     if !js_set_rc.contains(&src) {

@@ -279,6 +279,7 @@ fn printer(minify: bool) -> PrinterOptions<'static> {
 /// This is the bundling variant of the walk_rules in critical_css/extract.rs.
 /// The key difference: selectors are tested against multiple documents (the
 /// union of all pages), not a single document.
+#[allow(clippy::too_many_arguments)]
 fn walk_rules(
     rules: &[CssRule],
     documents: &[scraper::Html],
