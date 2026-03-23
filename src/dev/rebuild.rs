@@ -258,10 +258,10 @@ fn render_static_page_dev(
     let page_data = data::resolve_page_data(&page.frontmatter, fetcher, Some(plugin_registry))
         .wrap_err_with(|| format!("Failed to resolve data for {}", tmpl_name))?;
 
-    let output_path = if page.template_path.file_stem().unwrap_or_default() == "index" {
-        page.output_dir.join(page.template_path.file_name().unwrap_or_default())
-    } else {
+    let output_path = if config.build.clean_urls && page.template_path.file_stem().unwrap_or_default() != "index" {
         page.output_dir.join(page.template_path.file_stem().unwrap_or_default()).join("index.html")
+    } else {
+        page.output_dir.join(page.template_path.file_name().unwrap_or_default())
     };
     let url_path = format!("/{}", output_path.to_string_lossy().replace('\\', "/"));
 
@@ -443,7 +443,11 @@ fn render_dynamic_page_dev(
         let item_data =
             data::resolve_dynamic_page_data_for_item(&page.frontmatter, item, fetcher, Some(plugin_registry))?;
 
-        let output_path = page.output_dir.join(&slug).join("index.html");
+        let output_path = if config.build.clean_urls {
+            page.output_dir.join(&slug).join("index.html")
+        } else {
+            page.output_dir.join(format!("{}.html", slug))
+        };
         let url_path = format!("/{}", output_path.to_string_lossy().replace('\\', "/"));
 
         if rendered_pages.iter().any(|rp: &RenderedPage| rp.url_path == url_path) {
