@@ -99,19 +99,51 @@ impl Default for SitemapConfig {
 /// Robots.txt generation configuration.
 ///
 /// Located under `[robots]` in site.toml.
-/// When `enabled = true` and `static/robots.txt` exists it is copied to
-/// `dist/robots.txt`. Otherwise a sensible default is generated.
+///
+/// Priority when `enabled = true`:
+/// 1. `static/robots.txt` — copied as-is if present (owner's file wins)
+/// 2. `rules` in this config — generated from TOML rules if non-empty
+/// 3. hardcoded default — `User-agent: *\nAllow: /`
 #[derive(Debug, Clone, Deserialize)]
 pub struct RobotsConfig {
     /// Whether to generate `robots.txt`. Default: false.
     #[serde(default)]
     pub enabled: bool,
+    /// Whether to include a `Sitemap:` directive pointing to the generated
+    /// `sitemap.xml`. Default: true.
+    #[serde(default = "default_true")]
+    pub sitemap: bool,
+    /// Additional absolute sitemap URLs to append as `Sitemap:` directives.
+    #[serde(default)]
+    pub extra_sitemaps: Vec<String>,
+    /// User-agent rule groups. If non-empty, robots.txt is generated from
+    /// these rules (unless `static/robots.txt` exists).
+    #[serde(default)]
+    pub rules: Vec<RobotsRule>,
 }
 
 impl Default for RobotsConfig {
     fn default() -> Self {
-        Self { enabled: false }
+        Self {
+            enabled: false,
+            sitemap: true,
+            extra_sitemaps: Vec::new(),
+            rules: Vec::new(),
+        }
     }
+}
+
+/// A single user-agent rule group in robots.txt.
+#[derive(Debug, Clone, Deserialize)]
+pub struct RobotsRule {
+    /// The user-agent string, e.g. `"*"` or `"Googlebot"`.
+    pub user_agent: String,
+    /// Paths to allow.
+    #[serde(default)]
+    pub allow: Vec<String>,
+    /// Paths to disallow.
+    #[serde(default)]
+    pub disallow: Vec<String>,
 }
 
 fn default_true() -> bool {

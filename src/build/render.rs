@@ -159,7 +159,7 @@ pub fn build(project_root: &Path) -> Result<()> {
 
     // Generate robots.txt.
     if config.robots.enabled {
-        robots::write(project_root, &dist_dir)?;
+        robots::write(project_root, &dist_dir, &config)?;
     }
 
     // Run post-build hooks
@@ -1482,6 +1482,79 @@ enabled = true
         let robots = fs::read_to_string(root.join("dist/robots.txt")).unwrap();
         assert!(robots.contains("Disallow: /secret/"));
         assert!(!robots.contains("Allow: /"));
+    }
+
+    #[test]
+    fn test_robots_generated_from_rules() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path();
+
+        write(
+            root,
+            "site.toml",
+            r#"
+[site]
+name = "Test"
+base_url = "https://test.com"
+
+[build]
+minify = false
+
+[robots]
+enabled = true
+sitemap = false
+
+[[robots.rules]]
+user_agent = "*"
+allow = ["/"]
+disallow = ["/admin/"]
+"#,
+        );
+        write(root, "templates/_base.html", "<html>{% block content %}{% endblock %}</html>");
+        write(root, "templates/index.html", "{% extends \"_base.html\" %}{% block content %}hi{% endblock %}");
+
+        build(root).unwrap();
+
+        let robots = fs::read_to_string(root.join("dist/robots.txt")).unwrap();
+        assert!(robots.contains("User-agent: *"));
+        assert!(robots.contains("Allow: /"));
+        assert!(robots.contains("Disallow: /admin/"));
+    }
+
+    #[test]
+    fn test_robots_static_wins_over_rules() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path();
+
+        write(
+            root,
+            "site.toml",
+            r#"
+[site]
+name = "Test"
+base_url = "https://test.com"
+
+[build]
+minify = false
+
+[robots]
+enabled = true
+
+[[robots.rules]]
+user_agent = "*"
+disallow = ["/from-config/"]
+"#,
+        );
+        write(root, "templates/_base.html", "<html>{% block content %}{% endblock %}</html>");
+        write(root, "templates/index.html", "{% extends \"_base.html\" %}{% block content %}hi{% endblock %}");
+        write(root, "static/robots.txt", "User-agent: *\nDisallow: /from-static/\n");
+
+        build(root).unwrap();
+
+        let robots = fs::read_to_string(root.join("dist/robots.txt")).unwrap();
+        // static file wins
+        assert!(robots.contains("Disallow: /from-static/"));
+        assert!(!robots.contains("Disallow: /from-config/"));
     }
 
     #[test]
