@@ -12,7 +12,7 @@ use super::render::RenderedPage;
 
 /// Generate `sitemap.xml` and write it to `dist/sitemap.xml`.
 ///
-/// Only called when `config.build.sitemap.enabled` is true.
+/// Only called when `config.sitemap.enabled` is true.
 pub fn generate_sitemap(
     dist_dir: &Path,
     pages: &[RenderedPage],
@@ -20,7 +20,7 @@ pub fn generate_sitemap(
     build_time: &str,
 ) -> Result<()> {
     let base_url = config.site.base_url.trim_end_matches('/');
-    let clean_urls = config.build.sitemap.clean_urls;
+    let clean_urls = config.sitemap.clean_urls;
 
     let mut xml = String::new();
     xml.push_str("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n");
@@ -90,7 +90,7 @@ fn escape_xml(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{BuildConfig, SiteMeta};
+    use crate::config::{BuildConfig, SiteMeta, SitemapConfig, RobotsConfig};
     use std::collections::HashMap;
     use std::fs;
     use tempfile::TempDir;
@@ -102,6 +102,8 @@ mod tests {
                 base_url: "https://example.com".into(),
             },
             build: BuildConfig::default(),
+            sitemap: SitemapConfig::default(),
+            robots: RobotsConfig::default(),
             assets: Default::default(),
             sources: HashMap::new(),
             plugins: HashMap::new(),

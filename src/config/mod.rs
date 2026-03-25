@@ -11,6 +11,10 @@ pub struct SiteConfig {
     #[serde(default)]
     pub build: BuildConfig,
     #[serde(default)]
+    pub sitemap: SitemapConfig,
+    #[serde(default)]
+    pub robots: RobotsConfig,
+    #[serde(default)]
     pub assets: AssetsConfig,
     #[serde(default)]
     pub sources: HashMap<String, SourceConfig>,
@@ -54,12 +58,6 @@ pub struct BuildConfig {
     /// `index.html` for directory requests. Default: false.
     #[serde(default)]
     pub clean_urls: bool,
-    /// Sitemap generation configuration.
-    #[serde(default)]
-    pub sitemap: SitemapConfig,
-    /// Robots.txt generation configuration.
-    #[serde(default)]
-    pub robots: RobotsConfig,
 }
 
 impl Default for BuildConfig {
@@ -71,15 +69,13 @@ impl Default for BuildConfig {
             oob_blocks: Vec::new(),
             minify: true,
             clean_urls: false,
-            sitemap: SitemapConfig::default(),
-            robots: RobotsConfig::default(),
         }
     }
 }
 
 /// Sitemap generation configuration.
 ///
-/// Located under `[build.sitemap]` in site.toml.
+/// Located under `[sitemap]` in site.toml.
 #[derive(Debug, Clone, Deserialize)]
 pub struct SitemapConfig {
     /// Whether to generate `sitemap.xml`. Default: true.
@@ -102,7 +98,7 @@ impl Default for SitemapConfig {
 
 /// Robots.txt generation configuration.
 ///
-/// Located under `[build.robots]` in site.toml.
+/// Located under `[robots]` in site.toml.
 /// When `enabled = true` and `static/robots.txt` exists it is copied to
 /// `dist/robots.txt`. Otherwise a sensible default is generated.
 #[derive(Debug, Clone, Deserialize)]

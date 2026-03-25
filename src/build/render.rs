@@ -152,13 +152,13 @@ pub fn build(project_root: &Path) -> Result<()> {
     }
 
     // Generate sitemap.
-    if config.build.sitemap.enabled {
+    if config.sitemap.enabled {
         sitemap::generate_sitemap(&dist_dir, &rendered_pages, &config, &build_time)?;
         tracing::info!("Generating sitemap... ✓");
     }
 
     // Generate robots.txt.
-    if config.build.robots.enabled {
+    if config.robots.enabled {
         robots::write(project_root, &dist_dir)?;
     }
 
@@ -1368,7 +1368,7 @@ base_url = "https://test.com"
 [build]
 minify = false
 
-[build.sitemap]
+[sitemap]
 enabled = false
 "#,
         );
@@ -1395,7 +1395,7 @@ base_url = "https://test.com"
 [build]
 minify = false
 
-[build.sitemap]
+[sitemap]
 enabled = true
 clean_urls = true
 "#,
@@ -1439,7 +1439,7 @@ base_url = "https://test.com"
 [build]
 minify = false
 
-[build.robots]
+[robots]
 enabled = true
 "#,
         );
@@ -1469,7 +1469,7 @@ base_url = "https://test.com"
 [build]
 minify = false
 
-[build.robots]
+[robots]
 enabled = true
 "#,
         );

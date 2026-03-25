@@ -222,6 +222,8 @@ mod tests {
                 base_url: "https://test.com".into(),
             },
             build: BuildConfig::default(),
+            sitemap: Default::default(),
+            robots: Default::default(),
             assets: Default::default(),
             sources,
             plugins: HashMap::new(),

@@ -219,12 +219,14 @@ impl DevBuildState {
         }
 
         // Generate sitemap.
-        crate::build::sitemap::generate_sitemap(
-            &dist_dir,
-            &rendered_pages,
-            config,
-            &build_time,
-        )?;
+        if config.sitemap.enabled {
+            crate::build::sitemap::generate_sitemap(
+                &dist_dir,
+                &rendered_pages,
+                config,
+                &build_time,
+            )?;
+        }
 
         self.prev_frontmatter = new_frontmatter;
 

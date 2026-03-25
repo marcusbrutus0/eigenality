@@ -7,7 +7,7 @@ fragments = true
 fragment_dir = "_fragments"
 content_block = "content"
 clean_urls = false 
-
+    
 [sources.blog_api]
 url = "https://jsonplaceholder.typicode.com"
 headers = {}

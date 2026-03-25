@@ -245,6 +245,8 @@ mod tests {
                 base_url: "https://example.com".into(),
             },
             build: crate::config::BuildConfig::default(),
+            sitemap: Default::default(),
+            robots: Default::default(),
             assets: Default::default(),
             sources: std::collections::HashMap::new(),
             plugins: std::collections::HashMap::new(),

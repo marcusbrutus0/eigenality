@@ -1,6 +1,6 @@
 //! Robots.txt generation.
 //!
-//! When `[build.robots] enabled = true`, either copies `static/robots.txt`
+//! When `[robots] enabled = true`, either copies `static/robots.txt`
 //! to `dist/robots.txt` (if the file exists) or generates a sensible default.
 
 use eyre::{Result, WrapErr};
