@@ -1,6 +1,7 @@
 //! Build engine: output setup, context assembly, page rendering, fragment
 //! extraction, and sitemap generation.
 
+pub mod analytics;
 pub mod context;
 pub mod fragments;
 pub mod minify;

@@ -226,6 +226,7 @@ mod tests {
             robots: Default::default(),
             assets: Default::default(),
             sources,
+            analytics: None,
             plugins: HashMap::new(),
         }
     }

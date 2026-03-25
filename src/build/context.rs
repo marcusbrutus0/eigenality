@@ -98,6 +98,7 @@ mod tests {
             robots: Default::default(),
             assets: Default::default(),
             sources: HashMap::new(),
+            analytics: None,
             plugins: HashMap::new(),
         }
     }

@@ -248,6 +248,7 @@ mod tests {
             sitemap: Default::default(),
             robots: Default::default(),
             assets: Default::default(),
+            analytics: None,
             sources: std::collections::HashMap::new(),
             plugins: std::collections::HashMap::new(),
         };

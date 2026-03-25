@@ -17,6 +17,7 @@ use crate::plugins::registry::{self, PluginRegistry};
 use crate::template;
 use crate::template::errors::TemplateError;
 
+use super::analytics;
 use super::context::{self, PageMeta};
 use super::fragments;
 use super::minify;
@@ -317,6 +318,13 @@ fn render_static_page(
         full_html
     };
 
+    // 4d. Inject analytics snippet if configured.
+    let full_html = if let Some(ref analytics) = config.analytics {
+        analytics::inject_analytics(&full_html, &analytics.tracking_id)
+    } else {
+        full_html
+    };
+
     let full_path = dist_dir.join(&output_path);
 
     if let Some(parent) = full_path.parent() {
@@ -552,6 +560,13 @@ fn render_dynamic_page(
         // Minify HTML (last transformation before writing).
         let full_html = if config.build.minify {
             minify::minify_html(&full_html)
+        } else {
+            full_html
+        };
+
+        // Inject analytics snippet if configured.
+        let full_html = if let Some(ref analytics) = config.analytics {
+            analytics::inject_analytics(&full_html, &analytics.tracking_id)
         } else {
             full_html
         };
