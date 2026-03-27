@@ -191,8 +191,30 @@ fn build_router(
     }
 
     // Static file serving from dist/ as the fallback.
+    // A middleware layer rewrites extensionless paths to try `.html`
+    // (e.g. `/about` → `/about.html`), mimicking CDN behaviour during
+    // local development.
     let serve_dir = ServeDir::new(&dist_dir);
-    app = app.fallback_service(serve_dir);
+    let dist_for_rewrite = dist_dir.clone();
+    let fallback = Router::new()
+        .fallback_service(serve_dir)
+        .layer(axum::middleware::from_fn(move |mut req: axum::extract::Request, next: axum::middleware::Next| {
+            let dist = dist_for_rewrite.clone();
+            async move {
+                let path = req.uri().path().to_string();
+                if !path.contains('.') && path != "/" {
+                    let trimmed = path.trim_end_matches('/').trim_start_matches('/');
+                    let html_file = format!("{}.html", trimmed);
+                    if dist.join(&html_file).is_file() {
+                        if let Ok(new_uri) = format!("/{}", html_file).parse::<axum::http::Uri>() {
+                            *req.uri_mut() = new_uri;
+                        }
+                    }
+                }
+                next.run(req).await
+            }
+        }));
+    app = app.fallback_service(fallback);
 
     Ok(app)
 }
