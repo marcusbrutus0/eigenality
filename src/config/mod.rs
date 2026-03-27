@@ -14,6 +14,7 @@ pub struct SiteConfig {
     pub sitemap: SitemapConfig,
     #[serde(default)]
     pub robots: RobotsConfig,
+    pub analytics: Option<AnalyticsConfig>,
     #[serde(default)]
     pub assets: AssetsConfig,
     #[serde(default)]
@@ -194,6 +195,19 @@ pub struct RobotsRule {
     /// Paths to disallow.
     #[serde(default)]
     pub disallow: Vec<String>,
+}
+
+/// Google Analytics configuration.
+///
+/// Located under `[analytics]` in site.toml. When present with a
+/// `tracking_id`, the gtag.js snippet is injected into every rendered page
+/// before `</body>`.
+///
+/// Absent or missing `tracking_id` = analytics disabled.
+#[derive(Debug, Clone, Deserialize)]
+pub struct AnalyticsConfig {
+    /// Google Analytics measurement ID, e.g. `"G-XXXXXXXXXX"`.
+    pub tracking_id: String,
 }
 
 fn default_true() -> bool {

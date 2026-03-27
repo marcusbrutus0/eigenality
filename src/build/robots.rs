@@ -109,6 +109,7 @@ mod tests {
             robots,
             assets: Default::default(),
             sources: HashMap::new(),
+            analytics: None,
             plugins: HashMap::new(),
         }
     }

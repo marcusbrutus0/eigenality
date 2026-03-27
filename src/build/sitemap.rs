@@ -109,6 +109,7 @@ mod tests {
             robots: RobotsConfig::default(),
             assets: Default::default(),
             sources: HashMap::new(),
+            analytics: None,
             plugins: HashMap::new(),
             feed: HashMap::new(),
             robots: None,
