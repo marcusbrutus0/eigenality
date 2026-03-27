@@ -1614,25 +1614,12 @@ optimize = false
 /// default page should be written to `dist/404.html`.
 #[test]
 fn test_not_found_writes_default_when_no_template() {
-// POST method data queries
-// ============================================================================
-
-/// Verify that frontmatter with `method: post` and `body` (including
-/// interpolation placeholders) parses correctly and flows through the
-/// full build pipeline without error.
-///
-/// Local-file fetching ignores the HTTP method, so this test confirms
-/// that the presence of POST-specific fields does not break the build
-/// and that body interpolation resolves before the query is executed.
-#[test]
-fn test_post_method_dynamic_page_full_build() {
     let tmp = TempDir::new().unwrap();
     let root = tmp.path();
 
     write(root, "site.toml", r#"
 [site]
 name = "404 Default Test"
-name = "POST Method Test"
 base_url = "https://test.com"
 
 [build]
@@ -1643,7 +1630,7 @@ not_found = true
 
     write(root, "templates/index.html", "<h1>Home</h1>");
 
-    eigen::build::build(root).unwrap();
+    eigen::build::build(root, false).unwrap();
 
     let path_404 = root.join("dist/404.html");
     assert!(path_404.exists(), "dist/404.html should be created by default");
@@ -1675,7 +1662,7 @@ not_found = false
 
     write(root, "templates/index.html", "<h1>Home</h1>");
 
-    eigen::build::build(root).unwrap();
+    eigen::build::build(root, false).unwrap();
 
     assert!(
         !root.join("dist/404.html").exists(),
@@ -1711,7 +1698,7 @@ not_found = true
     write(root, "templates/index.html", r#"{% extends "_base.html" %}
 {% block content %}<h1>Home</h1>{% endblock %}"#);
 
-    eigen::build::build(root).unwrap();
+    eigen::build::build(root, false).unwrap();
 
     let path_404 = root.join("dist/404.html");
     assert!(path_404.exists(), "dist/404.html should exist");
@@ -1754,7 +1741,7 @@ sitemap = true
     write(root, "templates/index.html", "<h1>Home</h1>");
     write(root, "templates/about.html", "<h1>About</h1>");
 
-    eigen::build::build(root).unwrap();
+    eigen::build::build(root, false).unwrap();
 
     let sitemap = fs::read_to_string(root.join("dist/sitemap.xml")).unwrap();
     // The default 404 page (written directly, not via template rendering) must
@@ -1769,15 +1756,100 @@ sitemap = true
 /// (not `dist/404/index.html`) so the hosting server can serve it correctly.
 #[test]
 fn test_not_found_clean_urls_does_not_affect_404_path() {
+    let tmp = TempDir::new().unwrap();
+    let root = tmp.path();
+
+    write(root, "site.toml", r#"
+[site]
+name = "Clean URL 404 Test"
+base_url = "https://test.com"
+
+[build]
+fragments = false
+minify = false
+not_found = true
+clean_urls = true
+"#);
+
+    write(root, "templates/_base.html",
+          "<!DOCTYPE html><html><body>{% block content %}{% endblock %}</body></html>");
+
+    write(root, "templates/index.html", r#"{% extends "_base.html" %}
+{% block content %}<h1>Home</h1>{% endblock %}"#);
+
+    // Custom 404 template to also verify the rendered path is correct.
+    write(root, "templates/404.html", r#"{% extends "_base.html" %}
+{% block content %}<h1>Custom 404</h1>{% endblock %}"#);
+
+    eigen::build::build(root, false).unwrap();
+
+    // With clean_urls: index goes to index.html, about goes to about/index.html.
+    assert!(root.join("dist/index.html").exists(), "index.html should stay as-is");
+    assert!(
+        !root.join("dist/about").exists(),
+        "no about/ dir in this build"
+    );
+
+    // The 404 page must always be dist/404.html regardless of clean_urls.
+    assert!(
+        root.join("dist/404.html").exists(),
+        "dist/404.html must exist at root even with clean_urls"
+    );
+    assert!(
+        !root.join("dist/404/index.html").exists(),
+        "dist/404/index.html must NOT exist — 404 is exempt from clean_urls"
+    );
+}
+
+/// The full example site build should include a rendered `dist/404.html`
+/// (using the custom template added to example_site/templates/404.html).
+#[test]
+fn test_full_build_example_site_includes_404() {
+    let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let example_site = manifest_dir.join("example_site");
+
+    let tmp = TempDir::new().unwrap();
+    let root = tmp.path();
+    copy_dir_all(&example_site, root);
+
+    // Disable minification for readable assertions.
+    let site_toml = fs::read_to_string(root.join("site.toml")).unwrap();
+    let site_toml = site_toml.replace("[build]", "[build]\nminify = false");
+    fs::write(root.join("site.toml"), site_toml).unwrap();
+
+    eigen::build::build(root, false).unwrap();
+
+    let path_404 = root.join("dist/404.html");
+    assert!(path_404.exists(), "dist/404.html should be built from example_site template");
+
+    let html = fs::read_to_string(&path_404).unwrap();
+    // The example_site 404 template extends _base.html and uses the site name.
+    assert!(html.contains("<!DOCTYPE html>"), "Should be a full HTML page via layout");
+    assert!(html.contains("404"), "Should mention 404");
+    // Site name from _base.html should appear.
+    assert!(html.contains("Example Site"), "Layout should inject site name");
+}
+
+/// Dynamic page with POST data query: collection from a local file, per-item
+/// data query that declares method: post with a body containing interpolation.
+#[test]
+fn test_post_method_dynamic_page_with_body_interpolation() {
+    let tmp = TempDir::new().unwrap();
+    let root = tmp.path();
+
+    write(root, "site.toml", r#"
+[site]
+name = "POST Dynamic Test"
+base_url = "https://test.com"
+
+[build]
+fragments = false
+minify = false
 "#);
 
     write(root, "templates/_base.html",
           "<html>{% block content %}{% endblock %}</html>");
 
-    // Dynamic page: collection from a local file, per-item data query
-    // that declares method: post with a body containing interpolation.
-    // Since the actual fetch is a local file, the method/body are parsed
-    // and interpolated but do not affect file reading.
     write(root, "templates/[project].html", r#"---
 collection:
   file: "projects.json"
@@ -1929,74 +2001,12 @@ fn test_post_method_static_page_full_build() {
 
     write(root, "site.toml", r#"
 [site]
-name = "Clean URL 404 Test"
 name = "Static POST Test"
 base_url = "https://test.com"
 
 [build]
 fragments = false
 minify = false
-not_found = true
-clean_urls = true
-"#);
-
-    write(root, "templates/_base.html",
-          "<!DOCTYPE html><html><body>{% block content %}{% endblock %}</body></html>");
-
-    write(root, "templates/index.html", r#"{% extends "_base.html" %}
-{% block content %}<h1>Home</h1>{% endblock %}"#);
-
-    // Custom 404 template to also verify the rendered path is correct.
-    write(root, "templates/404.html", r#"{% extends "_base.html" %}
-{% block content %}<h1>Custom 404</h1>{% endblock %}"#);
-
-    eigen::build::build(root).unwrap();
-
-    // With clean_urls: index goes to index.html, about goes to about/index.html.
-    assert!(root.join("dist/index.html").exists(), "index.html should stay as-is");
-    assert!(
-        !root.join("dist/about").exists(),
-        "no about/ dir in this build"
-    );
-
-    // The 404 page must always be dist/404.html regardless of clean_urls.
-    assert!(
-        root.join("dist/404.html").exists(),
-        "dist/404.html must exist at root even with clean_urls"
-    );
-    assert!(
-        !root.join("dist/404/index.html").exists(),
-        "dist/404/index.html must NOT exist — 404 is exempt from clean_urls"
-    );
-}
-
-/// The full example site build should include a rendered `dist/404.html`
-/// (using the custom template added to example_site/templates/404.html).
-#[test]
-fn test_full_build_example_site_includes_404() {
-    let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let example_site = manifest_dir.join("example_site");
-
-    let tmp = TempDir::new().unwrap();
-    let root = tmp.path();
-    copy_dir_all(&example_site, root);
-
-    // Disable minification for readable assertions.
-    let site_toml = fs::read_to_string(root.join("site.toml")).unwrap();
-    let site_toml = site_toml.replace("[build]", "[build]\nminify = false");
-    fs::write(root.join("site.toml"), site_toml).unwrap();
-
-    eigen::build::build(root).unwrap();
-
-    let path_404 = root.join("dist/404.html");
-    assert!(path_404.exists(), "dist/404.html should be built from example_site template");
-
-    let html = fs::read_to_string(&path_404).unwrap();
-    // The example_site 404 template extends _base.html and uses the site name.
-    assert!(html.contains("<!DOCTYPE html>"), "Should be a full HTML page via layout");
-    assert!(html.contains("404"), "Should mention 404");
-    // Site name from _base.html should appear.
-    assert!(html.contains("Example Site"), "Layout should inject site name");
 "#);
 
     write(root, "templates/_base.html",
@@ -2068,6 +2078,49 @@ data:
     let posts = &fm.data["posts"];
     assert_eq!(posts.method, eigen::frontmatter::HttpMethod::Get);
     assert!(posts.body.is_none());
+}
+
+// ============================================================================
+// clean_links feature
+// ============================================================================
+
+#[test]
+fn test_clean_links_strips_html_extension_from_link_to() {
+    let tmp = TempDir::new().unwrap();
+    let root = tmp.path();
+
+    write(root, "site.toml", r#"
+[site]
+name = "Clean Links Test"
+base_url = "https://test.com"
+
+[build]
+fragments = false
+minify = false
+clean_links = true
+"#);
+
+    write(root, "templates/_base.html",
+          "<html><body>{% block content %}{% endblock %}</body></html>");
+
+    write(root, "templates/index.html", r##"{% extends "_base.html" %}
+{% block content %}
+<a {{ link_to("/about.html") }}>About</a>
+{% endblock %}"##);
+
+    write(root, "templates/about.html", r#"{% extends "_base.html" %}
+{% block content %}<h1>About</h1>{% endblock %}"#);
+
+    eigen::build::build(root, true).unwrap();
+
+    let html = fs::read_to_string(root.join("dist/index.html")).unwrap();
+
+    // clean_links strips .html — href should use the clean path.
+    assert!(html.contains(r#"href="/about""#), "link_to should emit clean href without .html");
+    assert!(
+        !html.contains(r#"href="/about.html""#),
+        "link_to must NOT emit .html extension when clean_links = true"
+    );
 }
 
 // ============================================================================
