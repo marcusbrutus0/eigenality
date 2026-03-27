@@ -225,6 +225,8 @@ mod tests {
                 extra: std::collections::HashMap::new(),
             },
             build: BuildConfig::default(),
+            sitemap: Default::default(),
+            robots: Default::default(),
             assets: Default::default(),
             sources,
             plugins: HashMap::new(),

@@ -140,6 +140,8 @@ mod tests {
                 content_block: "content".into(),
                 ..Default::default()
             },
+            sitemap: Default::default(),
+            robots: Default::default(),
             assets: Default::default(),
             sources: HashMap::new(),
             plugins: HashMap::new(),
@@ -162,6 +164,8 @@ mod tests {
                 fragments: false,
                 ..Default::default()
             },
+            sitemap: Default::default(),
+            robots: Default::default(),
             assets: Default::default(),
             sources: HashMap::new(),
             plugins: HashMap::new(),

@@ -11,6 +11,8 @@ use crate::config::SiteConfig;
 use super::render::RenderedPage;
 
 /// Generate `sitemap.xml` and write it to `dist/sitemap.xml`.
+///
+/// Only called when `config.sitemap.enabled` is true.
 pub fn generate_sitemap(
     dist_dir: &Path,
     pages: &[RenderedPage],
@@ -18,6 +20,7 @@ pub fn generate_sitemap(
     build_time: &str,
 ) -> Result<()> {
     let base_url = config.site.base_url.trim_end_matches('/');
+    let clean_urls = config.sitemap.clean_urls;
 
     let mut xml = String::new();
     xml.push_str("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n");
@@ -32,7 +35,12 @@ pub fn generate_sitemap(
             "0.8"
         };
 
-        let url = format!("{}{}", base_url, normalize_url_path(&page.url_path));
+        let url_path = if clean_urls {
+            to_clean_url(&page.url_path)
+        } else {
+            normalize_url_path(&page.url_path)
+        };
+        let url = format!("{}{}", base_url, url_path);
 
         xml.push_str("  <url>\n");
         xml.push_str(&format!("    <loc>{}</loc>\n", escape_xml(&url)));
@@ -48,6 +56,17 @@ pub fn generate_sitemap(
         .wrap_err_with(|| format!("Failed to write {}", sitemap_path.display()))?;
 
     Ok(())
+}
+
+/// Convert a `.html` path to a clean URL (strip extension, add trailing slash).
+/// `index.html` becomes `/`.
+fn to_clean_url(path: &str) -> String {
+    let path = normalize_url_path(path);
+    if path == "/index.html" {
+        return "/".to_string();
+    }
+    let without_ext = path.strip_suffix(".html").unwrap_or(&path);
+    format!("{}/", without_ext)
 }
 
 /// Ensure the URL path starts with `/`.
@@ -71,7 +90,7 @@ pub(crate) fn escape_xml(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{BuildConfig, SiteSchemaConfig, SiteMeta, SiteSeoConfig};
+    use crate::config::{BuildConfig, SiteSchemaConfig, SiteMeta, SiteSeoConfig, SitemapConfig, RobotsConfig};
     use std::collections::HashMap;
     use std::fs;
     use tempfile::TempDir;
@@ -86,6 +105,8 @@ mod tests {
                 extra: std::collections::HashMap::new(),
             },
             build: BuildConfig::default(),
+            sitemap: SitemapConfig::default(),
+            robots: RobotsConfig::default(),
             assets: Default::default(),
             sources: HashMap::new(),
             plugins: HashMap::new(),
