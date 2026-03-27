@@ -1,6 +1,6 @@
 use eyre::{Result, WrapErr, bail};
 use regex::Regex;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::Path;
 
@@ -10,6 +10,10 @@ pub struct SiteConfig {
     pub site: SiteMeta,
     #[serde(default)]
     pub build: BuildConfig,
+    #[serde(default)]
+    pub sitemap: SitemapConfig,
+    #[serde(default)]
+    pub robots: RobotsConfig,
     #[serde(default)]
     pub assets: AssetsConfig,
     #[serde(default)]
@@ -35,7 +39,7 @@ pub struct SiteConfig {
 }
 
 /// Metadata about the site itself.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct SiteMeta {
     pub name: String,
     pub base_url: String,
@@ -45,6 +49,9 @@ pub struct SiteMeta {
     /// Site-level structured data (JSON-LD) defaults.
     #[serde(default)]
     pub schema: SiteSchemaConfig,
+    /// Arbitrary extra fields from `[site]` — exposed to templates as `site.*`.
+    #[serde(flatten)]
+    pub extra: HashMap<String, toml::Value>,
 }
 
 /// Build-related configuration.
@@ -67,6 +74,12 @@ pub struct BuildConfig {
     /// Whether to minify HTML (including inline CSS and JS) output.
     #[serde(default = "default_true")]
     pub minify: bool,
+    /// Whether to use clean URLs: pages are written as `about/index.html`
+    /// instead of `about.html`, so browsers show `/about` instead of `/about.html`.
+    /// Requires a web server (e.g. Cloudflare Pages, nginx) that serves
+    /// `index.html` for directory requests. Default: false.
+    #[serde(default)]
+    pub clean_urls: bool,
     /// Critical CSS inlining configuration.
     #[serde(default)]
     pub critical_css: CriticalCssConfig,
@@ -99,6 +112,7 @@ impl Default for BuildConfig {
             content_block: default_content_block(),
             oob_blocks: Vec::new(),
             minify: true,
+            clean_urls: false,
             critical_css: CriticalCssConfig::default(),
             hints: HintsConfig::default(),
             content_hash: ContentHashConfig::default(),
@@ -107,6 +121,79 @@ impl Default for BuildConfig {
             not_found: true,
         }
     }
+}
+
+/// Sitemap generation configuration.
+///
+/// Located under `[sitemap]` in site.toml.
+#[derive(Debug, Clone, Deserialize)]
+pub struct SitemapConfig {
+    /// Whether to generate `sitemap.xml`. Default: true.
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    /// Whether to use clean URLs in the sitemap (e.g. `/about/` instead of
+    /// `/about.html`). Default: false.
+    #[serde(default)]
+    pub clean_urls: bool,
+}
+
+impl Default for SitemapConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            clean_urls: false,
+        }
+    }
+}
+
+/// Robots.txt generation configuration.
+///
+/// Located under `[robots]` in site.toml.
+///
+/// Priority when `enabled = true`:
+/// 1. `static/robots.txt` — copied as-is if present (owner's file wins)
+/// 2. `rules` in this config — generated from TOML rules if non-empty
+/// 3. hardcoded default — `User-agent: *\nAllow: /`
+#[derive(Debug, Clone, Deserialize)]
+pub struct RobotsConfig {
+    /// Whether to generate `robots.txt`. Default: false.
+    #[serde(default)]
+    pub enabled: bool,
+    /// Whether to include a `Sitemap:` directive pointing to the generated
+    /// `sitemap.xml`. Default: true.
+    #[serde(default = "default_true")]
+    pub sitemap: bool,
+    /// Additional absolute sitemap URLs to append as `Sitemap:` directives.
+    #[serde(default)]
+    pub extra_sitemaps: Vec<String>,
+    /// User-agent rule groups. If non-empty, robots.txt is generated from
+    /// these rules (unless `static/robots.txt` exists).
+    #[serde(default)]
+    pub rules: Vec<RobotsRule>,
+}
+
+impl Default for RobotsConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            sitemap: true,
+            extra_sitemaps: Vec::new(),
+            rules: Vec::new(),
+        }
+    }
+}
+
+/// A single user-agent rule group in robots.txt.
+#[derive(Debug, Clone, Deserialize)]
+pub struct RobotsRule {
+    /// The user-agent string, e.g. `"*"` or `"Googlebot"`.
+    pub user_agent: String,
+    /// Paths to allow.
+    #[serde(default)]
+    pub allow: Vec<String>,
+    /// Paths to disallow.
+    #[serde(default)]
+    pub disallow: Vec<String>,
 }
 
 fn default_true() -> bool {
@@ -559,7 +646,7 @@ fn default_robots_rules() -> Vec<RobotsRule> {
 ///
 /// Located under `[site.seo]` in site.toml. These provide fallback
 /// values for pages that do not set explicit `[seo]` in frontmatter.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct SiteSeoConfig {
     /// Default page title for `og:title` / `twitter:title`.
     /// Falls back to `site.name` if not set.
@@ -614,7 +701,7 @@ impl Default for SiteSeoConfig {
 /// Site-level structured data (JSON-LD) defaults.
 ///
 /// Located under `[site.schema]` in site.toml.
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
 pub struct SiteSchemaConfig {
     /// Default author name for Article schemas.
     /// Used when a page does not specify an author in frontmatter.
@@ -666,7 +753,7 @@ pub fn load_config(project_root: &Path) -> Result<SiteConfig> {
 /// Replace all `${VAR_NAME}` occurrences in `input` with the value of the
 /// corresponding environment variable. Returns an error if any referenced
 /// variable is not set.
-fn interpolate_env_vars(input: &str) -> Result<String> {
+pub fn interpolate_env_vars(input: &str) -> Result<String> {
     let re = Regex::new(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}").unwrap();
     let mut result = input.to_string();
     let mut errors: Vec<String> = Vec::new();
@@ -694,7 +781,7 @@ fn interpolate_env_vars(input: &str) -> Result<String> {
 
     if !errors.is_empty() {
         bail!(
-            "Missing environment variable(s) referenced in site.toml: {}",
+            "Missing environment variable(s): {}",
             errors.join(", ")
         );
     }

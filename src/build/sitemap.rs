@@ -11,6 +11,8 @@ use crate::config::SiteConfig;
 use super::render::RenderedPage;
 
 /// Generate `sitemap.xml` and write it to `dist/sitemap.xml`.
+///
+/// Only called when `config.sitemap.enabled` is true.
 pub fn generate_sitemap(
     dist_dir: &Path,
     pages: &[RenderedPage],
@@ -18,6 +20,7 @@ pub fn generate_sitemap(
     build_time: &str,
 ) -> Result<()> {
     let base_url = config.site.base_url.trim_end_matches('/');
+    let clean_urls = config.sitemap.clean_urls;
 
     let mut xml = String::new();
     xml.push_str("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n");
@@ -32,7 +35,12 @@ pub fn generate_sitemap(
             "0.8"
         };
 
-        let url = format!("{}{}", base_url, normalize_url_path(&page.url_path));
+        let url_path = if clean_urls {
+            to_clean_url(&page.url_path)
+        } else {
+            normalize_url_path(&page.url_path)
+        };
+        let url = format!("{}{}", base_url, url_path);
 
         xml.push_str("  <url>\n");
         xml.push_str(&format!("    <loc>{}</loc>\n", escape_xml(&url)));
@@ -48,6 +56,17 @@ pub fn generate_sitemap(
         .wrap_err_with(|| format!("Failed to write {}", sitemap_path.display()))?;
 
     Ok(())
+}
+
+/// Convert a `.html` path to a clean URL (strip extension, add trailing slash).
+/// `index.html` becomes `/`.
+fn to_clean_url(path: &str) -> String {
+    let path = normalize_url_path(path);
+    if path == "/index.html" {
+        return "/".to_string();
+    }
+    let without_ext = path.strip_suffix(".html").unwrap_or(&path);
+    format!("{}/", without_ext)
 }
 
 /// Ensure the URL path starts with `/`.
@@ -71,7 +90,7 @@ pub(crate) fn escape_xml(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{BuildConfig, SiteSchemaConfig, SiteMeta, SiteSeoConfig};
+    use crate::config::{BuildConfig, SiteSchemaConfig, SiteMeta, SiteSeoConfig, SitemapConfig, RobotsConfig};
     use std::collections::HashMap;
     use std::fs;
     use tempfile::TempDir;
@@ -83,8 +102,11 @@ mod tests {
                 base_url: "https://example.com".into(),
                 seo: SiteSeoConfig::default(),
                 schema: SiteSchemaConfig::default(),
+                extra: std::collections::HashMap::new(),
             },
             build: BuildConfig::default(),
+            sitemap: SitemapConfig::default(),
+            robots: RobotsConfig::default(),
             assets: Default::default(),
             sources: HashMap::new(),
             plugins: HashMap::new(),
@@ -201,5 +223,93 @@ mod tests {
         // Should not have double slash.
         assert!(xml.contains("https://example.com/about.html"));
         assert!(!xml.contains("https://example.com//about.html"));
+    }
+
+    // -- Property-based tests (hegeltest) --
+
+    use hegel::generators;
+
+    #[hegel::test]
+    fn normalize_url_path_starts_with_slash(tc: hegel::TestCase) {
+        let s = tc.draw(generators::text());
+        let result = normalize_url_path(&s);
+        assert!(
+            result.starts_with('/'),
+            "normalize_url_path({s:?}) = {result:?} does not start with '/'"
+        );
+    }
+
+    #[hegel::test]
+    fn normalize_url_path_idempotence(tc: hegel::TestCase) {
+        let s = tc.draw(generators::text());
+        let once = normalize_url_path(&s);
+        let twice = normalize_url_path(&once);
+        assert_eq!(
+            once, twice,
+            "normalize_url_path is not idempotent for input {s:?}"
+        );
+    }
+
+    #[hegel::test]
+    fn normalize_url_path_passthrough(tc: hegel::TestCase) {
+        let s = tc.draw(generators::text());
+        if s.starts_with('/') {
+            let result = normalize_url_path(&s);
+            assert_eq!(
+                result, s,
+                "normalize_url_path should pass through inputs that already start with '/'"
+            );
+        }
+    }
+
+    #[hegel::test]
+    fn escape_xml_no_bare_specials(tc: hegel::TestCase) {
+        let s = tc.draw(generators::text());
+        let escaped = escape_xml(&s);
+        let stripped = escaped
+            .replace("&amp;", "")
+            .replace("&lt;", "")
+            .replace("&gt;", "")
+            .replace("&quot;", "")
+            .replace("&apos;", "");
+        assert!(
+            !stripped.contains('&'),
+            "escape_xml({s:?}) contains bare '&' after stripping entities"
+        );
+        assert!(
+            !stripped.contains('<'),
+            "escape_xml({s:?}) contains bare '<' after stripping entities"
+        );
+        assert!(
+            !stripped.contains('>'),
+            "escape_xml({s:?}) contains bare '>' after stripping entities"
+        );
+        assert!(
+            !stripped.contains('"'),
+            "escape_xml({s:?}) contains bare '\"' after stripping entities"
+        );
+        assert!(
+            !stripped.contains('\''),
+            "escape_xml({s:?}) contains bare '\\'' after stripping entities"
+        );
+    }
+
+    #[hegel::test]
+    fn escape_xml_monotonic_length(tc: hegel::TestCase) {
+        let s = tc.draw(generators::text());
+        let escaped = escape_xml(&s);
+        assert!(
+            escaped.len() >= s.len(),
+            "escape_xml({s:?}) produced shorter output: {} < {}",
+            escaped.len(),
+            s.len()
+        );
+    }
+
+    #[hegel::test]
+    fn escape_xml_robustness(tc: hegel::TestCase) {
+        let s = tc.draw(generators::text());
+        // Should never panic for any text input.
+        let _ = escape_xml(&s);
     }
 }

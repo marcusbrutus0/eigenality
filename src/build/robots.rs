@@ -1,31 +1,36 @@
-//! robots.txt generation.
+//! Robots.txt generation.
 //!
-//! When `[robots]` is configured in site.toml, generates a `robots.txt`
-//! file in `dist/` with user-agent rules and sitemap references.
+//! When `[robots] enabled = true`, the following priority applies:
+//! 1. `static/robots.txt` — copied as-is if present (owner's file wins)
+//! 2. `rules` in `site.toml` — generated from config if non-empty
+//! 3. hardcoded default — `User-agent: *\nAllow: /`
 
 use eyre::{Result, WrapErr};
 use std::path::Path;
 
 use crate::config::{RobotsConfig, RobotsRule, SiteConfig};
 
-/// Generate `robots.txt` and write it to `dist/robots.txt`.
-///
-/// Only called when `config.robots` is `Some`. The caller checks this.
-pub fn generate_robots_txt(
-    dist_dir: &Path,
-    config: &SiteConfig,
-) -> Result<()> {
-    let robots = match &config.robots {
-        Some(r) => r,
-        None => return Ok(()),
-    };
+const DEFAULT_ROBOTS_TXT: &str = "User-agent: *\nAllow: /\n";
 
-    let base_url = config.site.base_url.trim_end_matches('/');
-    let content = build_robots_content(robots, base_url);
+/// Write `dist/robots.txt` according to the priority rules.
+pub fn write(project_root: &Path, dist_dir: &Path, config: &SiteConfig) -> Result<()> {
+    let custom = project_root.join("static").join("robots.txt");
+    let dest = dist_dir.join("robots.txt");
 
-    let robots_path = dist_dir.join("robots.txt");
-    std::fs::write(&robots_path, &content)
-        .wrap_err_with(|| format!("Failed to write {}", robots_path.display()))?;
+    if custom.exists() {
+        std::fs::copy(&custom, &dest)
+            .wrap_err_with(|| format!("Failed to copy robots.txt to {}", dest.display()))?;
+        tracing::info!("Copying robots.txt... ✓");
+    } else if !config.robots.rules.is_empty() {
+        let content = build_content(&config.robots, &config.site.base_url);
+        std::fs::write(&dest, &content)
+            .wrap_err_with(|| format!("Failed to write robots.txt to {}", dest.display()))?;
+        tracing::info!("Generating robots.txt from config... ✓");
+    } else {
+        std::fs::write(&dest, DEFAULT_ROBOTS_TXT)
+            .wrap_err_with(|| format!("Failed to write robots.txt to {}", dest.display()))?;
+        tracing::info!("Generating default robots.txt... ✓");
+    }
 
     Ok(())
 }
@@ -87,7 +92,7 @@ mod tests {
     use super::*;
     use crate::config::{
         BuildConfig, RobotsConfig, RobotsRule, SiteConfig, SiteMeta,
-        SiteSchemaConfig, SiteSeoConfig,
+        SiteSchemaConfig, SiteSeoConfig, SitemapConfig
     };
     use std::collections::HashMap;
     use std::fs;
@@ -98,8 +103,138 @@ mod tests {
             site: SiteMeta {
                 name: "Test".into(),
                 base_url: "https://example.com".into(),
+            },
+            build: BuildConfig::default(),
+            sitemap: SitemapConfig::default(),
+            robots,
+            assets: Default::default(),
+            sources: HashMap::new(),
+            plugins: HashMap::new(),
+        }
+    }
+
+    fn setup(custom_robots: Option<&str>) -> TempDir {
+        let tmp = TempDir::new().unwrap();
+        fs::create_dir_all(tmp.path().join("dist")).unwrap();
+        if let Some(content) = custom_robots {
+            fs::create_dir_all(tmp.path().join("static")).unwrap();
+            fs::write(tmp.path().join("static/robots.txt"), content).unwrap();
+        }
+        tmp
+    }
+
+    #[test]
+    fn test_static_file_wins_over_rules() {
+        let tmp = setup(Some("User-agent: *\nDisallow: /secret/\n"));
+        let mut config = make_config(RobotsConfig {
+            enabled: true,
+            rules: vec![RobotsRule {
+                user_agent: "*".into(),
+                allow: vec!["/".into()],
+                disallow: vec![],
+            }],
+            ..Default::default()
+        });
+        config.site.base_url = "https://example.com".into();
+        write(tmp.path(), &tmp.path().join("dist"), &config).unwrap();
+        let content = fs::read_to_string(tmp.path().join("dist/robots.txt")).unwrap();
+        // static file wins — contains Disallow: /secret/, not Allow: /
+        assert!(content.contains("Disallow: /secret/"));
+        assert!(!content.contains("Allow: /"));
+    }
+
+    #[test]
+    fn test_rules_used_when_no_static_file() {
+        let tmp = setup(None);
+        let config = make_config(RobotsConfig {
+            enabled: true,
+            sitemap: false,
+            rules: vec![RobotsRule {
+                user_agent: "*".into(),
+                allow: vec![],
+                disallow: vec!["/admin/".into()],
+            }],
+            ..Default::default()
+        });
+        write(tmp.path(), &tmp.path().join("dist"), &config).unwrap();
+        let content = fs::read_to_string(tmp.path().join("dist/robots.txt")).unwrap();
+        assert!(content.contains("User-agent: *"));
+        assert!(content.contains("Disallow: /admin/"));
+    }
+
+    #[test]
+    fn test_default_when_no_static_and_no_rules() {
+        let tmp = setup(None);
+        let config = make_config(RobotsConfig::default());
+        write(tmp.path(), &tmp.path().join("dist"), &config).unwrap();
+        let content = fs::read_to_string(tmp.path().join("dist/robots.txt")).unwrap();
+        assert!(content.contains("User-agent: *"));
+        assert!(content.contains("Allow: /"));
+    }
+
+    #[test]
+    fn test_sitemap_directive_included() {
+        let tmp = setup(None);
+        let config = make_config(RobotsConfig {
+            enabled: true,
+            sitemap: true,
+            rules: vec![RobotsRule {
+                user_agent: "*".into(),
+                allow: vec!["/".into()],
+                disallow: vec![],
+            }],
+            ..Default::default()
+        });
+        write(tmp.path(), &tmp.path().join("dist"), &config).unwrap();
+        let content = fs::read_to_string(tmp.path().join("dist/robots.txt")).unwrap();
+        assert!(content.contains("Sitemap: https://example.com/sitemap.xml"));
+    }
+
+    #[test]
+    fn test_sitemap_directive_excluded() {
+        let tmp = setup(None);
+        let config = make_config(RobotsConfig {
+            enabled: true,
+            sitemap: false,
+            rules: vec![RobotsRule {
+                user_agent: "*".into(),
+                allow: vec!["/".into()],
+                disallow: vec![],
+            }],
+            ..Default::default()
+        });
+        write(tmp.path(), &tmp.path().join("dist"), &config).unwrap();
+        let content = fs::read_to_string(tmp.path().join("dist/robots.txt")).unwrap();
+        assert!(!content.contains("Sitemap:"));
+    }
+
+    #[test]
+    fn test_extra_sitemaps() {
+        let tmp = setup(None);
+        let config = make_config(RobotsConfig {
+            enabled: true,
+            sitemap: false,
+            extra_sitemaps: vec!["https://other.example.com/sitemap.xml".into()],
+            rules: vec![RobotsRule {
+                user_agent: "*".into(),
+                allow: vec!["/".into()],
+                disallow: vec![],
+            }],
+        });
+        write(tmp.path(), &tmp.path().join("dist"), &config).unwrap();
+        let content = fs::read_to_string(tmp.path().join("dist/robots.txt")).unwrap();
+        assert!(content.contains("Sitemap: https://other.example.com/sitemap.xml"));
+    }
+
+    #[test]
+    fn test_multiple_rules() {
+        let tmp = setup(None);
+        let config = make_config(RobotsConfig {
+            enabled: true,
+            sitemap: false,
                 seo: SiteSeoConfig::default(),
                 schema: SiteSchemaConfig::default(),
+                extra: std::collections::HashMap::new(),
             },
             build: BuildConfig::default(),
             assets: Default::default(),
@@ -265,7 +400,7 @@ mod tests {
         fs::create_dir_all(&dist).unwrap();
 
         let config = test_config_with_robots(default_robots());
-        generate_robots_txt(&dist, &config).unwrap();
+        write(tmp.path(), &tmp.path().join("dist"), &config).unwrap();
 
         let content = fs::read_to_string(dist.join("robots.txt")).unwrap();
         assert!(content.contains("User-agent: *"));
@@ -273,62 +408,35 @@ mod tests {
         assert!(content.contains("Sitemap: https://example.com/sitemap.xml"));
     }
 
-    #[test]
-    fn test_generate_robots_txt_none() {
-        let tmp = TempDir::new().unwrap();
-        let dist = tmp.path().join("dist");
-        fs::create_dir_all(&dist).unwrap();
+#[test]
+fn test_generate_robots_txt_custom_rules() {
+    let tmp = TempDir::new().unwrap();
+    fs::create_dir_all(tmp.path().join("dist")).unwrap();
 
-        let config = SiteConfig {
-            site: SiteMeta {
-                name: "Test".into(),
-                base_url: "https://example.com".into(),
-                seo: SiteSeoConfig::default(),
-                schema: SiteSchemaConfig::default(),
+    let robots = RobotsConfig {
+        enabled: true,
+        sitemap: true,
+        extra_sitemaps: Vec::new(),
+        rules: vec![
+            RobotsRule {
+                user_agent: "*".into(),
+                allow: vec!["/".into()],
+                disallow: vec!["/admin/".into()],
             },
-            build: BuildConfig::default(),
-            assets: Default::default(),
-            sources: HashMap::new(),
-            plugins: HashMap::new(),
-            feed: HashMap::new(),
-            robots: None,
-            audit: None,
-        };
-        generate_robots_txt(&dist, &config).unwrap();
+            RobotsRule {
+                user_agent: "Googlebot".into(),
+                allow: vec![],
+                disallow: vec!["/".into()],
+            },
+        ],
+        ..Default::default()
+    };
+    let config = test_config_with_robots(robots);
+    write(tmp.path(), &tmp.path().join("dist"), &config).unwrap();
 
-        // No file should be written.
-        assert!(!dist.join("robots.txt").exists());
-    }
-
-    #[test]
-    fn test_generate_robots_txt_custom_rules() {
-        let tmp = TempDir::new().unwrap();
-        let dist = tmp.path().join("dist");
-        fs::create_dir_all(&dist).unwrap();
-
-        let robots = RobotsConfig {
-            sitemap: true,
-            extra_sitemaps: Vec::new(),
-            rules: vec![
-                RobotsRule {
-                    user_agent: "*".into(),
-                    allow: vec!["/".into()],
-                    disallow: vec!["/admin/".into()],
-                },
-                RobotsRule {
-                    user_agent: "BadBot".into(),
-                    allow: Vec::new(),
-                    disallow: vec!["/".into()],
-                },
-            ],
-        };
-        let config = test_config_with_robots(robots);
-        generate_robots_txt(&dist, &config).unwrap();
-
-        let content = fs::read_to_string(dist.join("robots.txt")).unwrap();
-        assert!(content.contains("User-agent: *"));
-        assert!(content.contains("Disallow: /admin/"));
-        assert!(content.contains("User-agent: BadBot"));
-        assert!(content.contains("Sitemap:"));
-    }
+    let content = fs::read_to_string(tmp.path().join("dist/robots.txt")).unwrap();
+    assert!(content.contains("User-agent: *"));
+    assert!(content.contains("User-agent: Googlebot"));
+    assert!(content.contains("Disallow: /admin/"));
+    assert!(content.contains("Sitemap:"));
 }

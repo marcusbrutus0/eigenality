@@ -8,6 +8,8 @@ fragment_dir = "_fragments"
 content_block = "content"
 not_found = true
 
+clean_urls = false 
+    
 [sources.blog_api]
 url = "https://jsonplaceholder.typicode.com"
 headers = {}

@@ -179,11 +179,14 @@ mod tests {
                 base_url: "https://test.com".into(),
                 seo: SiteSeoConfig::default(),
                 schema: SiteSchemaConfig::default(),
+                extra: std::collections::HashMap::new(),
             },
             build: BuildConfig {
                 fragments: false,
                 ..Default::default()
             },
+            sitemap: Default::default(),
+            robots: Default::default(),
             assets: Default::default(),
             sources: HashMap::new(),
             plugins: HashMap::new(),

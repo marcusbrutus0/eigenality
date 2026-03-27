@@ -52,6 +52,8 @@ fn build_feed_query(config: &FeedConfig) -> DataQuery {
         sort: config.sort.clone(),
         limit: Some(config.limit),
         filter: None,
+        method: Default::default(),
+        body: None,
     }
 }
 
@@ -306,6 +308,7 @@ mod tests {
             base_url: "https://example.com".into(),
             seo: SiteSeoConfig::default(),
             schema: SiteSchemaConfig::default(),
+            extra: std::collections::HashMap::new(),
         }
     }
 

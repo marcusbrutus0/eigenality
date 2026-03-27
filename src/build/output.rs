@@ -64,6 +64,10 @@ pub fn copy_static_assets(
             std::fs::create_dir_all(&dst_path)
                 .wrap_err_with(|| format!("Failed to create directory {}", dst_path.display()))?;
         } else {
+            // Skip robots.txt — handled by the robots module.
+            if rel_path == std::path::Path::new("robots.txt") {
+                continue;
+            }
             // Ensure parent directory exists.
             if let Some(parent) = dst_path.parent() {
                 std::fs::create_dir_all(parent)
