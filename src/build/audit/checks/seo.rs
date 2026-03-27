@@ -26,8 +26,8 @@ pub fn site_checks(config: &SiteConfig, dist_path: &Path) -> Vec<Finding> {
         });
     }
 
-    // seo/robots-txt — check if config.robots is None.
-    if config.robots.is_none() {
+    // seo/robots-txt — check if robots.txt generation is disabled.
+    if !config.robots.enabled {
         results.push(Finding {
             id: "seo/robots-txt",
             category: Category::Seo,
@@ -306,6 +306,7 @@ mod tests {
             name = "Test"
             base_url = "https://example.com"
             [robots]
+            enabled = true
             "#,
         )
         .unwrap()

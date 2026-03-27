@@ -232,7 +232,6 @@ mod tests {
             analytics: None,
             plugins: HashMap::new(),
             feed: HashMap::new(),
-            robots: None,
             audit: None,
         }
     }

@@ -261,7 +261,6 @@ mod tests {
             sources: std::collections::HashMap::new(),
             plugins: std::collections::HashMap::new(),
             feed: std::collections::HashMap::new(),
-            robots: None,
             audit: None,
         };
 

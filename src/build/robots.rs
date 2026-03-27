@@ -22,7 +22,7 @@ pub fn write(project_root: &Path, dist_dir: &Path, config: &SiteConfig) -> Resul
             .wrap_err_with(|| format!("Failed to copy robots.txt to {}", dest.display()))?;
         tracing::info!("Copying robots.txt... ✓");
     } else if !config.robots.rules.is_empty() {
-        let content = build_content(&config.robots, &config.site.base_url);
+        let content = build_robots_content(&config.robots, &config.site.base_url);
         std::fs::write(&dest, &content)
             .wrap_err_with(|| format!("Failed to write robots.txt to {}", dest.display()))?;
         tracing::info!("Generating robots.txt from config... ✓");
@@ -98,11 +98,14 @@ mod tests {
     use std::fs;
     use tempfile::TempDir;
 
-    fn test_config_with_robots(robots: RobotsConfig) -> SiteConfig {
+    fn make_config(robots: RobotsConfig) -> SiteConfig {
         SiteConfig {
             site: SiteMeta {
                 name: "Test".into(),
                 base_url: "https://example.com".into(),
+                seo: SiteSeoConfig::default(),
+                schema: SiteSchemaConfig::default(),
+                extra: HashMap::new(),
             },
             build: BuildConfig::default(),
             sitemap: SitemapConfig::default(),
@@ -111,6 +114,8 @@ mod tests {
             sources: HashMap::new(),
             analytics: None,
             plugins: HashMap::new(),
+            feed: HashMap::new(),
+            audit: None,
         }
     }
 
@@ -233,22 +238,30 @@ mod tests {
         let config = make_config(RobotsConfig {
             enabled: true,
             sitemap: false,
-                seo: SiteSeoConfig::default(),
-                schema: SiteSchemaConfig::default(),
-                extra: std::collections::HashMap::new(),
-            },
-            build: BuildConfig::default(),
-            assets: Default::default(),
-            sources: HashMap::new(),
-            plugins: HashMap::new(),
-            feed: HashMap::new(),
-            robots: Some(robots),
-            audit: None,
-        }
+            rules: vec![
+                RobotsRule {
+                    user_agent: "*".into(),
+                    allow: vec!["/".into()],
+                    disallow: vec!["/admin/".into()],
+                },
+                RobotsRule {
+                    user_agent: "Googlebot".into(),
+                    allow: vec![],
+                    disallow: vec!["/".into()],
+                },
+            ],
+            ..Default::default()
+        });
+        write(tmp.path(), &tmp.path().join("dist"), &config).unwrap();
+        let content = fs::read_to_string(tmp.path().join("dist/robots.txt")).unwrap();
+        assert!(content.contains("User-agent: *"));
+        assert!(content.contains("User-agent: Googlebot"));
+        assert!(content.contains("Disallow: /admin/"));
     }
 
     fn default_robots() -> RobotsConfig {
         RobotsConfig {
+            enabled: true,
             sitemap: true,
             extra_sitemaps: Vec::new(),
             rules: vec![RobotsRule {
@@ -288,6 +301,7 @@ mod tests {
                     disallow: Vec::new(),
                 },
             ],
+            ..Default::default()
         };
         let content = build_robots_content(&robots, "https://example.com");
         assert!(content.contains("User-agent: *\nAllow: /\nDisallow: /admin/\nDisallow: /private/\n"));
@@ -305,6 +319,7 @@ mod tests {
                 allow: vec!["/".into()],
                 disallow: Vec::new(),
             }],
+            ..Default::default()
         };
         let content = build_robots_content(&robots, "https://example.com");
         assert!(!content.contains("Sitemap:"));
@@ -320,6 +335,7 @@ mod tests {
                 allow: vec!["/".into()],
                 disallow: Vec::new(),
             }],
+            ..Default::default()
         };
         let content = build_robots_content(&robots, "https://example.com");
         assert!(content.contains("Sitemap: https://example.com/sitemap.xml\n"));
@@ -345,6 +361,7 @@ mod tests {
                 allow: Vec::new(),
                 disallow: vec!["/secret/".into()],
             }],
+            ..Default::default()
         };
         let content = build_robots_content(&robots, "https://example.com");
         assert!(content.contains("User-agent: *\nDisallow: /secret/\n"));
@@ -357,6 +374,7 @@ mod tests {
             sitemap: true,
             extra_sitemaps: Vec::new(),
             rules: Vec::new(),
+            ..Default::default()
         };
         let content = build_robots_content(&robots, "https://example.com");
         assert!(!content.contains("User-agent:"));
@@ -392,52 +410,52 @@ mod tests {
         );
     }
 
-    // --- generate_robots_txt (integration with filesystem) ---
+    // --- write (integration with filesystem) ---
 
     #[test]
-    fn test_generate_robots_txt_default() {
+    fn test_write_default() {
         let tmp = TempDir::new().unwrap();
-        let dist = tmp.path().join("dist");
-        fs::create_dir_all(&dist).unwrap();
+        fs::create_dir_all(tmp.path().join("dist")).unwrap();
 
-        let config = test_config_with_robots(default_robots());
+        let config = make_config(default_robots());
         write(tmp.path(), &tmp.path().join("dist"), &config).unwrap();
 
-        let content = fs::read_to_string(dist.join("robots.txt")).unwrap();
+        let content = fs::read_to_string(tmp.path().join("dist/robots.txt")).unwrap();
         assert!(content.contains("User-agent: *"));
         assert!(content.contains("Allow: /"));
         assert!(content.contains("Sitemap: https://example.com/sitemap.xml"));
     }
 
-#[test]
-fn test_generate_robots_txt_custom_rules() {
-    let tmp = TempDir::new().unwrap();
-    fs::create_dir_all(tmp.path().join("dist")).unwrap();
+    #[test]
+    fn test_write_custom_rules() {
+        let tmp = TempDir::new().unwrap();
+        fs::create_dir_all(tmp.path().join("dist")).unwrap();
 
-    let robots = RobotsConfig {
-        enabled: true,
-        sitemap: true,
-        extra_sitemaps: Vec::new(),
-        rules: vec![
-            RobotsRule {
-                user_agent: "*".into(),
-                allow: vec!["/".into()],
-                disallow: vec!["/admin/".into()],
-            },
-            RobotsRule {
-                user_agent: "Googlebot".into(),
-                allow: vec![],
-                disallow: vec!["/".into()],
-            },
-        ],
-        ..Default::default()
-    };
-    let config = test_config_with_robots(robots);
-    write(tmp.path(), &tmp.path().join("dist"), &config).unwrap();
+        let robots = RobotsConfig {
+            enabled: true,
+            sitemap: true,
+            extra_sitemaps: Vec::new(),
+            rules: vec![
+                RobotsRule {
+                    user_agent: "*".into(),
+                    allow: vec!["/".into()],
+                    disallow: vec!["/admin/".into()],
+                },
+                RobotsRule {
+                    user_agent: "Googlebot".into(),
+                    allow: vec![],
+                    disallow: vec!["/".into()],
+                },
+            ],
+            ..Default::default()
+        };
+        let config = make_config(robots);
+        write(tmp.path(), &tmp.path().join("dist"), &config).unwrap();
 
-    let content = fs::read_to_string(tmp.path().join("dist/robots.txt")).unwrap();
-    assert!(content.contains("User-agent: *"));
-    assert!(content.contains("User-agent: Googlebot"));
-    assert!(content.contains("Disallow: /admin/"));
-    assert!(content.contains("Sitemap:"));
+        let content = fs::read_to_string(tmp.path().join("dist/robots.txt")).unwrap();
+        assert!(content.contains("User-agent: *"));
+        assert!(content.contains("User-agent: Googlebot"));
+        assert!(content.contains("Disallow: /admin/"));
+        assert!(content.contains("Sitemap:"));
+    }
 }
