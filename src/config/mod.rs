@@ -28,11 +28,6 @@ pub struct SiteConfig {
     /// with its feed-specific config table.
     #[serde(default)]
     pub feed: HashMap<String, FeedConfig>,
-    /// robots.txt generation configuration.
-    /// When present, a robots.txt file is generated during build.
-    /// When absent (`None`), no robots.txt is generated.
-    #[serde(default)]
-    pub robots: Option<RobotsConfig>,
     /// Audit configuration for post-build HTML quality checks.
     /// When present, checks are run after rendering.
     #[serde(default)]
@@ -81,6 +76,13 @@ pub struct BuildConfig {
     /// `index.html` for directory requests. Default: false.
     #[serde(default)]
     pub clean_urls: bool,
+    /// Whether to strip `.html` extensions from generated links.
+    /// When enabled, `link_to()` emits `/about` instead of `/about.html`,
+    /// `page.current_url` is cleaned, and sitemap URLs use clean paths.
+    /// Designed for deployment targets like Cloudflare that resolve
+    /// `/about` to `about.html` automatically. Default: false.
+    #[serde(default)]
+    pub clean_links: bool,
     /// Critical CSS inlining configuration.
     #[serde(default)]
     pub critical_css: CriticalCssConfig,
@@ -114,6 +116,7 @@ impl Default for BuildConfig {
             oob_blocks: Vec::new(),
             minify: true,
             clean_urls: false,
+            clean_links: false,
             critical_css: CriticalCssConfig::default(),
             hints: HintsConfig::default(),
             content_hash: ContentHashConfig::default(),
@@ -602,40 +605,6 @@ fn default_slug_field() -> String {
     "slug".to_string()
 }
 
-/// Configuration for robots.txt generation.
-///
-/// Located under `[robots]` in site.toml. When present (even as an
-/// empty table), a robots.txt file is generated during build.
-#[derive(Debug, Clone, Deserialize)]
-pub struct RobotsConfig {
-    /// Whether to include a `Sitemap:` directive for the generated sitemap.xml.
-    #[serde(default = "default_true")]
-    pub sitemap: bool,
-
-    /// Additional absolute sitemap URLs to include as `Sitemap:` directives.
-    #[serde(default)]
-    pub extra_sitemaps: Vec<String>,
-
-    /// Rule groups. Defaults to a single rule allowing all crawlers.
-    #[serde(default = "default_robots_rules")]
-    pub rules: Vec<RobotsRule>,
-}
-
-/// A single user-agent rule group in robots.txt.
-#[derive(Debug, Clone, Deserialize)]
-pub struct RobotsRule {
-    /// The user-agent string, e.g. `"*"` or `"Googlebot"`.
-    pub user_agent: String,
-
-    /// Paths to allow.
-    #[serde(default)]
-    pub allow: Vec<String>,
-
-    /// Paths to disallow.
-    #[serde(default)]
-    pub disallow: Vec<String>,
-}
-
 /// Audit configuration for post-build HTML quality checks.
 ///
 /// Located under `[audit]` in site.toml. When present, the build will
@@ -646,14 +615,6 @@ pub struct AuditConfig {
     /// Check IDs to ignore (e.g. `["seo-title", "perf-image-size"]`).
     #[serde(default)]
     pub ignore: Vec<String>,
-}
-
-fn default_robots_rules() -> Vec<RobotsRule> {
-    vec![RobotsRule {
-        user_agent: "*".to_string(),
-        allow: vec!["/".to_string()],
-        disallow: Vec::new(),
-    }]
 }
 
 /// Site-level SEO defaults for Open Graph and Twitter Card meta tags.
@@ -873,12 +834,11 @@ fn validate_feed_configs(config: &SiteConfig) -> Result<()> {
 
 /// Validate robots.txt configuration.
 fn validate_robots_config(config: &SiteConfig) -> Result<()> {
-    let robots = match &config.robots {
-        Some(r) => r,
-        None => return Ok(()),
-    };
+    if !config.robots.enabled {
+        return Ok(());
+    }
 
-    for (i, rule) in robots.rules.iter().enumerate() {
+    for (i, rule) in config.robots.rules.iter().enumerate() {
         if rule.user_agent.is_empty() {
             bail!(
                 "robots.rules[{}] has an empty `user_agent`. \
@@ -897,7 +857,7 @@ fn validate_robots_config(config: &SiteConfig) -> Result<()> {
         }
     }
 
-    for (i, url) in robots.extra_sitemaps.iter().enumerate() {
+    for (i, url) in config.robots.extra_sitemaps.iter().enumerate() {
         if !url.starts_with("http://") && !url.starts_with("https://") {
             bail!(
                 "robots.extra_sitemaps[{}] = '{}' is not an absolute URL. \
@@ -1726,7 +1686,7 @@ name = "No Robots"
 base_url = "https://example.com"
 "#;
         let config = parse_toml(toml_str).unwrap();
-        assert!(config.robots.is_none());
+        assert!(!config.robots.enabled);
     }
 
     #[test]
@@ -1739,14 +1699,10 @@ base_url = "https://example.com"
 [robots]
 "#;
         let config = parse_toml(toml_str).unwrap();
-        assert!(config.robots.is_some());
-        let robots = config.robots.unwrap();
-        assert!(robots.sitemap);
-        assert!(robots.extra_sitemaps.is_empty());
-        assert_eq!(robots.rules.len(), 1);
-        assert_eq!(robots.rules[0].user_agent, "*");
-        assert_eq!(robots.rules[0].allow, vec!["/"]);
-        assert!(robots.rules[0].disallow.is_empty());
+        assert!(!config.robots.enabled);
+        assert!(config.robots.sitemap);
+        assert!(config.robots.extra_sitemaps.is_empty());
+        assert!(config.robots.rules.is_empty());
     }
 
     #[test]
@@ -1770,16 +1726,15 @@ user_agent = "BadBot"
 disallow = ["/"]
 "#;
         let config = parse_toml(toml_str).unwrap();
-        let robots = config.robots.unwrap();
-        assert!(robots.sitemap);
-        assert_eq!(robots.extra_sitemaps, vec!["https://example.com/news-sitemap.xml"]);
-        assert_eq!(robots.rules.len(), 2);
-        assert_eq!(robots.rules[0].user_agent, "*");
-        assert_eq!(robots.rules[0].allow, vec!["/"]);
-        assert_eq!(robots.rules[0].disallow, vec!["/admin/", "/private/"]);
-        assert_eq!(robots.rules[1].user_agent, "BadBot");
-        assert!(robots.rules[1].allow.is_empty());
-        assert_eq!(robots.rules[1].disallow, vec!["/"]);
+        assert!(config.robots.sitemap);
+        assert_eq!(config.robots.extra_sitemaps, vec!["https://example.com/news-sitemap.xml"]);
+        assert_eq!(config.robots.rules.len(), 2);
+        assert_eq!(config.robots.rules[0].user_agent, "*");
+        assert_eq!(config.robots.rules[0].allow, vec!["/"]);
+        assert_eq!(config.robots.rules[0].disallow, vec!["/admin/", "/private/"]);
+        assert_eq!(config.robots.rules[1].user_agent, "BadBot");
+        assert!(config.robots.rules[1].allow.is_empty());
+        assert_eq!(config.robots.rules[1].disallow, vec!["/"]);
     }
 
     #[test]
@@ -1793,8 +1748,7 @@ base_url = "https://example.com"
 sitemap = false
 "#;
         let config = parse_toml(toml_str).unwrap();
-        let robots = config.robots.unwrap();
-        assert!(!robots.sitemap);
+        assert!(!config.robots.sitemap);
     }
 
     #[test]
@@ -1814,8 +1768,7 @@ allow = ["/public/"]
 disallow = ["/private/"]
 "#;
         let config = parse_toml(toml_str).unwrap();
-        let robots = config.robots.unwrap();
-        assert_eq!(robots.rules.len(), 2);
+        assert_eq!(config.robots.rules.len(), 2);
     }
 
     #[test]
@@ -1824,6 +1777,9 @@ disallow = ["/private/"]
 [site]
 name = "Bad Robots"
 base_url = "https://example.com"
+
+[robots]
+enabled = true
 
 [[robots.rules]]
 user_agent = ""
@@ -1888,6 +1844,7 @@ name = "Bad Sitemap URL"
 base_url = "https://example.com"
 
 [robots]
+enabled = true
 extra_sitemaps = ["/sitemap-news.xml"]
 "#;
         let config = parse_toml(toml_str).unwrap();
