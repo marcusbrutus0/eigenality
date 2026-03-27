@@ -8,6 +8,7 @@ use std::path::Path;
 
 use crate::config::SiteConfig;
 
+use super::clean_link::to_clean_link;
 use super::render::RenderedPage;
 
 /// Generate `sitemap.xml` and write it to `dist/sitemap.xml`.
@@ -35,7 +36,9 @@ pub fn generate_sitemap(
             "0.8"
         };
 
-        let url_path = if clean_urls {
+        let url_path = if config.build.clean_links {
+            to_clean_link(&normalize_url_path(&page.url_path))
+        } else if clean_urls {
             to_clean_url(&page.url_path)
         } else {
             normalize_url_path(&page.url_path)
@@ -112,7 +115,6 @@ mod tests {
             analytics: None,
             plugins: HashMap::new(),
             feed: HashMap::new(),
-            robots: None,
             audit: None,
         }
     }
@@ -224,6 +226,72 @@ mod tests {
         // Should not have double slash.
         assert!(xml.contains("https://example.com/about.html"));
         assert!(!xml.contains("https://example.com//about.html"));
+    }
+
+    #[test]
+    fn test_sitemap_clean_links() {
+        let tmp = TempDir::new().unwrap();
+        let dist = tmp.path().join("dist");
+        fs::create_dir_all(&dist).unwrap();
+
+        let mut config = test_config();
+        config.build.clean_links = true;
+
+        let pages = vec![
+            RenderedPage {
+                url_path: "/index.html".into(),
+                is_index: true,
+                is_dynamic: false,
+                template_path: None,
+            },
+            RenderedPage {
+                url_path: "/about.html".into(),
+                is_index: false,
+                is_dynamic: false,
+                template_path: None,
+            },
+            RenderedPage {
+                url_path: "/posts/hello.html".into(),
+                is_index: false,
+                is_dynamic: true,
+                template_path: None,
+            },
+        ];
+
+        generate_sitemap(&dist, &pages, &config, "2024-01-01").unwrap();
+
+        let xml = fs::read_to_string(dist.join("sitemap.xml")).unwrap();
+        assert!(xml.contains("https://example.com/"), "root should be /");
+        assert!(xml.contains("https://example.com/about"), "about should be clean");
+        assert!(!xml.contains("about.html"), "should not contain .html");
+        assert!(xml.contains("https://example.com/posts/hello"), "nested should be clean");
+    }
+
+    #[test]
+    fn test_sitemap_clean_links_overrides_clean_urls() {
+        let tmp = TempDir::new().unwrap();
+        let dist = tmp.path().join("dist");
+        fs::create_dir_all(&dist).unwrap();
+
+        let mut config = test_config();
+        config.build.clean_links = true;
+        config.sitemap.clean_urls = true;
+
+        let pages = vec![
+            RenderedPage {
+                url_path: "/about.html".into(),
+                is_index: false,
+                is_dynamic: false,
+                template_path: None,
+            },
+        ];
+
+        generate_sitemap(&dist, &pages, &config, "2024-01-01").unwrap();
+
+        let xml = fs::read_to_string(dist.join("sitemap.xml")).unwrap();
+        // clean_links produces /about (no trailing slash), not /about/ (clean_urls style).
+        assert!(xml.contains("https://example.com/about"));
+        assert!(!xml.contains("/about/"), "clean_links should override clean_urls — no trailing slash");
     }
 
     // -- Property-based tests (hegeltest) --
