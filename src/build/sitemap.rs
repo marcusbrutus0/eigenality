@@ -36,12 +36,13 @@ pub fn generate_sitemap(
             "0.8"
         };
 
-        let url_path = if config.build.clean_links {
-            to_clean_link(&normalize_url_path(&page.url_path))
+        let normalized = normalize_url_path(&page.url_path);
+        let url_path: std::borrow::Cow<'_, str> = if config.build.clean_links {
+            to_clean_link(&normalized)
         } else if clean_urls {
-            to_clean_url(&page.url_path)
+            to_clean_url(&normalized).into()
         } else {
-            normalize_url_path(&page.url_path)
+            normalized.into()
         };
         let url = format!("{}{}", base_url, url_path);
 

@@ -19,7 +19,6 @@ use crate::template::errors::TemplateError;
 
 use super::analytics;
 use super::bundling;
-use super::clean_link::to_clean_link;
 use super::content_hash;
 use super::context::{self, PageMeta};
 use super::critical_css;
@@ -397,18 +396,7 @@ fn render_static_page(
         .map(|f| f == "index.html")
         .unwrap_or(false);
 
-    let current_url = if config.build.clean_links {
-        to_clean_link(&url_path)
-    } else {
-        url_path.clone()
-    };
-
-    let meta = PageMeta {
-        current_url,
-        current_path: output_path.to_string_lossy().to_string(),
-        base_url: config.site.base_url.clone(),
-        build_time: build_time.to_string(),
-    };
+    let meta = PageMeta::new(&url_path, &output_path, config, build_time);
 
     let ctx = context::build_page_context(config, global_data, &page_data, meta, None);
 
@@ -716,18 +704,7 @@ fn render_dynamic_page(
         register_output_path(&url_path, &tmpl_name, output_paths)?;
 
         // Build context.
-        let current_url = if config.build.clean_links {
-            to_clean_link(&url_path)
-        } else {
-            url_path.clone()
-        };
-
-        let meta = PageMeta {
-            current_url,
-            current_path: output_path.to_string_lossy().to_string(),
-            base_url: config.site.base_url.clone(),
-            build_time: build_time.to_string(),
-        };
+        let meta = PageMeta::new(&url_path, &output_path, config, build_time);
 
         let ctx = context::build_page_context(
             config,

@@ -2,6 +2,8 @@
 //!
 //! Strips `.html` extensions from URL paths for clean link generation.
 
+use std::borrow::Cow;
+
 /// Strip `.html` extension from a URL path, producing a clean link.
 ///
 /// - `/about.html` → `/about`
@@ -9,24 +11,24 @@
 /// - `/about/index.html` → `/about`
 /// - `/index.html` → `/`
 /// - `/` → `/`
-/// - Non-`.html` paths pass through unchanged.
-pub fn to_clean_link(path: &str) -> String {
+/// - Non-`.html` paths pass through unchanged (zero-allocation).
+pub fn to_clean_link(path: &str) -> Cow<'_, str> {
     // Strip /index.html suffix → parent directory path.
     if let Some(prefix) = path.strip_suffix("/index.html") {
         return if prefix.is_empty() {
-            "/".to_string()
+            Cow::Borrowed("/")
         } else {
-            prefix.to_string()
+            Cow::Borrowed(prefix)
         };
     }
 
     // Strip .html extension.
     if let Some(without_ext) = path.strip_suffix(".html") {
-        return without_ext.to_string();
+        return Cow::Borrowed(without_ext);
     }
 
     // Non-.html paths pass through unchanged.
-    path.to_string()
+    Cow::Borrowed(path)
 }
 
 #[cfg(test)]

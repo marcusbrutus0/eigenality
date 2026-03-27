@@ -38,7 +38,7 @@ pub fn register_functions(
             let display_path = if clean_links {
                 to_clean_link(path)
             } else {
-                path.to_string()
+                std::borrow::Cow::Borrowed(path)
             };
 
             if !fragments_enabled {

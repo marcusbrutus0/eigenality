@@ -320,12 +320,7 @@ fn render_static_page_dev(
         .map(|f| f == "index.html")
         .unwrap_or(false);
 
-    let meta = PageMeta {
-        current_url: url_path.clone(),
-        current_path: output_path.to_string_lossy().to_string(),
-        base_url: config.site.base_url.clone(),
-        build_time: build_time.to_string(),
-    };
+    let meta = PageMeta::new(&url_path, &output_path, config, build_time);
 
     let ctx = context::build_page_context(config, global_data, &page_data, meta, None);
 
@@ -506,12 +501,7 @@ fn render_dynamic_page_dev(
             bail!("Duplicate output path '{}' in '{}'", url_path, tmpl_name);
         }
 
-        let meta = PageMeta {
-            current_url: url_path.clone(),
-            current_path: output_path.to_string_lossy().to_string(),
-            base_url: config.site.base_url.clone(),
-            build_time: build_time.to_string(),
-        };
+        let meta = PageMeta::new(&url_path, &output_path, config, build_time);
 
         let ctx =
             context::build_page_context(config, global_data, &item_data, meta, Some((item_as, item)));
