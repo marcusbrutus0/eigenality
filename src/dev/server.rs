@@ -205,10 +205,10 @@ fn build_router(
                 if !path.contains('.') && path != "/" {
                     let trimmed = path.trim_end_matches('/').trim_start_matches('/');
                     let html_file = format!("{}.html", trimmed);
-                    if dist.join(&html_file).is_file() {
-                        if let Ok(new_uri) = format!("/{}", html_file).parse::<axum::http::Uri>() {
-                            *req.uri_mut() = new_uri;
-                        }
+                    if dist.join(&html_file).is_file()
+                        && let Ok(new_uri) = format!("/{}", html_file).parse::<axum::http::Uri>()
+                    {
+                        *req.uri_mut() = new_uri;
                     }
                 }
                 next.run(req).await
