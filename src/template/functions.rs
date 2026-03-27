@@ -11,6 +11,7 @@ use std::sync::Arc;
 use minijinja::Environment;
 use minijinja::Value;
 
+use crate::build::clean_link::to_clean_link;
 use crate::build::content_hash::AssetManifest;
 use crate::config::SiteConfig;
 
@@ -23,6 +24,7 @@ pub fn register_functions(
     let fragment_dir = config.build.fragment_dir.clone();
     let fragments_enabled = config.build.fragments;
     let content_block = config.build.content_block.clone();
+    let clean_links = config.build.clean_links;
 
     // link_to(path, target?, block?)
     env.add_function(
@@ -33,9 +35,14 @@ pub fn register_functions(
               -> String {
             let target = target.unwrap_or("#content");
 
+            let display_path = if clean_links {
+                to_clean_link(path)
+            } else {
+                path.to_string()
+            };
+
             if !fragments_enabled {
-                // Without fragments, just return a plain href.
-                return format!(r#"href="{}""#, path);
+                return format!(r#"href="{}""#, display_path);
             }
 
             let block_name = block.unwrap_or(&content_block);
@@ -43,7 +50,7 @@ pub fn register_functions(
 
             format!(
                 r#"href="{path}" hx-get="{fragment_path}" hx-target="{target}" hx-push-url="{path}""#,
-                path = path,
+                path = display_path,
                 fragment_path = fragment_path,
                 target = target,
             )
@@ -147,7 +154,6 @@ mod tests {
             analytics: None,
             plugins: HashMap::new(),
             feed: HashMap::new(),
-            robots: None,
             audit: None,
         }
     }
@@ -172,7 +178,6 @@ mod tests {
             analytics: None,
             plugins: HashMap::new(),
             feed: HashMap::new(),
-            robots: None,
             audit: None,
         }
     }
@@ -412,5 +417,69 @@ mod tests {
         let tmpl = env.get_template("test").unwrap();
         let result = tmpl.render(context! {}).unwrap();
         assert_eq!(result.trim(), "/css/style.abc123.css");
+    }
+
+    #[test]
+    fn test_link_to_clean_links_enabled() {
+        let mut env = Environment::new();
+        let mut config = test_config();
+        config.build.clean_links = true;
+        register_functions(&mut env, &config, None);
+
+        env.add_template("test", r##"<a {{ link_to("/about.html") }}>About</a>"##)
+            .unwrap();
+        let tmpl = env.get_template("test").unwrap();
+        let result = tmpl.render(context! {}).unwrap();
+
+        assert!(result.contains(r##"href="/about""##));
+        assert!(result.contains(r##"hx-get="/_fragments/about.html""##));
+        assert!(result.contains(r##"hx-push-url="/about""##));
+    }
+
+    #[test]
+    fn test_link_to_clean_links_index() {
+        let mut env = Environment::new();
+        let mut config = test_config();
+        config.build.clean_links = true;
+        register_functions(&mut env, &config, None);
+
+        env.add_template("test", r##"{{ link_to("/index.html") }}"##)
+            .unwrap();
+        let tmpl = env.get_template("test").unwrap();
+        let result = tmpl.render(context! {}).unwrap();
+
+        assert!(result.contains(r##"href="/""##));
+        assert!(result.contains(r##"hx-push-url="/""##));
+    }
+
+    #[test]
+    fn test_link_to_clean_links_already_clean() {
+        let mut env = Environment::new();
+        let mut config = test_config();
+        config.build.clean_links = true;
+        register_functions(&mut env, &config, None);
+
+        env.add_template("test", r##"{{ link_to("/about") }}"##)
+            .unwrap();
+        let tmpl = env.get_template("test").unwrap();
+        let result = tmpl.render(context! {}).unwrap();
+
+        assert!(result.contains(r##"href="/about""##));
+        assert!(result.contains(r##"hx-push-url="/about""##));
+    }
+
+    #[test]
+    fn test_link_to_clean_links_no_fragments() {
+        let mut env = Environment::new();
+        let mut config = test_config_no_fragments();
+        config.build.clean_links = true;
+        register_functions(&mut env, &config, None);
+
+        env.add_template("test", r##"{{ link_to("/about.html") }}"##)
+            .unwrap();
+        let tmpl = env.get_template("test").unwrap();
+        let result = tmpl.render(context! {}).unwrap();
+
+        assert_eq!(result.trim(), r##"href="/about""##);
     }
 }
