@@ -19,6 +19,7 @@ use crate::template::errors::TemplateError;
 
 use super::analytics;
 use super::bundling;
+use super::clean_link::to_clean_link;
 use super::content_hash;
 use super::context::{self, PageMeta};
 use super::critical_css;
@@ -236,11 +237,6 @@ pub fn build(project_root: &Path, dev: bool) -> Result<()> {
         robots::write(project_root, &dist_dir, &config)?;
     }
 
-    // Generate robots.txt.
-    if config.robots.is_some() {
-        robots::generate_robots_txt(&dist_dir, &config)?;
-        tracing::info!("Generating robots.txt... done");
-    }
 
     // Generate Atom feeds.
     if !config.feed.is_empty() {
@@ -383,7 +379,8 @@ fn render_static_page(
     let page_data = data::resolve_page_data(&page.frontmatter, fetcher, Some(plugin_registry))
         .wrap_err_with(|| format!("Failed to resolve data for template '{}'", tmpl_name))?;
 
-    let output_path = if config.build.clean_urls && page.template_path.file_stem().unwrap_or_default() != "index" {
+    let stem = page.template_path.file_stem().unwrap_or_default();
+    let output_path = if config.build.clean_urls && stem != "index" && stem != "404" {
         page.output_dir.join(page.template_path.file_stem().unwrap_or_default()).join("index.html")
     } else {
         page.output_dir.join(page.template_path.file_name().unwrap_or_default())
@@ -400,8 +397,14 @@ fn render_static_page(
         .map(|f| f == "index.html")
         .unwrap_or(false);
 
+    let current_url = if config.build.clean_links {
+        to_clean_link(&url_path)
+    } else {
+        url_path.clone()
+    };
+
     let meta = PageMeta {
-        current_url: url_path.clone(),
+        current_url,
         current_path: output_path.to_string_lossy().to_string(),
         base_url: config.site.base_url.clone(),
         build_time: build_time.to_string(),
@@ -713,8 +716,14 @@ fn render_dynamic_page(
         register_output_path(&url_path, &tmpl_name, output_paths)?;
 
         // Build context.
+        let current_url = if config.build.clean_links {
+            to_clean_link(&url_path)
+        } else {
+            url_path.clone()
+        };
+
         let meta = PageMeta {
-            current_url: url_path.clone(),
+            current_url,
             current_path: output_path.to_string_lossy().to_string(),
             base_url: config.site.base_url.clone(),
             build_time: build_time.to_string(),
@@ -1661,14 +1670,12 @@ fragments = false
         let tmp = TempDir::new().unwrap();
         let root = tmp.path();
         setup_minimal_project(root);
-        build(root).unwrap();
+        build(root, false).unwrap();
         assert!(root.join("dist/sitemap.xml").exists());
     }
 
     #[test]
     fn test_sitemap_disabled() {
-    #[test]
-    fn test_build_with_critical_css() {
         let tmp = TempDir::new().unwrap();
         let root = tmp.path();
 
@@ -1690,7 +1697,7 @@ enabled = false
         write(root, "templates/_base.html", "<html>{% block content %}{% endblock %}</html>");
         write(root, "templates/index.html", "{% extends \"_base.html\" %}{% block content %}hi{% endblock %}");
 
-        build(root).unwrap();
+        build(root, false).unwrap();
         assert!(!root.join("dist/sitemap.xml").exists());
     }
 
@@ -1719,7 +1726,7 @@ clean_urls = true
         write(root, "templates/index.html", "{% extends \"_base.html\" %}{% block content %}hi{% endblock %}");
         write(root, "templates/about.html", "{% extends \"_base.html\" %}{% block content %}about{% endblock %}");
 
-        build(root).unwrap();
+        build(root, false).unwrap();
 
         let sitemap = fs::read_to_string(root.join("dist/sitemap.xml")).unwrap();
         assert!(sitemap.contains("https://test.com/"));
@@ -1734,12 +1741,181 @@ clean_urls = true
         let tmp = TempDir::new().unwrap();
         let root = tmp.path();
         setup_minimal_project(root);
-        build(root).unwrap();
+        build(root, false).unwrap();
         assert!(!root.join("dist/robots.txt").exists());
     }
 
     #[test]
     fn test_robots_generates_default() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path();
+
+        write(
+            root,
+            "site.toml",
+            r#"
+[site]
+name = "Test"
+base_url = "https://test.com"
+
+[build]
+minify = false
+
+[robots]
+enabled = true
+"#,
+        );
+        write(root, "templates/_base.html", "<html>{% block content %}{% endblock %}</html>");
+        write(root, "templates/index.html", "{% extends \"_base.html\" %}{% block content %}hi{% endblock %}");
+
+        build(root, false).unwrap();
+
+        let robots = fs::read_to_string(root.join("dist/robots.txt")).unwrap();
+        assert!(robots.contains("User-agent: *"));
+        assert!(robots.contains("Allow: /"));
+    }
+
+    #[test]
+    fn test_robots_copies_custom_from_static() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path();
+
+        write(
+            root,
+            "site.toml",
+            r#"
+[site]
+name = "Test"
+base_url = "https://test.com"
+
+[build]
+minify = false
+
+[robots]
+enabled = true
+"#,
+        );
+        write(root, "templates/_base.html", "<html>{% block content %}{% endblock %}</html>");
+        write(root, "templates/index.html", "{% extends \"_base.html\" %}{% block content %}hi{% endblock %}");
+        write(root, "static/robots.txt", "User-agent: *\nDisallow: /secret/\n");
+
+        build(root, false).unwrap();
+
+        let robots = fs::read_to_string(root.join("dist/robots.txt")).unwrap();
+        assert!(robots.contains("Disallow: /secret/"));
+        assert!(!robots.contains("Allow: /"));
+    }
+
+    #[test]
+    fn test_robots_generated_from_rules() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path();
+
+        write(
+            root,
+            "site.toml",
+            r#"
+[site]
+name = "Test"
+base_url = "https://test.com"
+
+[build]
+minify = false
+
+[robots]
+enabled = true
+sitemap = false
+
+[[robots.rules]]
+user_agent = "*"
+allow = ["/"]
+disallow = ["/admin/"]
+"#,
+        );
+        write(root, "templates/_base.html", "<html>{% block content %}{% endblock %}</html>");
+        write(root, "templates/index.html", "{% extends \"_base.html\" %}{% block content %}hi{% endblock %}");
+
+        build(root, false).unwrap();
+
+        let robots = fs::read_to_string(root.join("dist/robots.txt")).unwrap();
+        assert!(robots.contains("User-agent: *"));
+        assert!(robots.contains("Allow: /"));
+        assert!(robots.contains("Disallow: /admin/"));
+    }
+
+    #[test]
+    fn test_robots_static_wins_over_rules() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path();
+
+        write(
+            root,
+            "site.toml",
+            r#"
+[site]
+name = "Test"
+base_url = "https://test.com"
+
+[build]
+minify = false
+
+[robots]
+enabled = true
+
+[[robots.rules]]
+user_agent = "*"
+disallow = ["/from-config/"]
+"#,
+        );
+        write(root, "templates/_base.html", "<html>{% block content %}{% endblock %}</html>");
+        write(root, "templates/index.html", "{% extends \"_base.html\" %}{% block content %}hi{% endblock %}");
+        write(root, "static/robots.txt", "User-agent: *\nDisallow: /from-static/\n");
+
+        build(root, false).unwrap();
+
+        let robots = fs::read_to_string(root.join("dist/robots.txt")).unwrap();
+        // static file wins
+        assert!(robots.contains("Disallow: /from-static/"));
+        assert!(!robots.contains("Disallow: /from-config/"));
+    }
+
+    #[test]
+    fn test_robots_not_copied_from_static_when_disabled() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path();
+
+        write(
+            root,
+            "site.toml",
+            r#"
+[site]
+name = "Test"
+base_url = "https://test.com"
+
+[build]
+minify = false
+"#,
+        );
+        write(root, "templates/_base.html", "<html>{% block content %}{% endblock %}</html>");
+        write(root, "templates/index.html", "{% extends \"_base.html\" %}{% block content %}hi{% endblock %}");
+        write(root, "static/robots.txt", "User-agent: *\nDisallow: /\n");
+
+        build(root, false).unwrap();
+
+        // robots disabled by default — file should not appear in dist even if in static/
+        assert!(!root.join("dist/robots.txt").exists());
+    }
+
+    #[test]
+    fn test_build_with_critical_css() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path();
+
+        write(
+            root,
+            "site.toml",
+            r#"
+[site]
 name = "Critical CSS Test"
 base_url = "https://test.com"
 
@@ -1802,155 +1978,6 @@ enabled = true
             "site.toml",
             r#"
 [site]
-name = "Test"
-base_url = "https://test.com"
-
-[build]
-minify = false
-
-[robots]
-enabled = true
-"#,
-        );
-        write(root, "templates/_base.html", "<html>{% block content %}{% endblock %}</html>");
-        write(root, "templates/index.html", "{% extends \"_base.html\" %}{% block content %}hi{% endblock %}");
-
-        build(root).unwrap();
-
-        let robots = fs::read_to_string(root.join("dist/robots.txt")).unwrap();
-        assert!(robots.contains("User-agent: *"));
-        assert!(robots.contains("Allow: /"));
-    }
-
-    #[test]
-    fn test_robots_copies_custom_from_static() {
-        let tmp = TempDir::new().unwrap();
-        let root = tmp.path();
-
-        write(
-            root,
-            "site.toml",
-            r#"
-[site]
-name = "Test"
-base_url = "https://test.com"
-
-[build]
-minify = false
-
-[robots]
-enabled = true
-"#,
-        );
-        write(root, "templates/_base.html", "<html>{% block content %}{% endblock %}</html>");
-        write(root, "templates/index.html", "{% extends \"_base.html\" %}{% block content %}hi{% endblock %}");
-        write(root, "static/robots.txt", "User-agent: *\nDisallow: /secret/\n");
-
-        build(root).unwrap();
-
-        let robots = fs::read_to_string(root.join("dist/robots.txt")).unwrap();
-        assert!(robots.contains("Disallow: /secret/"));
-        assert!(!robots.contains("Allow: /"));
-    }
-
-    #[test]
-    fn test_robots_generated_from_rules() {
-        let tmp = TempDir::new().unwrap();
-        let root = tmp.path();
-
-        write(
-            root,
-            "site.toml",
-            r#"
-[site]
-name = "Test"
-base_url = "https://test.com"
-
-[build]
-minify = false
-
-[robots]
-enabled = true
-sitemap = false
-
-[[robots.rules]]
-user_agent = "*"
-allow = ["/"]
-disallow = ["/admin/"]
-"#,
-        );
-        write(root, "templates/_base.html", "<html>{% block content %}{% endblock %}</html>");
-        write(root, "templates/index.html", "{% extends \"_base.html\" %}{% block content %}hi{% endblock %}");
-
-        build(root).unwrap();
-
-        let robots = fs::read_to_string(root.join("dist/robots.txt")).unwrap();
-        assert!(robots.contains("User-agent: *"));
-        assert!(robots.contains("Allow: /"));
-        assert!(robots.contains("Disallow: /admin/"));
-    }
-
-    #[test]
-    fn test_robots_static_wins_over_rules() {
-        let tmp = TempDir::new().unwrap();
-        let root = tmp.path();
-
-        write(
-            root,
-            "site.toml",
-            r#"
-[site]
-name = "Test"
-base_url = "https://test.com"
-
-[build]
-minify = false
-
-[robots]
-enabled = true
-
-[[robots.rules]]
-user_agent = "*"
-disallow = ["/from-config/"]
-"#,
-        );
-        write(root, "templates/_base.html", "<html>{% block content %}{% endblock %}</html>");
-        write(root, "templates/index.html", "{% extends \"_base.html\" %}{% block content %}hi{% endblock %}");
-        write(root, "static/robots.txt", "User-agent: *\nDisallow: /from-static/\n");
-
-        build(root).unwrap();
-
-        let robots = fs::read_to_string(root.join("dist/robots.txt")).unwrap();
-        // static file wins
-        assert!(robots.contains("Disallow: /from-static/"));
-        assert!(!robots.contains("Disallow: /from-config/"));
-    }
-
-    #[test]
-    fn test_robots_not_copied_from_static_when_disabled() {
-        let tmp = TempDir::new().unwrap();
-        let root = tmp.path();
-
-        write(
-            root,
-            "site.toml",
-            r#"
-[site]
-name = "Test"
-base_url = "https://test.com"
-
-[build]
-minify = false
-"#,
-        );
-        write(root, "templates/_base.html", "<html>{% block content %}{% endblock %}</html>");
-        write(root, "templates/index.html", "{% extends \"_base.html\" %}{% block content %}hi{% endblock %}");
-        write(root, "static/robots.txt", "User-agent: *\nDisallow: /\n");
-
-        build(root).unwrap();
-
-        // robots disabled by default — file should not appear in dist even if in static/
-        assert!(!root.join("dist/robots.txt").exists());
 name = "No Critical CSS"
 base_url = "https://test.com"
 
