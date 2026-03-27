@@ -10,3 +10,8 @@
 /.envrc.private
 /example_site/dist/
 .eigen_cache/
+
+# Dolt database files (added by bd init)
+.dolt/
+*.db
+/.claude/summaries/

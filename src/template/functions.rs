@@ -6,13 +6,20 @@
 //! - `current_year()` — returns the current year as a string
 //! - `asset(path)` — returns the path to a static asset (for future cache-busting)
 
+use std::sync::Arc;
+
 use minijinja::Environment;
 use minijinja::Value;
 
+use crate::build::content_hash::AssetManifest;
 use crate::config::SiteConfig;
 
 /// Register all custom functions on the given environment.
-pub fn register_functions(env: &mut Environment<'_>, config: &SiteConfig) {
+pub fn register_functions(
+    env: &mut Environment<'_>,
+    config: &SiteConfig,
+    manifest: Option<Arc<AssetManifest>>,
+) {
     let fragment_dir = config.build.fragment_dir.clone();
     let fragments_enabled = config.build.fragments;
     let content_block = config.build.content_block.clone();
@@ -49,13 +56,19 @@ pub fn register_functions(env: &mut Environment<'_>, config: &SiteConfig) {
     });
 
     // asset(path)
-    // For now this is a simple pass-through; in the future it could add
-    // cache-busting hashes.
-    env.add_function("asset", |path: &str| -> String {
-        if path.starts_with('/') {
+    // Returns the content-hashed path when a manifest is available,
+    // otherwise passes through unchanged.
+    let manifest_clone = manifest;
+    env.add_function("asset", move |path: &str| -> String {
+        let normalized = if path.starts_with('/') {
             path.to_string()
         } else {
             format!("/{}", path)
+        };
+
+        match &manifest_clone {
+            Some(m) => m.resolve(&normalized).to_string(),
+            None => normalized,
         }
     });
 
@@ -113,7 +126,7 @@ fn compute_fragment_path(page_path: &str, fragment_dir: &str, block: &str) -> St
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{BuildConfig, SiteMeta};
+    use crate::config::{BuildConfig, SiteSchemaConfig, SiteMeta, SiteSeoConfig};
     use minijinja::context;
     use std::collections::HashMap;
 
@@ -122,6 +135,8 @@ mod tests {
             site: SiteMeta {
                 name: "Test Site".into(),
                 base_url: "https://example.com".into(),
+                seo: SiteSeoConfig::default(),
+                schema: SiteSchemaConfig::default(),
             },
             build: BuildConfig {
                 fragments: true,
@@ -132,6 +147,9 @@ mod tests {
             assets: Default::default(),
             sources: HashMap::new(),
             plugins: HashMap::new(),
+            feed: HashMap::new(),
+            robots: None,
+            audit: None,
         }
     }
 
@@ -140,6 +158,8 @@ mod tests {
             site: SiteMeta {
                 name: "Test Site".into(),
                 base_url: "https://example.com".into(),
+                seo: SiteSeoConfig::default(),
+                schema: SiteSchemaConfig::default(),
             },
             build: BuildConfig {
                 fragments: false,
@@ -148,6 +168,9 @@ mod tests {
             assets: Default::default(),
             sources: HashMap::new(),
             plugins: HashMap::new(),
+            feed: HashMap::new(),
+            robots: None,
+            audit: None,
         }
     }
 
@@ -207,7 +230,7 @@ mod tests {
     fn test_link_to_default() {
         let mut env = Environment::new();
         let config = test_config();
-        register_functions(&mut env, &config);
+        register_functions(&mut env, &config, None);
 
         env.add_template("test", r##"<a {{ link_to("/about.html") }}>About</a>"##)
             .unwrap();
@@ -224,7 +247,7 @@ mod tests {
     fn test_link_to_custom_target() {
         let mut env = Environment::new();
         let config = test_config();
-        register_functions(&mut env, &config);
+        register_functions(&mut env, &config, None);
 
         env.add_template("test", r##"{{ link_to("/about.html", "#main") }}"##)
             .unwrap();
@@ -238,7 +261,7 @@ mod tests {
     fn test_link_to_custom_block() {
         let mut env = Environment::new();
         let config = test_config();
-        register_functions(&mut env, &config);
+        register_functions(&mut env, &config, None);
 
         env.add_template("test", r##"{{ link_to("/about.html", "#sidebar", "sidebar") }}"##)
             .unwrap();
@@ -252,7 +275,7 @@ mod tests {
     fn test_link_to_no_fragments() {
         let mut env = Environment::new();
         let config = test_config_no_fragments();
-        register_functions(&mut env, &config);
+        register_functions(&mut env, &config, None);
 
         env.add_template("test", r##"{{ link_to("/about.html") }}"##)
             .unwrap();
@@ -269,7 +292,7 @@ mod tests {
     fn test_current_year() {
         let mut env = Environment::new();
         let config = test_config();
-        register_functions(&mut env, &config);
+        register_functions(&mut env, &config, None);
 
         env.add_template("test", "{{ current_year() }}")
             .unwrap();
@@ -286,7 +309,7 @@ mod tests {
     fn test_asset_with_leading_slash() {
         let mut env = Environment::new();
         let config = test_config();
-        register_functions(&mut env, &config);
+        register_functions(&mut env, &config, None);
 
         env.add_template("test", "{{ asset('/css/style.css') }}")
             .unwrap();
@@ -299,7 +322,7 @@ mod tests {
     fn test_asset_without_leading_slash() {
         let mut env = Environment::new();
         let config = test_config();
-        register_functions(&mut env, &config);
+        register_functions(&mut env, &config, None);
 
         env.add_template("test", "{{ asset('css/style.css') }}")
             .unwrap();
@@ -314,12 +337,77 @@ mod tests {
     fn test_site_global() {
         let mut env = Environment::new();
         let config = test_config();
-        register_functions(&mut env, &config);
+        register_functions(&mut env, &config, None);
 
         env.add_template("test", "{{ site.name }} - {{ site.base_url }}")
             .unwrap();
         let tmpl = env.get_template("test").unwrap();
         let result = tmpl.render(context! {}).unwrap();
         assert_eq!(result.trim(), "Test Site - https://example.com");
+    }
+
+    // --- asset with manifest ---
+
+    #[test]
+    fn test_asset_with_manifest() {
+        let mut env = Environment::new();
+        let config = test_config();
+        let mut manifest = AssetManifest::new();
+        manifest.insert("/css/style.css".into(), "/css/style.abc123.css".into());
+        let manifest = Arc::new(manifest);
+
+        register_functions(&mut env, &config, Some(manifest));
+
+        env.add_template("test", "{{ asset('/css/style.css') }}")
+            .unwrap();
+        let tmpl = env.get_template("test").unwrap();
+        let result = tmpl.render(context! {}).unwrap();
+        assert_eq!(result.trim(), "/css/style.abc123.css");
+    }
+
+    #[test]
+    fn test_asset_without_manifest() {
+        let mut env = Environment::new();
+        let config = test_config();
+        register_functions(&mut env, &config, None);
+
+        env.add_template("test", "{{ asset('/css/style.css') }}")
+            .unwrap();
+        let tmpl = env.get_template("test").unwrap();
+        let result = tmpl.render(context! {}).unwrap();
+        assert_eq!(result.trim(), "/css/style.css");
+    }
+
+    #[test]
+    fn test_asset_unknown_path_with_manifest() {
+        let mut env = Environment::new();
+        let config = test_config();
+        let manifest = Arc::new(AssetManifest::new());
+
+        register_functions(&mut env, &config, Some(manifest));
+
+        env.add_template("test", "{{ asset('/unknown.css') }}")
+            .unwrap();
+        let tmpl = env.get_template("test").unwrap();
+        let result = tmpl.render(context! {}).unwrap();
+        assert_eq!(result.trim(), "/unknown.css");
+    }
+
+    #[test]
+    fn test_asset_normalizes_then_resolves() {
+        let mut env = Environment::new();
+        let config = test_config();
+        let mut manifest = AssetManifest::new();
+        manifest.insert("/css/style.css".into(), "/css/style.abc123.css".into());
+        let manifest = Arc::new(manifest);
+
+        register_functions(&mut env, &config, Some(manifest));
+
+        // Path without leading slash should be normalized and then resolved.
+        env.add_template("test", "{{ asset('css/style.css') }}")
+            .unwrap();
+        let tmpl = env.get_template("test").unwrap();
+        let result = tmpl.render(context! {}).unwrap();
+        assert_eq!(result.trim(), "/css/style.abc123.css");
     }
 }

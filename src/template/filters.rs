@@ -243,11 +243,16 @@ mod tests {
             site: crate::config::SiteMeta {
                 name: "Test".into(),
                 base_url: "https://example.com".into(),
+                seo: crate::config::SiteSeoConfig::default(),
+                schema: crate::config::SiteSchemaConfig::default(),
             },
             build: crate::config::BuildConfig::default(),
             assets: Default::default(),
             sources: std::collections::HashMap::new(),
             plugins: std::collections::HashMap::new(),
+            feed: std::collections::HashMap::new(),
+            robots: None,
+            audit: None,
         };
 
         let mut env = Environment::new();

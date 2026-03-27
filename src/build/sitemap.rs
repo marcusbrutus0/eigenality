@@ -60,7 +60,7 @@ fn normalize_url_path(path: &str) -> String {
 }
 
 /// Escape XML special characters.
-fn escape_xml(s: &str) -> String {
+pub(crate) fn escape_xml(s: &str) -> String {
     s.replace('&', "&amp;")
         .replace('<', "&lt;")
         .replace('>', "&gt;")
@@ -71,7 +71,7 @@ fn escape_xml(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{BuildConfig, SiteMeta};
+    use crate::config::{BuildConfig, SiteSchemaConfig, SiteMeta, SiteSeoConfig};
     use std::collections::HashMap;
     use std::fs;
     use tempfile::TempDir;
@@ -81,11 +81,16 @@ mod tests {
             site: SiteMeta {
                 name: "Test".into(),
                 base_url: "https://example.com".into(),
+                seo: SiteSeoConfig::default(),
+                schema: SiteSchemaConfig::default(),
             },
             build: BuildConfig::default(),
             assets: Default::default(),
             sources: HashMap::new(),
             plugins: HashMap::new(),
+            feed: HashMap::new(),
+            robots: None,
+            audit: None,
         }
     }
 
@@ -100,11 +105,13 @@ mod tests {
                 url_path: "/index.html".into(),
                 is_index: true,
                 is_dynamic: false,
+                template_path: None,
             },
             RenderedPage {
                 url_path: "/about.html".into(),
                 is_index: false,
                 is_dynamic: false,
+                template_path: None,
             },
         ];
 
@@ -131,6 +138,7 @@ mod tests {
                 url_path: "/posts/hello.html".into(),
                 is_index: false,
                 is_dynamic: true,
+                template_path: None,
             },
         ];
 
@@ -183,6 +191,7 @@ mod tests {
                 url_path: "/about.html".into(),
                 is_index: false,
                 is_dynamic: false,
+                template_path: None,
             },
         ];
 
