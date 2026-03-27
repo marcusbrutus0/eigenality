@@ -67,6 +67,12 @@ pub struct BuildConfig {
     /// Whether to minify HTML (including inline CSS and JS) output.
     #[serde(default = "default_true")]
     pub minify: bool,
+    /// Whether to use clean URLs: pages are written as `about/index.html`
+    /// instead of `about.html`, so browsers show `/about` instead of `/about.html`.
+    /// Requires a web server (e.g. Cloudflare Pages, nginx) that serves
+    /// `index.html` for directory requests. Default: false.
+    #[serde(default)]
+    pub clean_urls: bool,
     /// Critical CSS inlining configuration.
     #[serde(default)]
     pub critical_css: CriticalCssConfig,
@@ -92,6 +98,7 @@ impl Default for BuildConfig {
             content_block: default_content_block(),
             oob_blocks: Vec::new(),
             minify: true,
+            clean_urls: false,
             critical_css: CriticalCssConfig::default(),
             hints: HintsConfig::default(),
             content_hash: ContentHashConfig::default(),

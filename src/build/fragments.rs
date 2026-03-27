@@ -91,10 +91,18 @@ pub fn fragment_output_path(
     let page_str = page_output_path.to_string_lossy();
     let clean = page_str.trim_start_matches('/');
 
+    // Derive a stem that works for both flat (`about.html`) and clean URL
+    // (`about/index.html`) output paths. For clean URLs the stem is the
+    // parent directory (`about`); for flat paths it's the filename minus `.html`.
+    let stem = if clean.ends_with("/index.html") {
+        clean.trim_end_matches("/index.html")
+    } else {
+        clean.strip_suffix(".html").unwrap_or(clean)
+    };
+
     if block_name == content_block {
         PathBuf::from(fragment_dir).join(clean)
     } else {
-        let stem = clean.strip_suffix(".html").unwrap_or(clean);
         PathBuf::from(fragment_dir).join(format!("{}/{}.html", stem, block_name))
     }
 }

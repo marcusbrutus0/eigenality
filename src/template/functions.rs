@@ -96,13 +96,29 @@ pub fn register_functions(
 fn compute_fragment_path(page_path: &str, fragment_dir: &str, block: &str) -> String {
     let clean_path = page_path.trim_start_matches('/');
 
-    // For the default content block, the fragment file mirrors the page path.
-    // For additional blocks, we nest under a directory named after the page stem.
-    if block == "content" {
-        format!("/{}/{}", fragment_dir, clean_path)
+    // Normalise directory-style URLs ("/about/" or "/about") to a stem ("about")
+    // and derive the equivalent .html path ("about/index.html" or "about.html").
+    let (stem, html_path) = if clean_path.ends_with('/') {
+        // "/about/" → stem="about", html_path="about/index.html"
+        let s = clean_path.trim_end_matches('/');
+        (s, format!("{}/index.html", s))
+    } else if clean_path.is_empty() {
+        // "/" → root index
+        ("index", "index.html".to_string())
+    } else if let Some(s) = clean_path.strip_suffix(".html") {
+        // "/about.html" → stem="about", html_path="about.html"
+        (s, clean_path.to_string())
     } else {
-        // Remove .html extension, add block name.
-        let stem = clean_path.strip_suffix(".html").unwrap_or(clean_path);
+        // "/about" (no trailing slash, no extension) — treat as directory
+        let s = clean_path;
+        (s, format!("{}/index.html", s))
+    };
+
+    // For the default content block, the fragment file mirrors the html path.
+    // For additional blocks, nest under a directory named after the stem.
+    if block == "content" {
+        format!("/{}/{}", fragment_dir, html_path)
+    } else {
         format!("/{}/{}/{}.html", fragment_dir, stem, block)
     }
 }
@@ -182,6 +198,30 @@ mod tests {
     fn test_fragment_path_no_leading_slash() {
         let result = compute_fragment_path("about.html", "_fragments", "content");
         assert_eq!(result, "/_fragments/about.html");
+    }
+
+    #[test]
+    fn test_fragment_path_directory_trailing_slash() {
+        let result = compute_fragment_path("/about/", "_fragments", "content");
+        assert_eq!(result, "/_fragments/about/index.html");
+    }
+
+    #[test]
+    fn test_fragment_path_directory_no_trailing_slash() {
+        let result = compute_fragment_path("/about", "_fragments", "content");
+        assert_eq!(result, "/_fragments/about/index.html");
+    }
+
+    #[test]
+    fn test_fragment_path_directory_non_content_block() {
+        let result = compute_fragment_path("/about/", "_fragments", "sidebar");
+        assert_eq!(result, "/_fragments/about/sidebar.html");
+    }
+
+    #[test]
+    fn test_fragment_path_nested_directory() {
+        let result = compute_fragment_path("/case-study/flipkart/", "_fragments", "content");
+        assert_eq!(result, "/_fragments/case-study/flipkart/index.html");
     }
 
     // --- link_to function ---
