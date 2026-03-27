@@ -11,8 +11,11 @@
 use minijinja::Value;
 use serde_json;
 use std::collections::BTreeMap;
+use std::path::Path;
 
 use crate::config::SiteConfig;
+
+use super::clean_link::to_clean_link;
 
 /// Metadata about the page currently being rendered.
 pub struct PageMeta {
@@ -24,6 +27,23 @@ pub struct PageMeta {
     pub base_url: String,
     /// ISO 8601 timestamp of when the build started.
     pub build_time: String,
+}
+
+impl PageMeta {
+    /// Create page metadata, applying `clean_links` transformation if enabled.
+    pub fn new(url_path: &str, output_path: &Path, config: &SiteConfig, build_time: &str) -> Self {
+        let current_url = if config.build.clean_links {
+            to_clean_link(url_path).into_owned()
+        } else {
+            url_path.to_string()
+        };
+        Self {
+            current_url,
+            current_path: output_path.to_string_lossy().into_owned(),
+            base_url: config.site.base_url.clone(),
+            build_time: build_time.to_string(),
+        }
+    }
 }
 
 /// Build the full template context for a page.
@@ -104,7 +124,6 @@ mod tests {
             analytics: None,
             plugins: HashMap::new(),
             feed: HashMap::new(),
-            robots: None,
             audit: None,
         }
     }

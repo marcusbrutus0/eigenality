@@ -4,6 +4,7 @@
 pub mod analytics;
 pub mod audit;
 pub mod bundling;
+pub mod clean_link;
 pub mod content_hash;
 pub mod context;
 pub mod critical_css;
