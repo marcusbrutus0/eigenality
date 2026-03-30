@@ -101,9 +101,9 @@ fn compute_fragment_path(page_path: &str, fragment_dir: &str, block: &str) -> St
     // Normalise directory-style URLs ("/about/" or "/about") to a stem ("about")
     // and derive the equivalent .html path ("about/index.html" or "about.html").
     let (stem, html_path) = if clean_path.ends_with('/') {
-        // "/about/" → stem="about", html_path="about/index.html"
+        // "/about/" → stem="about", html_path="about.html"
         let s = clean_path.trim_end_matches('/');
-        (s, format!("{}/index.html", s))
+        (s, format!("{}.html", s))
     } else if clean_path.is_empty() {
         // "/" → root index
         ("index", "index.html".to_string())
@@ -111,9 +111,9 @@ fn compute_fragment_path(page_path: &str, fragment_dir: &str, block: &str) -> St
         // "/about.html" → stem="about", html_path="about.html"
         (s, clean_path.to_string())
     } else {
-        // "/about" (no trailing slash, no extension) — treat as directory
+        // "/about" (no trailing slash, no extension) — append .html
         let s = clean_path;
-        (s, format!("{}/index.html", s))
+        (s, format!("{}.html", s))
     };
 
     // For the default content block, the fragment file mirrors the html path.
@@ -211,13 +211,13 @@ mod tests {
     #[test]
     fn test_fragment_path_directory_trailing_slash() {
         let result = compute_fragment_path("/about/", "_fragments", "content");
-        assert_eq!(result, "/_fragments/about/index.html");
+        assert_eq!(result, "/_fragments/about.html");
     }
 
     #[test]
     fn test_fragment_path_directory_no_trailing_slash() {
         let result = compute_fragment_path("/about", "_fragments", "content");
-        assert_eq!(result, "/_fragments/about/index.html");
+        assert_eq!(result, "/_fragments/about.html");
     }
 
     #[test]
@@ -229,7 +229,7 @@ mod tests {
     #[test]
     fn test_fragment_path_nested_directory() {
         let result = compute_fragment_path("/case-study/flipkart/", "_fragments", "content");
-        assert_eq!(result, "/_fragments/case-study/flipkart/index.html");
+        assert_eq!(result, "/_fragments/case-study/flipkart.html");
     }
 
     // --- link_to function ---
