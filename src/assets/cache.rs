@@ -12,6 +12,7 @@
 use eyre::{Result, WrapErr};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use std::borrow::Cow;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
@@ -87,6 +88,9 @@ impl AssetCache {
     }
 
     /// Store a downloaded asset in the cache.
+    ///
+    /// Returns the final local filename (which may have an extension appended
+    /// from `content_type` if the original had none).
     pub fn store(
         &mut self,
         url: &str,
@@ -95,25 +99,21 @@ impl AssetCache {
         etag: Option<String>,
         last_modified: Option<String>,
         content_type: Option<String>,
-    ) -> Result<()> {
+    ) -> Result<String> {
         // If the filename has no extension, try to derive one from content_type.
-        let local_filename = if !local_filename.contains('.') {
-            if let Some(ref ct) = content_type {
-                if let Some(ext) = mime_to_ext(ct) {
-                    format!("{}.{}", local_filename, ext)
+        let local_filename: Cow<'_, str> =
+            if Path::new(local_filename).extension().is_none() {
+                if let Some(ext) = content_type.as_deref().and_then(mime_to_ext) {
+                    Cow::Owned(format!("{}.{}", local_filename, ext))
                 } else {
-                    local_filename.to_string()
+                    Cow::Borrowed(local_filename)
                 }
             } else {
-                local_filename.to_string()
-            }
-        } else {
-            local_filename.to_string()
-        };
-        let local_filename = local_filename.as_str();
+                Cow::Borrowed(local_filename)
+            };
 
         // Write the binary data.
-        let data_path = self.cache_dir.join(local_filename);
+        let data_path = self.cache_dir.join(local_filename.as_ref());
         std::fs::write(&data_path, data)
             .wrap_err_with(|| format!("Failed to write cached asset {}", data_path.display()))?;
 
@@ -132,7 +132,7 @@ impl AssetCache {
             .wrap_err_with(|| format!("Failed to write cache metadata {}", meta_path.display()))?;
 
         self.index.insert(url.to_string(), meta);
-        Ok(())
+        Ok(local_filename.into_owned())
     }
 
     /// Update only the HTTP caching headers for an existing entry (after a 304).
@@ -247,6 +247,8 @@ fn mime_to_ext(mime: &str) -> Option<&'static str> {
         "video/mp4" => Some("mp4"),
         "video/webm" => Some("webm"),
         "application/pdf" => Some("pdf"),
+        "text/css" => Some("css"),
+        "application/javascript" | "text/javascript" => Some("js"),
         "font/woff" => Some("woff"),
         "font/woff2" => Some("woff2"),
         "font/ttf" => Some("ttf"),
@@ -322,6 +324,9 @@ mod tests {
         assert_eq!(mime_to_ext("image/avif"), Some("avif"));
         assert_eq!(mime_to_ext("video/mp4"), Some("mp4"));
         assert_eq!(mime_to_ext("font/woff2"), Some("woff2"));
+        assert_eq!(mime_to_ext("text/css"), Some("css"));
+        assert_eq!(mime_to_ext("application/javascript"), Some("js"));
+        assert_eq!(mime_to_ext("text/javascript"), Some("js"));
     }
 
     #[test]
@@ -347,9 +352,6 @@ mod tests {
         assert_eq!(meta.local_filename, "abc123-deadbeef.svg");
         assert_eq!(meta.content_type.as_deref(), Some("image/svg+xml"));
 
-        // File on disk should also have the extension.
-        let file_path = tmp.path().join(".eigen_cache").join("assets").join("abc123-deadbeef.svg");
-        // cache_dir is the tmp dir itself in open()
         assert!(cache.has_file(url));
     }
 
@@ -409,19 +411,14 @@ mod tests {
     }
 
     #[test]
-    fn test_ensure_returned_filename_has_extension() {
-        // Verify that cache.get() after store() returns the ext-appended filename,
-        // which is what ensure_asset() reads back to return to rewrite.rs.
+    fn test_store_returns_final_filename_with_extension() {
         let tmp = tempfile::TempDir::new().unwrap();
         let mut cache = AssetCache::open(tmp.path()).unwrap();
 
         let url = "https://cms.example.com/uploads/file/logosvg";
         let filename = "logosvg-aabbccdd"; // no ext
-        cache.store(url, b"<svg/>", filename, None, None, Some("image/svg+xml".to_string())).unwrap();
+        let returned = cache.store(url, b"<svg/>", filename, None, None, Some("image/svg+xml".to_string())).unwrap();
 
-        // Simulates what ensure_asset() does after calling cache.store().
-        let returned = cache.get(url).map(|m| m.local_filename.clone()).unwrap();
         assert_eq!(returned, "logosvg-aabbccdd.svg");
-        assert!(returned.ends_with(".svg"));
     }
 }

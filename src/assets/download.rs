@@ -112,8 +112,8 @@ pub fn ensure_asset(
                     content_type,
                 } => {
                     tracing::debug!("  Asset re-downloaded (changed): {}", url);
-                    cache.store(url, &data, &local_filename, etag, last_modified, content_type)?;
-                    return Ok(cache.get(url).map(|m| m.local_filename.clone()).unwrap_or(local_filename));
+                    let final_name = cache.store(url, &data, &local_filename, etag, last_modified, content_type)?;
+                    return Ok(final_name);
                 }
             }
         }
@@ -129,8 +129,8 @@ pub fn ensure_asset(
             content_type,
         } => {
             tracing::debug!("  Asset downloaded: {} → {}", url, local_filename);
-            cache.store(url, &data, &local_filename, etag, last_modified, content_type)?;
-            Ok(cache.get(url).map(|m| m.local_filename.clone()).unwrap_or(local_filename))
+            let final_name = cache.store(url, &data, &local_filename, etag, last_modified, content_type)?;
+            Ok(final_name)
         }
         DownloadResult::NotModified => {
             // Shouldn't happen without conditional headers, but handle gracefully.
