@@ -26,6 +26,8 @@ pub struct AssetCacheMeta {
     pub etag: Option<String>,
     /// HTTP Last-Modified header from the server, if provided.
     pub last_modified: Option<String>,
+    /// HTTP Content-Type header from the server, if provided.
+    pub content_type: Option<String>,
 }
 
 /// Manages the on-disk asset cache.
@@ -92,7 +94,24 @@ impl AssetCache {
         local_filename: &str,
         etag: Option<String>,
         last_modified: Option<String>,
+        content_type: Option<String>,
     ) -> Result<()> {
+        // If the filename has no extension, try to derive one from content_type.
+        let local_filename = if !local_filename.contains('.') {
+            if let Some(ref ct) = content_type {
+                if let Some(ext) = mime_to_ext(ct) {
+                    format!("{}.{}", local_filename, ext)
+                } else {
+                    local_filename.to_string()
+                }
+            } else {
+                local_filename.to_string()
+            }
+        } else {
+            local_filename.to_string()
+        };
+        let local_filename = local_filename.as_str();
+
         // Write the binary data.
         let data_path = self.cache_dir.join(local_filename);
         std::fs::write(&data_path, data)
@@ -104,6 +123,7 @@ impl AssetCache {
             local_filename: local_filename.to_string(),
             etag,
             last_modified,
+            content_type,
         };
 
         let meta_path = self.cache_dir.join(format!("{}.meta", url_hash(url)));
@@ -214,6 +234,26 @@ fn hex_encode(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{:02x}", b)).collect()
 }
 
+/// Map a MIME type to a file extension.
+fn mime_to_ext(mime: &str) -> Option<&'static str> {
+    match mime {
+        "image/svg+xml" => Some("svg"),
+        "image/png" => Some("png"),
+        "image/jpeg" | "image/jpg" => Some("jpg"),
+        "image/gif" => Some("gif"),
+        "image/webp" => Some("webp"),
+        "image/avif" => Some("avif"),
+        "image/ico" | "image/x-icon" => Some("ico"),
+        "video/mp4" => Some("mp4"),
+        "video/webm" => Some("webm"),
+        "application/pdf" => Some("pdf"),
+        "font/woff" => Some("woff"),
+        "font/woff2" => Some("woff2"),
+        "font/ttf" => Some("ttf"),
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -267,5 +307,121 @@ mod tests {
         assert_eq!(sanitize_filename_part("hello-world_1"), "hello-world_1");
         assert_eq!(sanitize_filename_part("hello world!"), "helloworld");
         assert_eq!(sanitize_filename_part(""), "");
+    }
+
+    // ── mime_to_ext ──────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_mime_to_ext_known_types() {
+        assert_eq!(mime_to_ext("image/svg+xml"), Some("svg"));
+        assert_eq!(mime_to_ext("image/png"), Some("png"));
+        assert_eq!(mime_to_ext("image/jpeg"), Some("jpg"));
+        assert_eq!(mime_to_ext("image/jpg"), Some("jpg"));
+        assert_eq!(mime_to_ext("image/gif"), Some("gif"));
+        assert_eq!(mime_to_ext("image/webp"), Some("webp"));
+        assert_eq!(mime_to_ext("image/avif"), Some("avif"));
+        assert_eq!(mime_to_ext("video/mp4"), Some("mp4"));
+        assert_eq!(mime_to_ext("font/woff2"), Some("woff2"));
+    }
+
+    #[test]
+    fn test_mime_to_ext_unknown_returns_none() {
+        assert_eq!(mime_to_ext("application/octet-stream"), None);
+        assert_eq!(mime_to_ext("text/html"), None);
+        assert_eq!(mime_to_ext(""), None);
+    }
+
+    // ── AssetCache::store — extension derivation ─────────────────────────────
+
+    #[test]
+    fn test_store_appends_ext_from_content_type_when_no_ext() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let mut cache = AssetCache::open(tmp.path()).unwrap();
+
+        let url = "https://cms.example.com/uploads/file/abc123";
+        // Filename has no extension (simulates substrukt hash-only URL).
+        let filename = "abc123-deadbeef";
+        cache.store(url, b"<svg/>", filename, None, None, Some("image/svg+xml".to_string())).unwrap();
+
+        let meta = cache.get(url).unwrap();
+        assert_eq!(meta.local_filename, "abc123-deadbeef.svg");
+        assert_eq!(meta.content_type.as_deref(), Some("image/svg+xml"));
+
+        // File on disk should also have the extension.
+        let file_path = tmp.path().join(".eigen_cache").join("assets").join("abc123-deadbeef.svg");
+        // cache_dir is the tmp dir itself in open()
+        assert!(cache.has_file(url));
+    }
+
+    #[test]
+    fn test_store_appends_png_ext_from_content_type() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let mut cache = AssetCache::open(tmp.path()).unwrap();
+
+        let url = "https://cms.example.com/uploads/file/deadbeef";
+        let filename = "deadbeef-cafebabe";
+        cache.store(url, b"\x89PNG\r\n", filename, None, None, Some("image/png".to_string())).unwrap();
+
+        let meta = cache.get(url).unwrap();
+        assert_eq!(meta.local_filename, "deadbeef-cafebabe.png");
+    }
+
+    #[test]
+    fn test_store_does_not_double_append_ext_when_already_present() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let mut cache = AssetCache::open(tmp.path()).unwrap();
+
+        let url = "https://cms.example.com/images/photo.png";
+        // URL already has extension so local_filename_for_url would produce "photo-<hash>.png"
+        let filename = "photo-deadbeef.png";
+        cache.store(url, b"\x89PNG\r\n", filename, None, None, Some("image/png".to_string())).unwrap();
+
+        let meta = cache.get(url).unwrap();
+        // Should not become "photo-deadbeef.png.png"
+        assert_eq!(meta.local_filename, "photo-deadbeef.png");
+    }
+
+    #[test]
+    fn test_store_no_ext_appended_when_content_type_unknown() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let mut cache = AssetCache::open(tmp.path()).unwrap();
+
+        let url = "https://cms.example.com/uploads/file/xyz";
+        let filename = "xyz-aabbccdd";
+        cache.store(url, b"data", filename, None, None, Some("application/octet-stream".to_string())).unwrap();
+
+        let meta = cache.get(url).unwrap();
+        // Unknown MIME — no extension appended.
+        assert_eq!(meta.local_filename, "xyz-aabbccdd");
+    }
+
+    #[test]
+    fn test_store_no_ext_appended_when_content_type_none() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let mut cache = AssetCache::open(tmp.path()).unwrap();
+
+        let url = "https://cms.example.com/uploads/file/notype";
+        let filename = "notype-11223344";
+        cache.store(url, b"data", filename, None, None, None).unwrap();
+
+        let meta = cache.get(url).unwrap();
+        assert_eq!(meta.local_filename, "notype-11223344");
+    }
+
+    #[test]
+    fn test_ensure_returned_filename_has_extension() {
+        // Verify that cache.get() after store() returns the ext-appended filename,
+        // which is what ensure_asset() reads back to return to rewrite.rs.
+        let tmp = tempfile::TempDir::new().unwrap();
+        let mut cache = AssetCache::open(tmp.path()).unwrap();
+
+        let url = "https://cms.example.com/uploads/file/logosvg";
+        let filename = "logosvg-aabbccdd"; // no ext
+        cache.store(url, b"<svg/>", filename, None, None, Some("image/svg+xml".to_string())).unwrap();
+
+        // Simulates what ensure_asset() does after calling cache.store().
+        let returned = cache.get(url).map(|m| m.local_filename.clone()).unwrap();
+        assert_eq!(returned, "logosvg-aabbccdd.svg");
+        assert!(returned.ends_with(".svg"));
     }
 }

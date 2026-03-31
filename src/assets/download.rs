@@ -15,6 +15,7 @@ pub enum DownloadResult {
         local_filename: String,
         etag: Option<String>,
         last_modified: Option<String>,
+        content_type: Option<String>,
     },
     /// Server returned 304 — cached copy is still valid.
     NotModified,
@@ -64,6 +65,12 @@ pub fn download_asset(
         .and_then(|v| v.to_str().ok())
         .map(|s| s.to_string());
 
+    let content_type = response
+        .headers()
+        .get("content-type")
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.split(';').next().unwrap_or(s).trim().to_string());
+
     let data = response.bytes()
         .wrap_err_with(|| format!("Failed to read asset body: {}", url))?
         .to_vec();
@@ -75,6 +82,7 @@ pub fn download_asset(
         local_filename,
         etag,
         last_modified,
+        content_type,
     })
 }
 
@@ -101,10 +109,11 @@ pub fn ensure_asset(
                     local_filename,
                     etag,
                     last_modified,
+                    content_type,
                 } => {
                     tracing::debug!("  Asset re-downloaded (changed): {}", url);
-                    cache.store(url, &data, &local_filename, etag, last_modified)?;
-                    return Ok(local_filename);
+                    cache.store(url, &data, &local_filename, etag, last_modified, content_type)?;
+                    return Ok(cache.get(url).map(|m| m.local_filename.clone()).unwrap_or(local_filename));
                 }
             }
         }
@@ -117,10 +126,11 @@ pub fn ensure_asset(
             local_filename,
             etag,
             last_modified,
+            content_type,
         } => {
             tracing::debug!("  Asset downloaded: {} → {}", url, local_filename);
-            cache.store(url, &data, &local_filename, etag, last_modified)?;
-            Ok(local_filename)
+            cache.store(url, &data, &local_filename, etag, last_modified, content_type)?;
+            Ok(cache.get(url).map(|m| m.local_filename.clone()).unwrap_or(local_filename))
         }
         DownloadResult::NotModified => {
             // Shouldn't happen without conditional headers, but handle gracefully.
