@@ -23,6 +23,10 @@ pub enum Command {
         /// Path to the project root (default: current directory)
         #[arg(short, long, default_value = ".")]
         project: PathBuf,
+
+        /// Bypass the data source cache and re-fetch all remote data
+        #[arg(long)]
+        fresh: bool,
     },
     /// Initialize a new Eigen project
     Init {
@@ -42,6 +46,10 @@ pub enum Command {
         /// Host address to bind the dev server to
         #[arg(long, default_value = "127.0.0.1")]
         host: String,
+
+        /// Bypass the data source cache and re-fetch all remote data
+        #[arg(long)]
+        fresh: bool,
     },
     /// Run SEO, performance, and accessibility audit on the site
     Audit {

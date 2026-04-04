@@ -36,7 +36,7 @@ use super::watcher::{self, RebuildScope};
 ///    task, since the build uses `reqwest::blocking::Client` which cannot
 ///    run inside an async runtime).
 /// 4. Starts Axum HTTP server.
-pub async fn dev_command(project_root: &Path, port: u16, host: &str) -> Result<()> {
+pub async fn dev_command(project_root: &Path, port: u16, host: &str, fresh: bool) -> Result<()> {
     // Canonicalize the project root.
     let project_root = std::fs::canonicalize(project_root)?;
 
@@ -45,7 +45,7 @@ pub async fn dev_command(project_root: &Path, port: u16, host: &str) -> Result<(
     let build_root = project_root.clone();
     let build_state = tokio::task::spawn_blocking(move || -> Result<DevBuildState> {
         tracing::info!("Performing initial build...");
-        let state = DevBuildState::new(&build_root)?;
+        let state = DevBuildState::new(&build_root, fresh)?;
         tracing::info!("Initial build complete.");
         Ok(state)
     })

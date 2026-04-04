@@ -50,7 +50,7 @@ pub struct RenderedPage {
 /// Run the full build process.
 ///
 /// This is the main entry point for `eigen build`.
-pub fn build(project_root: &Path, dev: bool) -> Result<()> {
+pub fn build(project_root: &Path, dev: bool, fresh: bool) -> Result<()> {
     let config = crate::config::load_config(project_root)?;
     tracing::info!("Loading config... ✓ ({})", config.site.name);
 
@@ -127,7 +127,18 @@ pub fn build(project_root: &Path, dev: bool) -> Result<()> {
     tracing::debug!("Template engine configured.");
 
     // Data fetcher.
-    let mut fetcher = DataFetcher::new(&config.sources, project_root, None);
+    let data_cache = if fresh {
+        None
+    } else {
+        match crate::data::DataCache::open(project_root) {
+            Ok(cache) => Some(cache),
+            Err(e) => {
+                tracing::warn!("Failed to open data cache, proceeding without: {}", e);
+                None
+            }
+        }
+    };
+    let mut fetcher = DataFetcher::new(&config.sources, project_root, data_cache);
 
     // Asset localization.
     let mut asset_cache = AssetCache::open(project_root)
@@ -1063,7 +1074,7 @@ minify = false
 
         setup_minimal_project(root);
 
-        build(root, true).unwrap();
+        build(root, true, false).unwrap();
 
         // Check dist/ exists and has the output.
         assert!(root.join("dist/index.html").exists());
@@ -1131,7 +1142,7 @@ data:
             "- label: Home\n  url: /\n- label: About\n  url: /about\n",
         );
 
-        build(root, true).unwrap();
+        build(root, true, false).unwrap();
 
         let html = fs::read_to_string(root.join("dist/index.html")).unwrap();
         assert!(html.contains(r#"<a href="/">Home</a>"#));
@@ -1184,7 +1195,7 @@ item_as: post
             ]"#,
         );
 
-        build(root, true).unwrap();
+        build(root, true, false).unwrap();
 
         // Check generated pages.
         assert!(root.join("dist/posts/hello-world.html").exists());
@@ -1239,7 +1250,7 @@ collection:
 
         write(root, "_data/items.json", "[]");
 
-        build(root, true).unwrap();
+        build(root, true, false).unwrap();
 
         // No pages should be generated for empty collection.
         let sitemap = fs::read_to_string(root.join("dist/sitemap.xml")).unwrap();
@@ -1255,7 +1266,7 @@ collection:
         write(root, "static/css/style.css", "body { color: red; }");
         write(root, "static/favicon.ico", "icon");
 
-        build(root, true).unwrap();
+        build(root, true, false).unwrap();
 
         assert!(root.join("dist/css/style.css").exists());
         assert!(root.join("dist/favicon.ico").exists());
@@ -1295,7 +1306,7 @@ fragments = false
 {% block content %}<h1>Home</h1>{% endblock %}"#,
         );
 
-        build(root, true).unwrap();
+        build(root, true, false).unwrap();
 
         assert!(root.join("dist/index.html").exists());
         assert!(!root.join("dist/_fragments").exists());
@@ -1315,7 +1326,7 @@ fragments = false
         // Create stale file in dist/.
         write(root, "dist/stale.html", "old content");
 
-        build(root, true).unwrap();
+        build(root, true, false).unwrap();
 
         // Stale file should be gone.
         assert!(!root.join("dist/stale.html").exists());
@@ -1358,7 +1369,7 @@ fragments = false
             r#"{% extends "_base.html" %}{% block content %}Guide{% endblock %}"#,
         );
 
-        build(root, true).unwrap();
+        build(root, true, false).unwrap();
 
         assert!(root.join("dist/index.html").exists());
         assert!(root.join("dist/about.html").exists());
@@ -1408,7 +1419,7 @@ slug_field: id
             r#"[{"id": 1, "title": "First"}, {"id": 2, "title": "Second"}]"#,
         );
 
-        build(root, true).unwrap();
+        build(root, true, false).unwrap();
 
         assert!(root.join("dist/1.html").exists());
         assert!(root.join("dist/2.html").exists());
@@ -1441,7 +1452,7 @@ fragments = false
 {% block content %}URL:{{ page.current_url }} PATH:{{ page.current_path }}{% endblock %}"#,
         );
 
-        build(root, true).unwrap();
+        build(root, true, false).unwrap();
 
         let html = fs::read_to_string(root.join("dist/about.html")).unwrap();
         assert!(html.contains("URL:/about.html"));
@@ -1489,7 +1500,7 @@ slug_field: slug
             ]"#,
         );
 
-        let result = build(root, true);
+        let result = build(root, true, false);
         assert!(result.is_err());
         let err = format!("{:#}", result.unwrap_err());
         assert!(err.contains("Duplicate slug"));
@@ -1534,7 +1545,7 @@ slug_field: slug
             r#"[{"slug": "Hello World / Special!", "title": "Test"}]"#,
         );
 
-        build(root, true).unwrap();
+        build(root, true, false).unwrap();
 
         // The slug should be sanitized to something safe.
         assert!(root.join("dist/hello-world-special.html").exists());
@@ -1566,7 +1577,7 @@ fragments = false
 {% block content %}<h1>Home</h1>{% endblock %}"#,
         );
 
-        let result = build(root, true);
+        let result = build(root, true, false);
         assert!(result.is_err());
         let err = format!("{:#}", result.unwrap_err());
         // Should mention the template and the missing layout.
@@ -1593,7 +1604,7 @@ fragments = false
 
         write(root, "templates/index.html", "<h1>{{ undefined_var }}</h1>");
 
-        let result = build(root, true);
+        let result = build(root, true, false);
         assert!(result.is_err());
         let err = format!("{:#}", result.unwrap_err());
         assert!(err.contains("undefined") || err.contains("unknown variable"));
@@ -1621,7 +1632,7 @@ fragments = false
         std::fs::create_dir_all(root.join("templates")).unwrap();
 
         // Should succeed, producing empty dist with just static assets.
-        build(root, true).unwrap();
+        build(root, true, false).unwrap();
 
         assert!(root.join("dist").is_dir());
         let sitemap = fs::read_to_string(root.join("dist/sitemap.xml")).unwrap();
@@ -1633,7 +1644,7 @@ fragments = false
         let tmp = TempDir::new().unwrap();
         let root = tmp.path();
 
-        let result = build(root, true);
+        let result = build(root, true, false);
         assert!(result.is_err());
         let err = format!("{:#}", result.unwrap_err());
         assert!(err.contains("site.toml"));
@@ -1647,7 +1658,7 @@ fragments = false
         let tmp = TempDir::new().unwrap();
         let root = tmp.path();
         setup_minimal_project(root);
-        build(root, false).unwrap();
+        build(root, false, false).unwrap();
         assert!(root.join("dist/sitemap.xml").exists());
     }
 
@@ -1674,7 +1685,7 @@ enabled = false
         write(root, "templates/_base.html", "<html>{% block content %}{% endblock %}</html>");
         write(root, "templates/index.html", "{% extends \"_base.html\" %}{% block content %}hi{% endblock %}");
 
-        build(root, false).unwrap();
+        build(root, false, false).unwrap();
         assert!(!root.join("dist/sitemap.xml").exists());
     }
 
@@ -1703,7 +1714,7 @@ clean_urls = true
         write(root, "templates/index.html", "{% extends \"_base.html\" %}{% block content %}hi{% endblock %}");
         write(root, "templates/about.html", "{% extends \"_base.html\" %}{% block content %}about{% endblock %}");
 
-        build(root, false).unwrap();
+        build(root, false, false).unwrap();
 
         let sitemap = fs::read_to_string(root.join("dist/sitemap.xml")).unwrap();
         assert!(sitemap.contains("https://test.com/"));
@@ -1718,7 +1729,7 @@ clean_urls = true
         let tmp = TempDir::new().unwrap();
         let root = tmp.path();
         setup_minimal_project(root);
-        build(root, false).unwrap();
+        build(root, false, false).unwrap();
         assert!(!root.join("dist/robots.txt").exists());
     }
 
@@ -1745,7 +1756,7 @@ enabled = true
         write(root, "templates/_base.html", "<html>{% block content %}{% endblock %}</html>");
         write(root, "templates/index.html", "{% extends \"_base.html\" %}{% block content %}hi{% endblock %}");
 
-        build(root, false).unwrap();
+        build(root, false, false).unwrap();
 
         let robots = fs::read_to_string(root.join("dist/robots.txt")).unwrap();
         assert!(robots.contains("User-agent: *"));
@@ -1776,7 +1787,7 @@ enabled = true
         write(root, "templates/index.html", "{% extends \"_base.html\" %}{% block content %}hi{% endblock %}");
         write(root, "static/robots.txt", "User-agent: *\nDisallow: /secret/\n");
 
-        build(root, false).unwrap();
+        build(root, false, false).unwrap();
 
         let robots = fs::read_to_string(root.join("dist/robots.txt")).unwrap();
         assert!(robots.contains("Disallow: /secret/"));
@@ -1812,7 +1823,7 @@ disallow = ["/admin/"]
         write(root, "templates/_base.html", "<html>{% block content %}{% endblock %}</html>");
         write(root, "templates/index.html", "{% extends \"_base.html\" %}{% block content %}hi{% endblock %}");
 
-        build(root, false).unwrap();
+        build(root, false, false).unwrap();
 
         let robots = fs::read_to_string(root.join("dist/robots.txt")).unwrap();
         assert!(robots.contains("User-agent: *"));
@@ -1848,7 +1859,7 @@ disallow = ["/from-config/"]
         write(root, "templates/index.html", "{% extends \"_base.html\" %}{% block content %}hi{% endblock %}");
         write(root, "static/robots.txt", "User-agent: *\nDisallow: /from-static/\n");
 
-        build(root, false).unwrap();
+        build(root, false, false).unwrap();
 
         let robots = fs::read_to_string(root.join("dist/robots.txt")).unwrap();
         // static file wins
@@ -1877,7 +1888,7 @@ minify = false
         write(root, "templates/index.html", "{% extends \"_base.html\" %}{% block content %}hi{% endblock %}");
         write(root, "static/robots.txt", "User-agent: *\nDisallow: /\n");
 
-        build(root, false).unwrap();
+        build(root, false, false).unwrap();
 
         // robots disabled by default — file should not appear in dist even if in static/
         assert!(!root.join("dist/robots.txt").exists());
@@ -1929,7 +1940,7 @@ enabled = true
 "#,
         );
 
-        build(root, true).unwrap();
+        build(root, true, false).unwrap();
 
         let html = fs::read_to_string(root.join("dist/index.html")).unwrap();
 
@@ -1980,7 +1991,7 @@ minify = false
 
         write(root, "static/css/style.css", ".hero { color: red; }");
 
-        build(root, true).unwrap();
+        build(root, true, false).unwrap();
 
         let html = fs::read_to_string(root.join("dist/index.html")).unwrap();
 
