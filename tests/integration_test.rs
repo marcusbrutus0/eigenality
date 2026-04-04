@@ -42,7 +42,7 @@ fn test_full_build_example_site() {
     let site_toml = site_toml.replace("[build]", "[build]\nminify = false");
     fs::write(root.join("site.toml"), site_toml).unwrap();
 
-    eigen::build::build(root, true).unwrap();
+    eigen::build::build(root, true, false).unwrap();
 
     // Verify dist/ structure.
     assert!(root.join("dist").is_dir(), "dist/ should exist");
@@ -133,7 +133,7 @@ item_as: post
         {"slug": "third-post", "title": "Third Post", "author": "Carol"}
     ]"#);
 
-    eigen::build::build(root, true).unwrap();
+    eigen::build::build(root, true, false).unwrap();
 
     // Verify all three pages generated.
     assert!(root.join("dist/posts/hello-world.html").exists());
@@ -184,7 +184,7 @@ collection:
     write(root, "_data/items.json", "[]");
 
     // Should succeed without error.
-    eigen::build::build(root, true).unwrap();
+    eigen::build::build(root, true, false).unwrap();
 
     // No pages should be generated for empty collection.
     let sitemap = fs::read_to_string(root.join("dist/sitemap.xml")).unwrap();
@@ -236,7 +236,7 @@ data:
         {"id": "2", "name": "Bob"}
     ]"#);
 
-    eigen::build::build(root, true).unwrap();
+    eigen::build::build(root, true, false).unwrap();
 
     let post1 = fs::read_to_string(root.join("dist/post-1.html")).unwrap();
     assert!(post1.contains("Post One"));
@@ -275,7 +275,7 @@ minify = false
     write(root, "templates/index.html", r#"{% extends "_base.html" %}
 {% block content %}<h1>Home</h1><p>Welcome</p>{% endblock %}"#);
 
-    eigen::build::build(root, true).unwrap();
+    eigen::build::build(root, true, false).unwrap();
 
     // Full page: no markers.
     let full = fs::read_to_string(root.join("dist/index.html")).unwrap();
@@ -323,7 +323,7 @@ fragment_blocks:
 {% block sidebar %}<aside>About sidebar</aside>{% endblock %}
 {% block content %}<h1>About</h1>{% endblock %}"#);
 
-    eigen::build::build(root, true).unwrap();
+    eigen::build::build(root, true, false).unwrap();
 
     // Content fragment.
     assert!(root.join("dist/_fragments/about.html").exists());
@@ -357,7 +357,7 @@ minify = false
     write(root, "templates/index.html", r#"{% extends "_base.html" %}
 {% block content %}<h1>Home</h1>{% endblock %}"#);
 
-    eigen::build::build(root, true).unwrap();
+    eigen::build::build(root, true, false).unwrap();
 
     assert!(root.join("dist/index.html").exists());
     assert!(!root.join("dist/_fragments").exists(), "_fragments dir should not exist");
@@ -396,7 +396,7 @@ minify = false
 <a {{ link_to("/posts.html", "#main") }}>Posts</a>
 {% endblock %}"##);
 
-    eigen::build::build(root, true).unwrap();
+    eigen::build::build(root, true, false).unwrap();
 
     let html = fs::read_to_string(root.join("dist/index.html")).unwrap();
 
@@ -433,7 +433,7 @@ minify = false
 
     write(root, "templates/index.html", r#"<a {{ link_to("/about.html") }}>About</a>"#);
 
-    eigen::build::build(root, true).unwrap();
+    eigen::build::build(root, true, false).unwrap();
 
     let html = fs::read_to_string(root.join("dist/index.html")).unwrap();
     assert!(html.contains(r#"href="/about.html""#));
@@ -464,7 +464,7 @@ minify = false
     write(root, "templates/index.html",
           "---\ndata:\n  content:\n    file: \"content.yaml\"\n---\n{{ content.text | markdown }}");
 
-    eigen::build::build(root, true).unwrap();
+    eigen::build::build(root, true, false).unwrap();
 
     let html = fs::read_to_string(root.join("dist/index.html")).unwrap();
     assert!(html.contains("<h1>Hello</h1>"));
@@ -489,7 +489,7 @@ minify = false
     write(root, "templates/index.html",
           r#"{{ "2024-03-15" | date("%B %d, %Y") }}"#);
 
-    eigen::build::build(root, true).unwrap();
+    eigen::build::build(root, true, false).unwrap();
 
     let html = fs::read_to_string(root.join("dist/index.html")).unwrap();
     assert!(html.contains("March 15, 2024"));
@@ -513,7 +513,7 @@ minify = false
     write(root, "templates/index.html",
           r#"{{ "Hello World! #1" | slugify }}"#);
 
-    eigen::build::build(root, true).unwrap();
+    eigen::build::build(root, true, false).unwrap();
 
     let html = fs::read_to_string(root.join("dist/index.html")).unwrap();
     assert!(html.contains("hello-world-1"));
@@ -537,7 +537,7 @@ minify = false
     write(root, "templates/index.html",
           r#"{{ "/about.html" | absolute }}"#);
 
-    eigen::build::build(root, true).unwrap();
+    eigen::build::build(root, true, false).unwrap();
 
     let html = fs::read_to_string(root.join("dist/index.html")).unwrap();
     assert!(html.contains("https://example.com/about.html"));
@@ -567,7 +567,7 @@ data:
 
     write(root, "_data/info.json", r#"{"key": "value", "num": 42}"#);
 
-    eigen::build::build(root, true).unwrap();
+    eigen::build::build(root, true, false).unwrap();
 
     let html = fs::read_to_string(root.join("dist/index.html")).unwrap();
     assert!(html.contains("var data ="));
@@ -602,7 +602,7 @@ minify = false
     write(root, "templates/index.html",
           r#"<footer>&copy; {{ current_year() }}</footer>"#);
 
-    eigen::build::build(root, true).unwrap();
+    eigen::build::build(root, true, false).unwrap();
 
     let html = fs::read_to_string(root.join("dist/index.html")).unwrap();
     let year = chrono::Local::now().format("%Y").to_string();
@@ -627,7 +627,7 @@ minify = false
     write(root, "templates/index.html",
           r#"<link rel="stylesheet" href="{{ asset('css/style.css') }}">"#);
 
-    eigen::build::build(root, true).unwrap();
+    eigen::build::build(root, true, false).unwrap();
 
     let html = fs::read_to_string(root.join("dist/index.html")).unwrap();
     assert!(html.contains(r#"href="/css/style.css""#));
@@ -651,7 +651,7 @@ minify = false
     write(root, "templates/index.html",
           r#"<title>{{ site.name }}</title><base href="{{ site.base_url }}">"#);
 
-    eigen::build::build(root, true).unwrap();
+    eigen::build::build(root, true, false).unwrap();
 
     let html = fs::read_to_string(root.join("dist/index.html")).unwrap();
     assert!(html.contains("<title>My Awesome Site</title>"));
@@ -693,7 +693,7 @@ data:
   url: /blog
 "#);
 
-    eigen::build::build(root, true).unwrap();
+    eigen::build::build(root, true, false).unwrap();
 
     let html = fs::read_to_string(root.join("dist/index.html")).unwrap();
     assert!(html.contains(r#"<a href="/">Home</a>"#));
@@ -725,7 +725,7 @@ data:
 
     write(root, "_data/config.json", r#"{"theme": "dark", "debug": false}"#);
 
-    eigen::build::build(root, true).unwrap();
+    eigen::build::build(root, true, false).unwrap();
 
     let html = fs::read_to_string(root.join("dist/index.html")).unwrap();
     assert!(html.contains("Theme: dark"));
@@ -770,7 +770,7 @@ data:
         {"id": 5, "title": "Fifth", "status": "published"}
     ]"#);
 
-    eigen::build::build(root, true).unwrap();
+    eigen::build::build(root, true, false).unwrap();
 
     let html = fs::read_to_string(root.join("dist/index.html")).unwrap();
     // Filtered to published (1,3,4,5), sorted by -id (5,4,3,1), limited to 2 (5,4).
@@ -810,7 +810,7 @@ PATH:{{ page.current_path }}
 BASE:{{ page.base_url }}
 {% endblock %}"#);
 
-    eigen::build::build(root, true).unwrap();
+    eigen::build::build(root, true, false).unwrap();
 
     let html = fs::read_to_string(root.join("dist/docs/guide.html")).unwrap();
     assert!(html.contains("URL:/docs/guide.html"));
@@ -855,7 +855,7 @@ collection:
 
     write(root, "_data/items.json", r#"[{"slug": "test-item", "title": "Test"}]"#);
 
-    eigen::build::build(root, true).unwrap();
+    eigen::build::build(root, true, false).unwrap();
 
     let sitemap = fs::read_to_string(root.join("dist/sitemap.xml")).unwrap();
 
@@ -901,7 +901,7 @@ minify = false
     write(root, "templates/index.html",
           "<main>Hello</main>{% include \"_partials/footer.html\" %}");
 
-    eigen::build::build(root, true).unwrap();
+    eigen::build::build(root, true, false).unwrap();
 
     let html = fs::read_to_string(root.join("dist/index.html")).unwrap();
     assert!(html.contains("<main>Hello</main>"));
@@ -933,7 +933,7 @@ minify = false
 {% block title %}Home — {{ site.name }}{% endblock %}
 {% block content %}<h1>Welcome</h1>{% endblock %}"#);
 
-    eigen::build::build(root, true).unwrap();
+    eigen::build::build(root, true, false).unwrap();
 
     let html = fs::read_to_string(root.join("dist/index.html")).unwrap();
     assert!(html.contains("<!DOCTYPE html>"));
@@ -973,7 +973,7 @@ slug_field: slug
         {"name": "No Slug"}
     ]"#);
 
-    eigen::build::build(root, true).unwrap();
+    eigen::build::build(root, true, false).unwrap();
 
     // Good item should be generated.
     assert!(root.join("dist/good-item.html").exists());
@@ -1002,7 +1002,7 @@ minify = false
 
     write(root, "templates/a/b/c/deep.html", "<p>Deep page</p>");
 
-    eigen::build::build(root, true).unwrap();
+    eigen::build::build(root, true, false).unwrap();
 
     assert!(root.join("dist/a/b/c/deep.html").exists());
     let html = fs::read_to_string(root.join("dist/a/b/c/deep.html")).unwrap();
@@ -1049,7 +1049,7 @@ item_as: post
         {"slug": "second", "title": "Second Post"}
     ]"#);
 
-    eigen::build::build(root, true).unwrap();
+    eigen::build::build(root, true, false).unwrap();
 
     assert!(root.join("dist/index.html").exists());
     assert!(root.join("dist/about.html").exists());
@@ -1089,7 +1089,7 @@ fn test_init_creates_buildable_project() {
     fs::write(project_path.join("site.toml"), site_toml).unwrap();
 
     // Build the scaffolded project.
-    eigen::build::build(&project_path, true).unwrap();
+    eigen::build::build(&project_path, true, false).unwrap();
 
     // Verify output.
     assert!(project_path.join("dist/index.html").exists());
@@ -1161,7 +1161,7 @@ minify = false
     write(root, "templates/index.html",
           "<html><body><h1>Hello</h1></body></html>");
 
-    eigen::build::build(root, true).unwrap();
+    eigen::build::build(root, true, false).unwrap();
 
     let html = fs::read_to_string(root.join("dist/index.html")).unwrap();
     assert!(
@@ -1195,7 +1195,7 @@ minify = false
 
     write(root, "templates/index.html", "<h1>Hello</h1>");
 
-    eigen::build::build(root, true).unwrap();
+    eigen::build::build(root, true, false).unwrap();
     let html = fs::read_to_string(root.join("dist/index.html")).unwrap();
     assert!(html.contains("<h1>Hello</h1>"));
 }
@@ -1221,7 +1221,7 @@ media_base_url = "http://localhost:1337"
 
     write(root, "templates/index.html", "<h1>Hello</h1>");
 
-    eigen::build::build(root, true).unwrap();
+    eigen::build::build(root, true, false).unwrap();
     let html = fs::read_to_string(root.join("dist/index.html")).unwrap();
     assert!(html.contains("<h1>Hello</h1>"));
 }
@@ -1268,7 +1268,7 @@ data:
 ---
 {% for p in posts %}{{ p.title }} {% endfor %}"#);
 
-    eigen::build::build(root, true).unwrap();
+    eigen::build::build(root, true, false).unwrap();
     let html = fs::read_to_string(root.join("dist/index.html")).unwrap();
     assert!(html.contains("Hello"));
     assert!(html.contains("World"));
@@ -1296,7 +1296,7 @@ media_base_url = "http://localhost:1337"
     write(root, "templates/index.html",
           r#"<img src="{{ strapi_media('/uploads/photo.jpg') }}">"#);
 
-    eigen::build::build(root, true).unwrap();
+    eigen::build::build(root, true, false).unwrap();
     let html = fs::read_to_string(root.join("dist/index.html")).unwrap();
     assert!(html.contains("http://localhost:1337/uploads/photo.jpg"));
 }
@@ -1322,7 +1322,7 @@ media_base_url = "http://localhost:1337"
     write(root, "templates/index.html",
           r#"<img src="{{ strapi_media('https://cdn.example.com/photo.jpg') }}">"#);
 
-    eigen::build::build(root, true).unwrap();
+    eigen::build::build(root, true, false).unwrap();
     let html = fs::read_to_string(root.join("dist/index.html")).unwrap();
     // Absolute URL should pass through unchanged.
     assert!(html.contains("https://cdn.example.com/photo.jpg"));
@@ -1349,7 +1349,7 @@ some_option = true
     write(root, "templates/index.html", "<h1>Hello</h1>");
 
     // Should succeed — unknown plugins are warned but not fatal.
-    eigen::build::build(root, true).unwrap();
+    eigen::build::build(root, true, false).unwrap();
     let html = fs::read_to_string(root.join("dist/index.html")).unwrap();
     assert!(html.contains("<h1>Hello</h1>"));
 }
@@ -1378,7 +1378,7 @@ entries = []
     write(root, "templates/index.html",
           r#"<img src="{{ strapi_media('/uploads/test.jpg') }}">"#);
 
-    eigen::build::build(root, true).unwrap();
+    eigen::build::build(root, true, false).unwrap();
     let html = fs::read_to_string(root.join("dist/index.html")).unwrap();
     assert!(html.contains("http://localhost:1337/uploads/test.jpg"));
 }
@@ -1420,7 +1420,7 @@ item_as: post
         {"slug": "world", "title": "World"}
     ]"#);
 
-    eigen::build::build(root, true).unwrap();
+    eigen::build::build(root, true, false).unwrap();
     assert!(root.join("dist/hello.html").exists());
     assert!(root.join("dist/world.html").exists());
 
@@ -1509,7 +1509,7 @@ minify = true
     <p>Welcome to the site.</p>
 {% endblock %}"#);
 
-    eigen::build::build(root, true).unwrap();
+    eigen::build::build(root, true, false).unwrap();
 
     let html = fs::read_to_string(root.join("dist/index.html")).unwrap();
 
@@ -1558,7 +1558,7 @@ minify = false
   </body>
 </html>"#);
 
-    eigen::build::build(root, true).unwrap();
+    eigen::build::build(root, true, false).unwrap();
 
     let html = fs::read_to_string(root.join("dist/index.html")).unwrap();
 
@@ -1594,7 +1594,7 @@ optimize = false
   <img src="/img/hero.jpg" alt="Hero image" class="hero" loading="lazy">
 </picture>"#);
 
-    eigen::build::build(root, true).unwrap();
+    eigen::build::build(root, true, false).unwrap();
 
     let html = fs::read_to_string(root.join("dist/index.html")).unwrap();
 
@@ -1630,7 +1630,7 @@ not_found = true
 
     write(root, "templates/index.html", "<h1>Home</h1>");
 
-    eigen::build::build(root, false).unwrap();
+    eigen::build::build(root, false, false).unwrap();
 
     let path_404 = root.join("dist/404.html");
     assert!(path_404.exists(), "dist/404.html should be created by default");
@@ -1662,7 +1662,7 @@ not_found = false
 
     write(root, "templates/index.html", "<h1>Home</h1>");
 
-    eigen::build::build(root, false).unwrap();
+    eigen::build::build(root, false, false).unwrap();
 
     assert!(
         !root.join("dist/404.html").exists(),
@@ -1698,7 +1698,7 @@ not_found = true
     write(root, "templates/index.html", r#"{% extends "_base.html" %}
 {% block content %}<h1>Home</h1>{% endblock %}"#);
 
-    eigen::build::build(root, false).unwrap();
+    eigen::build::build(root, false, false).unwrap();
 
     let path_404 = root.join("dist/404.html");
     assert!(path_404.exists(), "dist/404.html should exist");
@@ -1741,7 +1741,7 @@ sitemap = true
     write(root, "templates/index.html", "<h1>Home</h1>");
     write(root, "templates/about.html", "<h1>About</h1>");
 
-    eigen::build::build(root, false).unwrap();
+    eigen::build::build(root, false, false).unwrap();
 
     let sitemap = fs::read_to_string(root.join("dist/sitemap.xml")).unwrap();
     // The default 404 page (written directly, not via template rendering) must
@@ -1781,7 +1781,7 @@ clean_urls = true
     write(root, "templates/404.html", r#"{% extends "_base.html" %}
 {% block content %}<h1>Custom 404</h1>{% endblock %}"#);
 
-    eigen::build::build(root, false).unwrap();
+    eigen::build::build(root, false, false).unwrap();
 
     // With clean_urls: index goes to index.html, about goes to about/index.html.
     assert!(root.join("dist/index.html").exists(), "index.html should stay as-is");
@@ -1817,7 +1817,7 @@ fn test_full_build_example_site_includes_404() {
     let site_toml = site_toml.replace("[build]", "[build]\nminify = false");
     fs::write(root.join("site.toml"), site_toml).unwrap();
 
-    eigen::build::build(root, false).unwrap();
+    eigen::build::build(root, false, false).unwrap();
 
     let path_404 = root.join("dist/404.html");
     assert!(path_404.exists(), "dist/404.html should be built from example_site template");
@@ -1882,7 +1882,7 @@ data:
     ]"#);
 
     // The build should succeed — POST fields must not cause errors.
-    eigen::build::build(root, true).unwrap();
+    eigen::build::build(root, true, false).unwrap();
 
     let alpha = fs::read_to_string(root.join("dist/alpha.html")).unwrap();
     assert!(alpha.contains("<h1>Alpha</h1>"), "Alpha page should render project name");
@@ -1948,7 +1948,7 @@ fn test_post_method_body_interpolation_via_resolve_item_data() {
     ]"#);
 
     let sources = std::collections::HashMap::new();
-    let mut fetcher = eigen::data::DataFetcher::new(&sources, root);
+    let mut fetcher = eigen::data::DataFetcher::new(&sources, root, None);
 
     // Simulate a dynamic page's frontmatter with a POST query whose body
     // references the current item.
@@ -2040,7 +2040,7 @@ data:
         {"name": "Bob"}
     ]"#);
 
-    eigen::build::build(root, true).unwrap();
+    eigen::build::build(root, true, false).unwrap();
 
     let html = fs::read_to_string(root.join("dist/index.html")).unwrap();
     // Sort ascending by name, limit 2 → Alice, Bob.
@@ -2111,7 +2111,7 @@ clean_links = true
     write(root, "templates/about.html", r#"{% extends "_base.html" %}
 {% block content %}<h1>About</h1>{% endblock %}"#);
 
-    eigen::build::build(root, true).unwrap();
+    eigen::build::build(root, true, false).unwrap();
 
     let html = fs::read_to_string(root.join("dist/index.html")).unwrap();
 

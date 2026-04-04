@@ -25,11 +25,14 @@ fn main() -> Result<()> {
     setup_logging(cli.verbose, cli.quiet);
 
     match cli.command {
-        Command::Build { project } => {
+        Command::Build { project, fresh } => {
             let project = std::fs::canonicalize(&project)?;
             let start = Instant::now();
             tracing::info!("Building site at {}...", project.display());
-            build::build(&project, false)?;
+            if fresh {
+                tracing::info!("Fresh mode: bypassing data cache.");
+            }
+            build::build(&project, false, fresh)?;
             let elapsed = start.elapsed();
             eprintln!("Built site in {:.1?}", elapsed);
             Ok(())
@@ -41,14 +44,17 @@ fn main() -> Result<()> {
             eprintln!("  cd {name} && eigen build");
             Ok(())
         }
-        Command::Dev { project, port, host } => {
+        Command::Dev { project, port, host, fresh } => {
             let project = std::fs::canonicalize(&project)?;
             tracing::info!("Starting dev server for {} on {host}:{port}...", project.display());
+            if fresh {
+                tracing::info!("Fresh mode: bypassing data cache.");
+            }
 
             // Build and run the async dev server on the Tokio runtime.
             let rt = tokio::runtime::Runtime::new()?;
             rt.block_on(async {
-                dev::dev_command(&project, port, &host).await
+                dev::dev_command(&project, port, &host, fresh).await
             })?;
 
             Ok(())
@@ -59,7 +65,7 @@ fn main() -> Result<()> {
 
             if !no_build {
                 tracing::info!("Building site...");
-                build::build(&project, false)?;
+                build::build(&project, false, false)?;
             }
 
             let config = config::load_config(&project)?;

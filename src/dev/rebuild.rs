@@ -71,13 +71,16 @@ pub struct DevBuildState {
     asset_cache: AssetCache,
     /// HTTP client for asset downloads.
     asset_client: reqwest::blocking::Client,
+    /// Whether to bypass the data cache (--fresh mode).
+    fresh: bool,
 }
 
 impl DevBuildState {
     /// Create a new dev build state and perform the initial full build.
-    pub fn new(project_root: &Path) -> Result<Self> {
+    pub fn new(project_root: &Path, fresh: bool) -> Result<Self> {
         let config = crate::config::load_config(project_root)?;
-        let fetcher = DataFetcher::new(&config.sources, project_root);
+        let data_cache = crate::data::open_data_cache(project_root, fresh);
+        let fetcher = DataFetcher::new(&config.sources, project_root, data_cache);
         let plugin_registry = registry::build_registry(&config.plugins, project_root)?;
         let asset_cache = AssetCache::open(project_root)
             .wrap_err("Failed to open asset cache")?;
@@ -91,6 +94,7 @@ impl DevBuildState {
             plugin_registry,
             asset_cache,
             asset_client,
+            fresh,
         };
 
         state.full_build()?;
@@ -112,7 +116,8 @@ impl DevBuildState {
                     tracing::info!("Full rebuild (config changed)...");
                     // Reload config and plugins.
                     self.config = crate::config::load_config(&self.project_root)?;
-                    self.fetcher = DataFetcher::new(&self.config.sources, &self.project_root);
+                    let data_cache = crate::data::open_data_cache(&self.project_root, self.fresh);
+                    self.fetcher = DataFetcher::new(&self.config.sources, &self.project_root, data_cache);
                     self.plugin_registry = registry::build_registry(&self.config.plugins, &self.project_root)?;
                     self.full_build()?;
                 }

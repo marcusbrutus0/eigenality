@@ -24,17 +24,24 @@ pub struct DataFetcher {
     data_dir: PathBuf,
     /// HTTP client (reused across requests).
     client: reqwest::blocking::Client,
+    /// Optional disk cache for conditional HTTP requests.
+    data_cache: Option<super::cache::DataCache>,
 }
 
 impl DataFetcher {
     /// Create a new fetcher with the given sources and project root.
-    pub fn new(sources: &HashMap<String, SourceConfig>, project_root: &Path) -> Self {
+    pub fn new(
+        sources: &HashMap<String, SourceConfig>,
+        project_root: &Path,
+        data_cache: Option<super::cache::DataCache>,
+    ) -> Self {
         Self {
             sources: sources.clone(),
             url_cache: HashMap::new(),
             file_cache: HashMap::new(),
             data_dir: project_root.join("_data"),
             client: reqwest::blocking::Client::new(),
+            data_cache,
         }
     }
 
@@ -124,6 +131,41 @@ impl DataFetcher {
         Ok(value)
     }
 
+    /// Build a `HeaderMap` from a source's configured headers.
+    fn build_source_headers(source: &SourceConfig) -> Result<reqwest::header::HeaderMap> {
+        let mut headers = reqwest::header::HeaderMap::new();
+        for (key, val) in &source.headers {
+            let name = reqwest::header::HeaderName::from_bytes(key.as_bytes())
+                .wrap_err_with(|| format!("Invalid header name: {}", key))?;
+            let value = reqwest::header::HeaderValue::from_str(val)
+                .wrap_err_with(|| format!("Invalid header value for {}", key))?;
+            headers.insert(name, value);
+        }
+        Ok(headers)
+    }
+
+    /// Send an HTTP request with the given method, headers, and optional body.
+    fn send_request(
+        &self,
+        method: &HttpMethod,
+        url: &str,
+        headers: reqwest::header::HeaderMap,
+        body: Option<&serde_json::Value>,
+    ) -> Result<reqwest::blocking::Response> {
+        let response = match method {
+            HttpMethod::Get => self.client.get(url).headers(headers).send(),
+            HttpMethod::Post => {
+                let mut req = self.client.post(url).headers(headers);
+                if let Some(b) = body {
+                    req = req.json(b);
+                }
+                req.send()
+            }
+        }
+        .wrap_err_with(|| format!("HTTP request failed for {}", url))?;
+        Ok(response)
+    }
+
     /// Fetch data from a remote source defined in `site.toml`.
     fn fetch_source(
         &mut self,
@@ -141,8 +183,7 @@ impl DataFetcher {
                     source_name,
                     self.sources.keys().cloned().collect::<Vec<_>>().join(", ")
                 )
-            })?
-            .clone();
+            })?;
 
         // Build full URL: base URL + path.
         let full_url = format!(
@@ -161,12 +202,8 @@ impl DataFetcher {
             HttpMethod::Post => {
                 let body_hash = match body {
                     Some(b) => {
-                        use std::collections::hash_map::DefaultHasher;
-                        use std::hash::{Hash, Hasher};
                         let body_str = serde_json::to_string(b).unwrap_or_default();
-                        let mut hasher = DefaultHasher::new();
-                        body_str.hash(&mut hasher);
-                        hasher.finish().to_string()
+                        crate::data::cache::cache_key_hash(&body_str)
                     }
                     None => String::new(),
                 };
@@ -178,36 +215,97 @@ impl DataFetcher {
             return Ok(cached.clone());
         }
 
-        let mut headers = reqwest::header::HeaderMap::new();
-        for (key, val) in &source.headers {
-            let name = reqwest::header::HeaderName::from_bytes(key.as_bytes())
-                .wrap_err_with(|| format!("Invalid header name: {}", key))?;
-            let value = reqwest::header::HeaderValue::from_str(val)
-                .wrap_err_with(|| format!("Invalid header value for {}", key))?;
-            headers.insert(name, value);
-        }
+        let mut headers = Self::build_source_headers(source)?;
 
-        let response = match method {
-            HttpMethod::Get => {
-                self.client.get(&full_url).headers(headers).send()
-            }
-            HttpMethod::Post => {
-                let mut req = self.client.post(&full_url).headers(headers);
-                if let Some(b) = body {
-                    req = req.json(b);
+        // Add conditional headers if disk cache has metadata.
+        if let Some(meta) = self.data_cache.as_ref().and_then(|dc| dc.get(&cache_key)) {
+            if let Some(ref etag) = meta.etag {
+                if let Ok(hv) = reqwest::header::HeaderValue::from_str(etag) {
+                    headers.insert(reqwest::header::IF_NONE_MATCH, hv);
                 }
-                req.send()
             }
+            if let Some(ref lm) = meta.last_modified {
+                if let Ok(hv) = reqwest::header::HeaderValue::from_str(lm) {
+                    headers.insert(reqwest::header::IF_MODIFIED_SINCE, hv);
+                }
+            }
+            tracing::debug!("Conditional request for {} (etag: {:?})", full_url, meta.etag);
         }
-        .wrap_err_with(|| format!("HTTP request failed for {}", full_url))?;
 
+        let response = self.send_request(method, &full_url, headers, body)?;
         let status = response.status();
+
+        // Handle 304 Not Modified: read body from disk cache.
+        if status == reqwest::StatusCode::NOT_MODIFIED {
+            if let Some(body_bytes) = self.data_cache.as_ref().and_then(|dc| dc.read(&cache_key)) {
+                match serde_json::from_slice::<Value>(&body_bytes) {
+                    Ok(value) => {
+                        tracing::debug!("Data cache hit (304): {}", cache_key);
+                        self.url_cache.insert(cache_key, value.clone());
+                        return Ok(value);
+                    }
+                    Err(e) => {
+                        tracing::warn!(
+                            "304 but cached body failed to parse for {}: {}. Re-fetching.",
+                            full_url, e,
+                        );
+                        let retry_headers = Self::build_source_headers(source)?;
+                        let retry_response = self.send_request(method, &full_url, retry_headers, body)?;
+                        let retry_status = retry_response.status();
+                        if !retry_status.is_success() {
+                            bail!("HTTP {} from {} (retry after bad 304 cache)", retry_status, full_url);
+                        }
+                        return self.handle_success_response(retry_response, cache_key, &full_url);
+                    }
+                }
+            }
+            bail!("HTTP 304 from {} but no cached body available", full_url);
+        }
+
         if !status.is_success() {
             bail!("HTTP {} from {}", status, full_url);
         }
 
-        let value: Value = response
-            .json()
+        self.handle_success_response(response, cache_key, &full_url)
+    }
+
+    /// Process a successful HTTP response: extract cache headers, store in disk
+    /// cache, parse JSON, and populate the in-memory cache.
+    fn handle_success_response(
+        &mut self,
+        response: reqwest::blocking::Response,
+        cache_key: String,
+        full_url: &str,
+    ) -> Result<Value> {
+        let etag = response
+            .headers()
+            .get(reqwest::header::ETAG)
+            .and_then(|v| v.to_str().ok())
+            .map(str::to_string);
+        let last_modified = response
+            .headers()
+            .get(reqwest::header::LAST_MODIFIED)
+            .and_then(|v| v.to_str().ok())
+            .map(str::to_string);
+
+        let raw_bytes = response
+            .bytes()
+            .wrap_err_with(|| format!("Failed to read response bytes from {}", full_url))?;
+
+        if let Some(dc) = self.data_cache.as_mut() {
+            if etag.is_some() || last_modified.is_some() {
+                if let Err(e) = dc.store(
+                    &cache_key,
+                    &raw_bytes,
+                    etag.as_deref(),
+                    last_modified.as_deref(),
+                ) {
+                    tracing::warn!("Failed to store data cache for {}: {}", full_url, e);
+                }
+            }
+        }
+
+        let value: Value = serde_json::from_slice(&raw_bytes)
             .wrap_err_with(|| format!("Failed to parse JSON response from {}", full_url))?;
 
         self.url_cache.insert(cache_key, value.clone());
@@ -281,7 +379,7 @@ mod tests {
 
     /// Create a fetcher with no remote sources, pointed at a temp dir.
     fn test_fetcher(root: &Path) -> DataFetcher {
-        DataFetcher::new(&HashMap::new(), root)
+        DataFetcher::new(&HashMap::new(), root, None)
     }
 
     /// Helper to write a file.
@@ -697,30 +795,122 @@ mod tests {
 
     #[test]
     fn test_cache_key_includes_method_and_body() {
-        use std::collections::hash_map::DefaultHasher;
-        use std::hash::{Hash, Hasher};
-
         let url = "https://api.example.com/query";
 
         let get_key = format!("GET:{}", url);
 
         let body = serde_json::json!({"page_size": 100});
         let body_str = serde_json::to_string(&body).unwrap();
-        let mut hasher = DefaultHasher::new();
-        body_str.hash(&mut hasher);
-        let post_key = format!("POST:{}:{}", url, hasher.finish());
+        let body_hash = crate::data::cache::cache_key_hash(&body_str);
+        let post_key = format!("POST:{}:{}", url, body_hash);
 
         let post_no_body_key = format!("POST:{}:", url);
 
         let body2 = serde_json::json!({"page_size": 50});
         let body2_str = serde_json::to_string(&body2).unwrap();
-        let mut hasher2 = DefaultHasher::new();
-        body2_str.hash(&mut hasher2);
-        let post_key2 = format!("POST:{}:{}", url, hasher2.finish());
+        let body2_hash = crate::data::cache::cache_key_hash(&body2_str);
+        let post_key2 = format!("POST:{}:{}", url, body2_hash);
 
         assert_ne!(get_key, post_key);
         assert_ne!(get_key, post_no_body_key);
         assert_ne!(post_key, post_no_body_key);
         assert_ne!(post_key, post_key2);
+    }
+
+    // --- DataCache conditional request tests ---
+
+    #[test]
+    fn fetch_source_uses_data_cache_on_304() {
+        use std::io::{BufRead, BufReader, Write};
+        use std::net::TcpListener;
+
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+
+        // Spawn a server thread that handles exactly two requests.
+        let server = std::thread::spawn(move || {
+            // --- First request: return 200 with body + ETag ---
+            let (stream, _) = listener.accept().unwrap();
+            let mut reader = BufReader::new(stream);
+            let mut request_line = String::new();
+            reader.read_line(&mut request_line).unwrap();
+            // Consume remaining headers.
+            loop {
+                let mut line = String::new();
+                reader.read_line(&mut line).unwrap();
+                if line.trim().is_empty() {
+                    break;
+                }
+            }
+
+            let body = r#"[{"id":1}]"#;
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nETag: \"test-etag\"\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                body.len(),
+                body,
+            );
+            reader.get_mut().write_all(response.as_bytes()).unwrap();
+            reader.get_mut().flush().unwrap();
+            drop(reader);
+
+            // --- Second request: expect If-None-Match, return 304 ---
+            let (stream2, _) = listener.accept().unwrap();
+            let mut reader2 = BufReader::new(stream2);
+            let mut request_line2 = String::new();
+            reader2.read_line(&mut request_line2).unwrap();
+            // Read all headers and verify conditional header is present.
+            let mut has_if_none_match = false;
+            loop {
+                let mut line = String::new();
+                reader2.read_line(&mut line).unwrap();
+                if line.trim().is_empty() {
+                    break;
+                }
+                if line.to_lowercase().contains("if-none-match") {
+                    has_if_none_match = true;
+                }
+            }
+            assert!(has_if_none_match, "Second request should have If-None-Match header");
+
+            let response304 = "HTTP/1.1 304 Not Modified\r\nConnection: close\r\n\r\n";
+            reader2.get_mut().write_all(response304.as_bytes()).unwrap();
+            reader2.get_mut().flush().unwrap();
+            drop(reader2);
+        });
+
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path();
+
+        // Create a DataCache.
+        let data_cache = crate::data::cache::DataCache::open(root).unwrap();
+
+        // Create source config pointing at our test server.
+        let mut sources = HashMap::new();
+        sources.insert(
+            "test_api".to_string(),
+            SourceConfig {
+                url: format!("http://127.0.0.1:{}", port),
+                headers: HashMap::new(),
+            },
+        );
+
+        let mut fetcher = DataFetcher::new(&sources, root, Some(data_cache));
+
+        // First fetch: should get 200 with data.
+        let result1 = fetcher
+            .fetch_source("test_api", "/data", &HttpMethod::Get, None)
+            .unwrap();
+        assert_eq!(result1, serde_json::json!([{"id": 1}]));
+
+        // Clear url_cache to force disk cache path on next fetch.
+        fetcher.url_cache.clear();
+
+        // Second fetch: server returns 304, data comes from disk cache.
+        let result2 = fetcher
+            .fetch_source("test_api", "/data", &HttpMethod::Get, None)
+            .unwrap();
+        assert_eq!(result2, serde_json::json!([{"id": 1}]));
+
+        server.join().unwrap();
     }
 }

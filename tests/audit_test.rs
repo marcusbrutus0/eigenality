@@ -49,7 +49,7 @@ minify = false
     setup_minimal_site(root, site_toml);
 
     // Full build: creates dist/ with rendered pages and sitemap.
-    eigen::build::build(root, true).unwrap();
+    eigen::build::build(root, true, false).unwrap();
 
     let config = eigen::config::load_config(root).unwrap();
     let dist = root.join("dist");
@@ -100,7 +100,7 @@ ignore = ["seo/robots-txt", "seo/feed"]
 "#;
 
     setup_minimal_site(root, site_toml);
-    eigen::build::build(root, true).unwrap();
+    eigen::build::build(root, true, false).unwrap();
 
     let config = eigen::config::load_config(root).unwrap();
     let dist = root.join("dist");
@@ -144,7 +144,7 @@ minify = false
 "#;
 
     setup_minimal_site(root, site_toml);
-    eigen::build::build(root, true).unwrap();
+    eigen::build::build(root, true, false).unwrap();
 
     let config = eigen::config::load_config(root).unwrap();
     let dist = root.join("dist");
