@@ -119,6 +119,7 @@ impl DataCache {
     }
 
     /// Delete all cached files and clear the in-memory index.
+    #[allow(dead_code)]
     pub fn clear(&mut self) -> Result<()> {
         for entry in
             std::fs::read_dir(&self.cache_dir).wrap_err("Failed to read cache directory")?
