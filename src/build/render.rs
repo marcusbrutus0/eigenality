@@ -127,7 +127,7 @@ pub fn build(project_root: &Path, dev: bool) -> Result<()> {
     tracing::debug!("Template engine configured.");
 
     // Data fetcher.
-    let mut fetcher = DataFetcher::new(&config.sources, project_root);
+    let mut fetcher = DataFetcher::new(&config.sources, project_root, None);
 
     // Asset localization.
     let mut asset_cache = AssetCache::open(project_root)

@@ -77,7 +77,7 @@ impl DevBuildState {
     /// Create a new dev build state and perform the initial full build.
     pub fn new(project_root: &Path) -> Result<Self> {
         let config = crate::config::load_config(project_root)?;
-        let fetcher = DataFetcher::new(&config.sources, project_root);
+        let fetcher = DataFetcher::new(&config.sources, project_root, None);
         let plugin_registry = registry::build_registry(&config.plugins, project_root)?;
         let asset_cache = AssetCache::open(project_root)
             .wrap_err("Failed to open asset cache")?;
@@ -112,7 +112,7 @@ impl DevBuildState {
                     tracing::info!("Full rebuild (config changed)...");
                     // Reload config and plugins.
                     self.config = crate::config::load_config(&self.project_root)?;
-                    self.fetcher = DataFetcher::new(&self.config.sources, &self.project_root);
+                    self.fetcher = DataFetcher::new(&self.config.sources, &self.project_root, None);
                     self.plugin_registry = registry::build_registry(&self.config.plugins, &self.project_root)?;
                     self.full_build()?;
                 }
