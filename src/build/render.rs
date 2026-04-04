@@ -127,17 +127,7 @@ pub fn build(project_root: &Path, dev: bool, fresh: bool) -> Result<()> {
     tracing::debug!("Template engine configured.");
 
     // Data fetcher.
-    let data_cache = if fresh {
-        None
-    } else {
-        match crate::data::DataCache::open(project_root) {
-            Ok(cache) => Some(cache),
-            Err(e) => {
-                tracing::warn!("Failed to open data cache, proceeding without: {}", e);
-                None
-            }
-        }
-    };
+    let data_cache = data::open_data_cache(project_root, fresh);
     let mut fetcher = DataFetcher::new(&config.sources, project_root, data_cache);
 
     // Asset localization.

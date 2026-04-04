@@ -110,7 +110,7 @@ impl DataCache {
         };
 
         let meta_path = self.cache_dir.join(format!("{}.meta", hash));
-        let meta_json = serde_json::to_string_pretty(&meta)?;
+        let meta_json = serde_json::to_string(&meta)?;
         std::fs::write(&meta_path, meta_json)
             .wrap_err_with(|| format!("Failed to write meta file {}", meta_path.display()))?;
 

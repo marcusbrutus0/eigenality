@@ -79,17 +79,7 @@ impl DevBuildState {
     /// Create a new dev build state and perform the initial full build.
     pub fn new(project_root: &Path, fresh: bool) -> Result<Self> {
         let config = crate::config::load_config(project_root)?;
-        let data_cache = if fresh {
-            None
-        } else {
-            match crate::data::DataCache::open(project_root) {
-                Ok(cache) => Some(cache),
-                Err(e) => {
-                    tracing::warn!("Failed to open data cache: {}", e);
-                    None
-                }
-            }
-        };
+        let data_cache = crate::data::open_data_cache(project_root, fresh);
         let fetcher = DataFetcher::new(&config.sources, project_root, data_cache);
         let plugin_registry = registry::build_registry(&config.plugins, project_root)?;
         let asset_cache = AssetCache::open(project_root)
@@ -126,17 +116,7 @@ impl DevBuildState {
                     tracing::info!("Full rebuild (config changed)...");
                     // Reload config and plugins.
                     self.config = crate::config::load_config(&self.project_root)?;
-                    let data_cache = if self.fresh {
-                        None
-                    } else {
-                        match crate::data::DataCache::open(&self.project_root) {
-                            Ok(cache) => Some(cache),
-                            Err(e) => {
-                                tracing::warn!("Failed to open data cache: {}", e);
-                                None
-                            }
-                        }
-                    };
+                    let data_cache = crate::data::open_data_cache(&self.project_root, self.fresh);
                     self.fetcher = DataFetcher::new(&self.config.sources, &self.project_root, data_cache);
                     self.plugin_registry = registry::build_registry(&self.config.plugins, &self.project_root)?;
                     self.full_build()?;

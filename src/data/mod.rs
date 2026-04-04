@@ -14,5 +14,22 @@ mod transforms;
 
 pub use cache::DataCache;
 pub use fetcher::DataFetcher;
+
+/// Open the data cache unless `fresh` mode is active.
+///
+/// Returns `None` if fresh mode is on or if the cache fails to open
+/// (with a warning logged).
+pub fn open_data_cache(project_root: &std::path::Path, fresh: bool) -> Option<DataCache> {
+    if fresh {
+        return None;
+    }
+    match DataCache::open(project_root) {
+        Ok(cache) => Some(cache),
+        Err(e) => {
+            tracing::warn!("Failed to open data cache: {}", e);
+            None
+        }
+    }
+}
 pub use global::load_global_data;
 pub use query::{resolve_page_data, resolve_dynamic_page_data, resolve_dynamic_page_data_for_item};
