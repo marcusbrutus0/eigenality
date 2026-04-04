@@ -6,11 +6,14 @@
 //! - **Nested query interpolation**: resolve `{{ item.field }}` in filter values
 //! - **Query executor**: high-level entry point for resolving all data queries
 
+mod cache;
 mod fetcher;
 mod global;
 mod query;
 mod transforms;
 
+pub use cache::DataCache;
+pub(crate) use cache::cache_key_hash;
 pub use fetcher::DataFetcher;
 pub use global::load_global_data;
 pub use query::{resolve_page_data, resolve_dynamic_page_data, resolve_dynamic_page_data_for_item};
