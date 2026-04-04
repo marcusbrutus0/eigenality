@@ -168,12 +168,8 @@ impl DataFetcher {
             HttpMethod::Post => {
                 let body_hash = match body {
                     Some(b) => {
-                        use std::collections::hash_map::DefaultHasher;
-                        use std::hash::{Hash, Hasher};
                         let body_str = serde_json::to_string(b).unwrap_or_default();
-                        let mut hasher = DefaultHasher::new();
-                        body_str.hash(&mut hasher);
-                        hasher.finish().to_string()
+                        super::cache::cache_key_hash(&body_str)
                     }
                     None => String::new(),
                 };
@@ -195,19 +191,18 @@ impl DataFetcher {
         }
 
         // Level 2: add conditional headers if disk cache has metadata.
-        if let Some(ref dc) = self.data_cache {
-            if let Some(meta) = dc.get(&cache_key) {
-                if let Some(ref etag) = meta.etag {
-                    if let Ok(hv) = reqwest::header::HeaderValue::from_str(etag) {
-                        headers.insert(reqwest::header::IF_NONE_MATCH, hv);
-                    }
-                }
-                if let Some(ref lm) = meta.last_modified {
-                    if let Ok(hv) = reqwest::header::HeaderValue::from_str(lm) {
-                        headers.insert(reqwest::header::IF_MODIFIED_SINCE, hv);
-                    }
+        if let Some(meta) = self.data_cache.as_ref().and_then(|dc| dc.get(&cache_key)) {
+            if let Some(ref etag) = meta.etag {
+                if let Ok(hv) = reqwest::header::HeaderValue::from_str(etag) {
+                    headers.insert(reqwest::header::IF_NONE_MATCH, hv);
                 }
             }
+            if let Some(ref lm) = meta.last_modified {
+                if let Ok(hv) = reqwest::header::HeaderValue::from_str(lm) {
+                    headers.insert(reqwest::header::IF_MODIFIED_SINCE, hv);
+                }
+            }
+            tracing::debug!("Conditional request for {} (etag: {:?})", full_url, meta.etag);
         }
 
         let response = match method {
@@ -228,49 +223,47 @@ impl DataFetcher {
 
         // Handle 304 Not Modified: read body from disk cache.
         if status == reqwest::StatusCode::NOT_MODIFIED {
-            if let Some(ref dc) = self.data_cache {
-                if let Some(body_bytes) = dc.read(&cache_key) {
-                    match serde_json::from_slice::<Value>(&body_bytes) {
-                        Ok(value) => {
-                            self.url_cache.insert(cache_key, value.clone());
-                            return Ok(value);
+            if let Some(body_bytes) = self.data_cache.as_ref().and_then(|dc| dc.read(&cache_key)) {
+                match serde_json::from_slice::<Value>(&body_bytes) {
+                    Ok(value) => {
+                        tracing::debug!("Data cache hit (304): {}", cache_key);
+                        self.url_cache.insert(cache_key, value.clone());
+                        return Ok(value);
+                    }
+                    Err(e) => {
+                        tracing::warn!(
+                            "304 but cached body failed to parse for {}: {}. Re-fetching.",
+                            full_url, e,
+                        );
+                        // Re-fetch without conditional headers.
+                        let mut retry_headers = reqwest::header::HeaderMap::new();
+                        for (key, val) in &source.headers {
+                            let name = reqwest::header::HeaderName::from_bytes(key.as_bytes())
+                                .wrap_err_with(|| format!("Invalid header name: {}", key))?;
+                            let value = reqwest::header::HeaderValue::from_str(val)
+                                .wrap_err_with(|| format!("Invalid header value for {}", key))?;
+                            retry_headers.insert(name, value);
                         }
-                        Err(e) => {
-                            tracing::warn!(
-                                "304 but cached body failed to parse for {}: {}. Re-fetching.",
-                                full_url, e,
-                            );
-                            // Re-fetch without conditional headers.
-                            let mut retry_headers = reqwest::header::HeaderMap::new();
-                            for (key, val) in &source.headers {
-                                if let (Ok(name), Ok(value)) = (
-                                    reqwest::header::HeaderName::from_bytes(key.as_bytes()),
-                                    reqwest::header::HeaderValue::from_str(val),
-                                ) {
-                                    retry_headers.insert(name, value);
-                                }
+                        let retry_response = match method {
+                            HttpMethod::Get => {
+                                self.client.get(&full_url).headers(retry_headers).send()
                             }
-                            let retry_response = match method {
-                                HttpMethod::Get => {
-                                    self.client.get(&full_url).headers(retry_headers).send()
+                            HttpMethod::Post => {
+                                let mut req = self.client.post(&full_url).headers(retry_headers);
+                                if let Some(b) = body {
+                                    req = req.json(b);
                                 }
-                                HttpMethod::Post => {
-                                    let mut req = self.client.post(&full_url).headers(retry_headers);
-                                    if let Some(b) = body {
-                                        req = req.json(b);
-                                    }
-                                    req.send()
-                                }
+                                req.send()
                             }
-                            .wrap_err_with(|| format!("HTTP retry request failed for {}", full_url))?;
-
-                            let retry_status = retry_response.status();
-                            if !retry_status.is_success() {
-                                bail!("HTTP {} from {} (retry after bad 304 cache)", retry_status, full_url);
-                            }
-
-                            return self.handle_success_response(retry_response, cache_key, &full_url);
                         }
+                        .wrap_err_with(|| format!("HTTP retry request failed for {}", full_url))?;
+
+                        let retry_status = retry_response.status();
+                        if !retry_status.is_success() {
+                            bail!("HTTP {} from {} (retry after bad 304 cache)", retry_status, full_url);
+                        }
+
+                        return self.handle_success_response(retry_response, cache_key, &full_url);
                     }
                 }
             }
@@ -308,17 +301,17 @@ impl DataFetcher {
             .bytes()
             .wrap_err_with(|| format!("Failed to read response bytes from {}", full_url))?;
 
-        // Store in disk cache (best-effort).
-        if etag.is_some() || last_modified.is_some() {
-            if let Some(ref mut dc) = self.data_cache {
-                if let Err(e) = dc.store(
-                    &cache_key,
-                    &raw_bytes,
-                    etag.as_deref(),
-                    last_modified.as_deref(),
-                ) {
-                    tracing::warn!("Failed to store data cache for {}: {}", full_url, e);
-                }
+        // Store in disk cache (best-effort). Only cache if the server
+        // provided caching headers — otherwise no conditional request is possible.
+        if (etag.is_some() || last_modified.is_some()) && self.data_cache.is_some() {
+            let dc = self.data_cache.as_mut().unwrap();
+            if let Err(e) = dc.store(
+                &cache_key,
+                &raw_bytes,
+                etag.as_deref(),
+                last_modified.as_deref(),
+            ) {
+                tracing::warn!("Failed to store data cache for {}: {}", full_url, e);
             }
         }
 
