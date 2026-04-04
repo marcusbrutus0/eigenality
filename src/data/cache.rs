@@ -11,7 +11,6 @@
 use eyre::{Result, WrapErr};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::hash::{DefaultHasher, Hash, Hasher};
 use std::path::{Path, PathBuf};
 
 /// Metadata stored alongside each cached data response.
@@ -33,11 +32,14 @@ pub struct DataCache {
     index: HashMap<String, DataCacheMeta>,
 }
 
-/// Hash `key` with `DefaultHasher` and format as a 16-hex-digit string.
-pub fn cache_key_hash(key: &str) -> String {
-    let mut hasher = DefaultHasher::new();
-    key.hash(&mut hasher);
-    format!("{:016x}", hasher.finish())
+/// Hash a cache key into a stable hex string for use as a filename.
+///
+/// Uses SHA-256 (not `DefaultHasher`) because the hash must be stable
+/// across Rust toolchain versions — the value is persisted on disk.
+pub(crate) fn cache_key_hash(key: &str) -> String {
+    use sha2::{Digest, Sha256};
+    let digest = Sha256::digest(key.as_bytes());
+    format!("{:x}", digest)
 }
 
 impl DataCache {
@@ -79,6 +81,9 @@ impl DataCache {
 
     /// Read the cached body bytes for a cache key, or `None` if missing.
     pub fn read(&self, cache_key: &str) -> Option<Vec<u8>> {
+        if !self.index.contains_key(cache_key) {
+            return None;
+        }
         let hash = cache_key_hash(cache_key);
         let body_path = self.cache_dir.join(format!("{}.body", hash));
         std::fs::read(&body_path).ok()
