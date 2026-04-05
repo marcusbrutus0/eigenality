@@ -27,8 +27,11 @@ source owns the URL. Simple, predictable, no magic.
 ## Template Usage
 
 ```jinja
-{# Explicit: name the source that owns the image #}
+{# Absolute URL from data #}
 <img src="{{ source_asset('my_cms', item.image_url) }}">
+
+{# Relative path — resolved against the source's base URL #}
+<img src="{{ source_asset('my_cms', '/uploads/' ~ item.image.hash) }}">
 
 {# Works with any expression that produces a URL #}
 <img src="{{ source_asset('my_cms', item.hero.formats.large.url) }}">
@@ -36,25 +39,33 @@ source owns the URL. Simple, predictable, no magic.
 
 **Arguments:**
 1. `source_name` (string, required) — must match a key in `[sources.*]`
-2. `url` (string, required) — absolute URL to the image/asset
+2. `url_or_path` (string, required) — either:
+   - An absolute URL (`https://...`) — used as-is
+   - A path (`/uploads/abc123`) — resolved against the source's base URL
+
+**Resolution rule:** if the value starts with `http://` or `https://`, treat it
+as absolute. Otherwise, join it with the source's configured `url`.
 
 **Returns:** a string path — either a local `/assets/...` path (build) or
 a `/_proxy/...` URL (dev).
 
 **Errors:**
 - Unknown source name → template render error with available source names
-- Empty or non-HTTP URL → template render error
+- Empty string → template render error
 
 ## Architecture
 
 ### Build-Time Flow
 
 ```
-Template renders source_asset("my_cms", "https://cms.example.com/img/photo.jpg")
+Template renders source_asset("my_cms", "/uploads/abc123")
   │
-  ├─ Look up "my_cms" in sources config → get headers (Authorization, etc.)
+  ├─ Look up "my_cms" in sources config → get base URL + headers
   │
-  ├─ Check asset cache (keyed by URL)
+  ├─ Resolve URL: "/uploads/abc123" → "https://cms.example.com/uploads/abc123"
+  │   (absolute URLs pass through unchanged)
+  │
+  ├─ Check asset cache (keyed by resolved URL)
   │   ├─ Cache hit + fresh → return cached local path
   │   └─ Cache miss or stale ↓
   │
@@ -91,15 +102,21 @@ This keeps the template function pure and side-effect-free during rendering.
 ### Dev-Time Flow
 
 ```
-Template renders source_asset("my_cms", "https://cms.example.com/img/photo.jpg")
+Template renders source_asset("my_cms", "/uploads/abc123")
   │
   ├─ Look up "my_cms" in sources config (validate it exists)
   │
-  ├─ Extract the path portion of the URL
-  │   "https://cms.example.com/img/photo.jpg" → "/img/photo.jpg"
+  ├─ Resolve: "/uploads/abc123" is relative → path is "/uploads/abc123"
+  │   (for absolute URLs on the same host, extract the path portion)
+  │   (for absolute URLs on a different host, use __source_asset__/ prefix)
   │
-  └─ Return "/_proxy/my_cms/img/photo.jpg"
+  └─ Return "/_proxy/my_cms/uploads/abc123"
 ```
+
+When the input is a relative path, the proxy path is trivial — just append it.
+When the input is an absolute URL on the source's own host, extract the path.
+When the input is an absolute URL on a *different* host, use the
+`__source_asset__/` full-URL proxy route.
 
 In dev mode, no downloading happens. The browser requests
 `/_proxy/my_cms/img/photo.jpg`, and the existing `proxy_handler` forwards it to
@@ -149,11 +166,13 @@ URL as a placeholder for the post-render rewrite pass.
 ```rust
 pub struct SourceAssetRequest {
     pub source_name: String,
+    /// Always the fully resolved absolute URL.
     pub url: String,
 }
 ```
 
-Collected during template rendering (build mode only).
+Collected during template rendering (build mode only). The URL is resolved
+(relative paths joined with source base URL) before being stored.
 
 ### 2. `source_asset` template function
 
