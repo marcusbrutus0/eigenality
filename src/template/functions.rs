@@ -168,24 +168,34 @@ fn compute_fragment_path(page_path: &str, fragment_dir: &str, block: &str) -> St
 
 /// Build a dev proxy URL for a source asset.
 ///
-/// - Same-host URLs: extract the path and use `/_proxy/{source}/path`.
+/// - Same-host URLs: strip the source base path and use `/_proxy/{source}/{relative}`.
+///   The proxy handler prepends the source base URL, so only the relative tail is needed.
 /// - Cross-host URLs: use `/_proxy/{source}/__source_asset__/{full_url}`.
 fn build_proxy_url(source_name: &str, resolved_url: &str, source_base_url: &str) -> String {
     let base_host = extract_host(source_base_url);
     let url_host = extract_host(resolved_url);
 
     if base_host == url_host {
-        // Same host — extract path portion.
-        let path = resolved_url
-            .find("://")
-            .and_then(|i| resolved_url[i + 3..].find('/').map(|j| i + 3 + j))
-            .map(|i| &resolved_url[i..])
-            .unwrap_or("/");
-        let path = path.trim_start_matches('/');
-        format!("/_proxy/{}/{}", source_name, path)
+        // Same host — extract the path portion relative to the source base URL's path.
+        // The proxy handler prepends the full source base URL, so we only emit the
+        // portion after that base path to avoid doubling (e.g. `/api/uploads` appearing twice).
+        let base_path = extract_path(source_base_url);
+        let resolved_path = extract_path(resolved_url);
+        let relative = resolved_path
+            .strip_prefix(base_path)
+            .unwrap_or(resolved_path);
+        let relative = relative.trim_start_matches('/');
+        format!("/_proxy/{}/{}", source_name, relative)
     } else {
         format!("/_proxy/{}/{}{}", source_name, SOURCE_ASSET_PROXY_PREFIX, resolved_url)
     }
+}
+
+/// Extract the path portion of a URL (everything after `scheme://host[:port]`).
+fn extract_path(url: &str) -> &str {
+    url.find("://")
+        .and_then(|i| url[i + 3..].find('/').map(|j| &url[i + 3 + j..]))
+        .unwrap_or("/")
 }
 
 /// Extract hostname from a URL (without port).
@@ -632,5 +642,37 @@ mod tests {
         let err = env.get_template("test").unwrap().render(()).unwrap_err();
         let msg = err.to_string();
         assert!(msg.contains("non-empty"), "Error should mention non-empty: {}", msg);
+    }
+
+    #[test]
+    fn source_asset_dev_mode_base_url_with_path_no_doubling() {
+        let mut env = Environment::new();
+        let config = make_config_with_source(
+            "cms_assets",
+            "http://localhost:4001/apps/id8nxt/uploads/file",
+            "Bearer tok",
+        );
+        register_functions(&mut env, &config, None, true, None);
+        env.add_template("test", r#"{{ source_asset("cms_assets", "abc123/hero.png") }}"#)
+            .unwrap();
+        let result = env.get_template("test").unwrap().render(()).unwrap();
+        // The base path /apps/id8nxt/uploads/file must NOT appear in the proxy URL —
+        // the proxy handler prepends the full source base URL.
+        assert_eq!(result, "/_proxy/cms_assets/abc123/hero.png");
+    }
+
+    #[test]
+    fn source_asset_dev_mode_base_url_with_path_leading_slash() {
+        let mut env = Environment::new();
+        let config = make_config_with_source(
+            "cms_assets",
+            "http://localhost:4001/apps/id8nxt/uploads/file",
+            "Bearer tok",
+        );
+        register_functions(&mut env, &config, None, true, None);
+        env.add_template("test", r#"{{ source_asset("cms_assets", "/abc123/hero.png") }}"#)
+            .unwrap();
+        let result = env.get_template("test").unwrap().render(()).unwrap();
+        assert_eq!(result, "/_proxy/cms_assets/abc123/hero.png");
     }
 }
