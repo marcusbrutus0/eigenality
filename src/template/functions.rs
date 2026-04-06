@@ -13,7 +13,7 @@ use minijinja::Value;
 
 use crate::build::clean_link::to_clean_link;
 use crate::build::content_hash::AssetManifest;
-use crate::build::source_asset::SourceAssetCollector;
+use crate::build::source_asset::{SourceAssetCollector, resolve_url};
 use crate::config::SiteConfig;
 
 /// Register all custom functions on the given environment.
@@ -82,6 +82,44 @@ pub fn register_functions(
         }
     });
 
+    // source_asset(source_name, url_or_path)
+    if !config.sources.is_empty() {
+        let sources = config.sources.clone();
+        let collector = source_asset_collector.unwrap_or_default();
+        env.add_function(
+            "source_asset",
+            move |source_name: &str, url_or_path: &str| -> Result<String, minijinja::Error> {
+                if url_or_path.is_empty() {
+                    return Err(minijinja::Error::new(
+                        minijinja::ErrorKind::InvalidOperation,
+                        "source_asset: url_or_path must be a non-empty string",
+                    ));
+                }
+
+                let source = sources.get(source_name).ok_or_else(|| {
+                    let available: Vec<_> = sources.keys().cloned().collect();
+                    minijinja::Error::new(
+                        minijinja::ErrorKind::InvalidOperation,
+                        format!(
+                            "Unknown source '{}'. Available: {}",
+                            source_name,
+                            available.join(", "),
+                        ),
+                    )
+                })?;
+
+                let resolved = resolve_url(url_or_path, &source.url);
+
+                if dev_mode {
+                    Ok(build_proxy_url(source_name, &resolved, &source.url))
+                } else {
+                    collector.push(source_name.to_string(), resolved.clone());
+                    Ok(resolved)
+                }
+            },
+        );
+    }
+
     // site — expose the full [site] config as a global variable.
     env.add_global(
         "site",
@@ -126,6 +164,41 @@ fn compute_fragment_path(page_path: &str, fragment_dir: &str, block: &str) -> St
     } else {
         format!("/{}/{}/{}.html", fragment_dir, stem, block)
     }
+}
+
+/// Build a dev proxy URL for a source asset.
+///
+/// - Same-host URLs: extract the path and use `/_proxy/{source}/path`.
+/// - Cross-host URLs: use `/_proxy/{source}/__source_asset__/{full_url}`.
+fn build_proxy_url(source_name: &str, resolved_url: &str, source_base_url: &str) -> String {
+    let base_host = extract_host(source_base_url);
+    let url_host = extract_host(resolved_url);
+
+    if base_host == url_host {
+        // Same host — extract path portion.
+        let path = resolved_url
+            .find("://")
+            .and_then(|i| resolved_url[i + 3..].find('/').map(|j| i + 3 + j))
+            .map(|i| &resolved_url[i..])
+            .unwrap_or("/");
+        let path = path.trim_start_matches('/');
+        format!("/_proxy/{}/{}", source_name, path)
+    } else {
+        format!("/_proxy/{}/__source_asset__/{}", source_name, resolved_url)
+    }
+}
+
+/// Extract hostname from a URL (without port).
+fn extract_host(url: &str) -> &str {
+    url.find("://")
+        .map(|i| &url[i + 3..])
+        .unwrap_or(url)
+        .split('/')
+        .next()
+        .unwrap_or("")
+        .split(':')
+        .next()
+        .unwrap_or("")
 }
 
 #[cfg(test)]
@@ -486,4 +559,78 @@ mod tests {
         assert_eq!(result.trim(), r##"href="/about""##);
     }
 
+    // --- source_asset ---
+
+    fn make_config_with_source(name: &str, url: &str, auth: &str) -> SiteConfig {
+        let mut config = test_config();
+        config.sources.insert(name.to_string(), crate::config::SourceConfig {
+            url: url.to_string(),
+            headers: std::collections::HashMap::from([
+                ("Authorization".to_string(), auth.to_string()),
+            ]),
+        });
+        config
+    }
+
+    #[test]
+    fn source_asset_dev_mode_returns_proxy_url_relative_path() {
+        let mut env = Environment::new();
+        let config = make_config_with_source("my_cms", "https://cms.example.com", "Bearer tok");
+        register_functions(&mut env, &config, None, true, None);
+        env.add_template("test", r#"{{ source_asset("my_cms", "/uploads/photo.jpg") }}"#).unwrap();
+        let result = env.get_template("test").unwrap().render(()).unwrap();
+        assert_eq!(result, "/_proxy/my_cms/uploads/photo.jpg");
+    }
+
+    #[test]
+    fn source_asset_dev_mode_returns_proxy_url_absolute_same_host() {
+        let mut env = Environment::new();
+        let config = make_config_with_source("my_cms", "https://cms.example.com", "Bearer tok");
+        register_functions(&mut env, &config, None, true, None);
+        env.add_template("test", r#"{{ source_asset("my_cms", "https://cms.example.com/uploads/photo.jpg") }}"#).unwrap();
+        let result = env.get_template("test").unwrap().render(()).unwrap();
+        assert_eq!(result, "/_proxy/my_cms/uploads/photo.jpg");
+    }
+
+    #[test]
+    fn source_asset_dev_mode_returns_full_proxy_url_different_host() {
+        let mut env = Environment::new();
+        let config = make_config_with_source("my_cms", "https://cms.example.com", "Bearer tok");
+        register_functions(&mut env, &config, None, true, None);
+        env.add_template("test", r#"{{ source_asset("my_cms", "https://media.example.com/photo.jpg") }}"#).unwrap();
+        let result = env.get_template("test").unwrap().render(()).unwrap();
+        assert_eq!(result, "/_proxy/my_cms/__source_asset__/https://media.example.com/photo.jpg");
+    }
+
+    #[test]
+    fn source_asset_build_mode_returns_resolved_url() {
+        let mut env = Environment::new();
+        let config = make_config_with_source("my_cms", "https://cms.example.com", "Bearer tok");
+        register_functions(&mut env, &config, None, false, None);
+        env.add_template("test", r#"{{ source_asset("my_cms", "/uploads/photo.jpg") }}"#).unwrap();
+        let result = env.get_template("test").unwrap().render(()).unwrap();
+        assert_eq!(result, "https://cms.example.com/uploads/photo.jpg");
+    }
+
+    #[test]
+    fn source_asset_unknown_source_errors() {
+        let mut env = Environment::new();
+        let config = make_config_with_source("my_cms", "https://cms.example.com", "Bearer tok");
+        register_functions(&mut env, &config, None, true, None);
+        env.add_template("test", r#"{{ source_asset("nope", "/img.jpg") }}"#).unwrap();
+        let err = env.get_template("test").unwrap().render(()).unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("nope"), "Error should name the bad source: {}", msg);
+    }
+
+    #[test]
+    fn source_asset_empty_url_errors() {
+        let mut env = Environment::new();
+        let config = make_config_with_source("my_cms", "https://cms.example.com", "Bearer tok");
+        register_functions(&mut env, &config, None, true, None);
+        env.add_template("test", r#"{{ source_asset("my_cms", "") }}"#).unwrap();
+        let err = env.get_template("test").unwrap().render(()).unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("non-empty"), "Error should mention non-empty: {}", msg);
+    }
 }
