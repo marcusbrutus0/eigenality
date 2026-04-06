@@ -224,7 +224,7 @@ async fn sse_handler(
     rx: broadcast::Receiver<()>,
 ) -> Sse<impl Stream<Item = Result<Event, Infallible>>> {
     let stream = BroadcastStream::new(rx).filter_map(|result| match result {
-        Ok(()) => Some(Ok(Event::default().event("reload").data(""))),
+        Ok(()) => Some(Ok(Event::default().event("reload").data("1"))),
         Err(_) => None,
     });
 

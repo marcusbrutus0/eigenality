@@ -5,10 +5,21 @@
 //! This is never active during `eigen build` — only during `eigen dev`.
 
 /// The live-reload script injected into every full HTML page during dev mode.
+///
+/// Tracks whether the SSE connection was ever open so that transient errors
+/// during initial connection (common in Firefox) do not trigger a reload loop.
+/// EventSource auto-reconnects on its own; we only force a full page reload
+/// when a previously-established connection is permanently lost (server restart).
 const RELOAD_SCRIPT: &str = r#"<script>
   const es = new EventSource("/_reload");
+  let wasOpen = false;
+  es.onopen = () => { wasOpen = true; };
   es.addEventListener("reload", () => window.location.reload());
-  es.onerror = () => setTimeout(() => window.location.reload(), 1000);
+  es.onerror = () => {
+    if (wasOpen && es.readyState === EventSource.CLOSED) {
+      setTimeout(() => window.location.reload(), 1000);
+    }
+  };
 </script>"#;
 
 /// Inject the live-reload script into rendered HTML.
