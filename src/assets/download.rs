@@ -21,74 +21,9 @@ pub enum DownloadResult {
     NotModified,
 }
 
-/// Download an asset URL, using conditional requests if we have cached metadata.
-pub fn download_asset(
-    client: &reqwest::blocking::Client,
-    url: &str,
-    cached_meta: Option<&AssetCacheMeta>,
-) -> Result<DownloadResult> {
-    let mut request = client.get(url);
-
-    // Add conditional headers if we have cached metadata.
-    if let Some(meta) = cached_meta {
-        if let Some(ref etag) = meta.etag {
-            request = request.header("If-None-Match", etag.as_str());
-        }
-        if let Some(ref last_mod) = meta.last_modified {
-            request = request.header("If-Modified-Since", last_mod.as_str());
-        }
-    }
-
-    let response = request.send()
-        .wrap_err_with(|| format!("Failed to download asset: {}", url))?;
-
-    let status = response.status();
-
-    if status == reqwest::StatusCode::NOT_MODIFIED {
-        return Ok(DownloadResult::NotModified);
-    }
-
-    if !status.is_success() {
-        bail!("HTTP {} downloading asset: {}", status, url);
-    }
-
-    // Extract caching headers.
-    let etag = response
-        .headers()
-        .get("etag")
-        .and_then(|v| v.to_str().ok())
-        .map(|s| s.to_string());
-
-    let last_modified = response
-        .headers()
-        .get("last-modified")
-        .and_then(|v| v.to_str().ok())
-        .map(|s| s.to_string());
-
-    let content_type = response
-        .headers()
-        .get("content-type")
-        .and_then(|v| v.to_str().ok())
-        .map(|s| s.split(';').next().unwrap_or(s).trim().to_string());
-
-    let data = response.bytes()
-        .wrap_err_with(|| format!("Failed to read asset body: {}", url))?
-        .to_vec();
-
-    let local_filename = local_filename_for_url(url);
-
-    Ok(DownloadResult::Downloaded {
-        data,
-        local_filename,
-        etag,
-        last_modified,
-        content_type,
-    })
-}
-
 /// Download an asset URL with extra headers, using conditional requests if we have cached metadata.
 ///
-/// Identical to [`download_asset`] but merges `extra_headers` into the request before sending.
+/// Merges `extra_headers` into the request before sending.
 /// Use this when the source requires authentication (e.g. a Bearer token).
 pub fn download_asset_with_headers(
     client: &reqwest::blocking::Client,
@@ -162,10 +97,22 @@ pub fn download_asset_with_headers(
     })
 }
 
+/// Download an asset URL, using conditional requests if we have cached metadata.
+#[allow(dead_code)]
+pub fn download_asset(
+    client: &reqwest::blocking::Client,
+    url: &str,
+    cached_meta: Option<&AssetCacheMeta>,
+) -> Result<DownloadResult> {
+    download_asset_with_headers(client, url, cached_meta, &reqwest::header::HeaderMap::new())
+}
+
 /// Ensure an asset is available in the cache (downloading or validating as needed),
 /// sending `extra_headers` on every request (e.g. for source authentication).
 ///
 /// Returns the local filename on success.
+// Used by resolve_source_assets.
+#[allow(dead_code)]
 pub fn ensure_asset_with_headers(
     client: &reqwest::blocking::Client,
     cache: &mut AssetCache,
@@ -179,7 +126,7 @@ pub fn ensure_asset_with_headers(
         if cache.has_file(url) {
             match download_asset_with_headers(client, url, Some(meta), extra_headers)? {
                 DownloadResult::NotModified => {
-                    tracing::debug!("  Asset not modified (304): {}", url);
+                    tracing::debug!("  Source asset not modified (304): {}", url);
                     return Ok(meta.local_filename.clone());
                 }
                 DownloadResult::Downloaded {
@@ -189,7 +136,7 @@ pub fn ensure_asset_with_headers(
                     last_modified,
                     content_type,
                 } => {
-                    tracing::debug!("  Asset re-downloaded (changed): {}", url);
+                    tracing::debug!("  Source asset re-downloaded: {}", url);
                     let final_name =
                         cache.store(url, &data, &local_filename, etag, last_modified, content_type)?;
                     return Ok(final_name);
@@ -207,7 +154,7 @@ pub fn ensure_asset_with_headers(
             last_modified,
             content_type,
         } => {
-            tracing::debug!("  Asset downloaded: {} → {}", url, local_filename);
+            tracing::debug!("  Source asset downloaded: {} → {}", url, local_filename);
             let final_name =
                 cache.store(url, &data, &local_filename, etag, last_modified, content_type)?;
             Ok(final_name)
@@ -226,49 +173,7 @@ pub fn ensure_asset(
     cache: &mut AssetCache,
     url: &str,
 ) -> Result<String> {
-    let cached_meta = cache.get(url).cloned();
-
-    // If we have the file cached, try a conditional request.
-    if let Some(ref meta) = cached_meta {
-        if cache.has_file(url) {
-            match download_asset(client, url, Some(meta))? {
-                DownloadResult::NotModified => {
-                    tracing::debug!("  Asset not modified (304): {}", url);
-                    return Ok(meta.local_filename.clone());
-                }
-                DownloadResult::Downloaded {
-                    data,
-                    local_filename,
-                    etag,
-                    last_modified,
-                    content_type,
-                } => {
-                    tracing::debug!("  Asset re-downloaded (changed): {}", url);
-                    let final_name = cache.store(url, &data, &local_filename, etag, last_modified, content_type)?;
-                    return Ok(final_name);
-                }
-            }
-        }
-    }
-
-    // No cache entry or file missing — full download.
-    match download_asset(client, url, None)? {
-        DownloadResult::Downloaded {
-            data,
-            local_filename,
-            etag,
-            last_modified,
-            content_type,
-        } => {
-            tracing::debug!("  Asset downloaded: {} → {}", url, local_filename);
-            let final_name = cache.store(url, &data, &local_filename, etag, last_modified, content_type)?;
-            Ok(final_name)
-        }
-        DownloadResult::NotModified => {
-            // Shouldn't happen without conditional headers, but handle gracefully.
-            bail!("Unexpected 304 for {}", url);
-        }
-    }
+    ensure_asset_with_headers(client, cache, url, &reqwest::header::HeaderMap::new())
 }
 
 #[cfg(test)]
