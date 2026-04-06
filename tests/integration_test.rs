@@ -2124,6 +2124,97 @@ clean_links = true
 }
 
 // ============================================================================
+// source_asset integration
+// ============================================================================
+
+#[test]
+fn source_asset_downloads_with_auth_headers() {
+    // Start a mock server that requires an auth header.
+    let server = tiny_http::Server::http("127.0.0.1:0").unwrap();
+    let addr = server.server_addr().to_ip().unwrap();
+    let base_url = format!("http://{}", addr);
+
+    let handle = std::thread::spawn(move || {
+        let req = server.recv().unwrap();
+        // Verify the Authorization header is present.
+        let auth = req.headers().iter()
+            .find(|h| h.field.equiv("Authorization"))
+            .map(|h| h.value.to_string());
+        assert_eq!(auth.as_deref(), Some("Bearer test-token-123"));
+
+        let png_bytes = b"\x89PNG\r\n\x1a\n"; // minimal PNG signature
+        let response = tiny_http::Response::from_data(png_bytes.to_vec())
+            .with_header(
+                tiny_http::Header::from_bytes("content-type", "image/png").unwrap(),
+            );
+        req.respond(response).unwrap();
+    });
+
+    // Create a project with source_asset in the template.
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+
+    // site.toml
+    let config = format!(
+        r#"[site]
+name = "Source Asset Test"
+base_url = "https://example.com"
+
+[build]
+fragments = false
+minify = false
+
+[assets]
+localize = false
+
+[sources.test_cms]
+url = "{}"
+headers = {{ Authorization = "Bearer test-token-123" }}
+"#,
+        base_url,
+    );
+    std::fs::write(root.join("site.toml"), config).unwrap();
+
+    // Template using source_asset
+    std::fs::create_dir_all(root.join("templates")).unwrap();
+    let template = r#"<!DOCTYPE html>
+<html><body>
+<img src='{{ source_asset("test_cms", "/uploads/hero.png") }}'>
+</body></html>"#;
+    std::fs::write(root.join("templates/index.html"), template).unwrap();
+
+    // Static dir (required).
+    std::fs::create_dir_all(root.join("static")).unwrap();
+
+    // Build.
+    eigen::build::build(root, false, true).unwrap();
+
+    handle.join().unwrap();
+
+    // Verify the image was downloaded to dist/assets/.
+    let dist_assets = root.join("dist/assets");
+    assert!(dist_assets.exists(), "dist/assets/ should exist");
+    let files: Vec<_> = std::fs::read_dir(&dist_assets)
+        .unwrap()
+        .filter_map(|e| e.ok())
+        .collect();
+    assert!(!files.is_empty(), "Should have at least one downloaded asset");
+
+    // Verify the HTML was rewritten.
+    let html = std::fs::read_to_string(root.join("dist/index.html")).unwrap();
+    assert!(
+        html.contains("/assets/"),
+        "HTML should reference local /assets/ path, got: {}",
+        html,
+    );
+    assert!(
+        !html.contains(&base_url),
+        "HTML should not contain original URL, got: {}",
+        html,
+    );
+}
+
+// ============================================================================
 // Utility
 // ============================================================================
 
