@@ -198,6 +198,8 @@ impl DevBuildState {
             &pages,
             Some(&self.plugin_registry),
             None, // No content hashing in dev mode.
+            true,
+            None, // dev mode returns proxy URLs directly
         )?;
 
         // Build timestamp.

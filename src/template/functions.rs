@@ -13,6 +13,7 @@ use minijinja::Value;
 
 use crate::build::clean_link::to_clean_link;
 use crate::build::content_hash::AssetManifest;
+use crate::build::source_asset::SourceAssetCollector;
 use crate::config::SiteConfig;
 
 /// Register all custom functions on the given environment.
@@ -20,6 +21,8 @@ pub fn register_functions(
     env: &mut Environment<'_>,
     config: &SiteConfig,
     manifest: Option<Arc<AssetManifest>>,
+    dev_mode: bool,
+    source_asset_collector: Option<SourceAssetCollector>,
 ) {
     let fragment_dir = config.build.fragment_dir.clone();
     let fragments_enabled = config.build.fragments;
@@ -238,7 +241,7 @@ mod tests {
     fn test_link_to_default() {
         let mut env = Environment::new();
         let config = test_config();
-        register_functions(&mut env, &config, None);
+        register_functions(&mut env, &config, None, false, None);
 
         env.add_template("test", r##"<a {{ link_to("/about.html") }}>About</a>"##)
             .unwrap();
@@ -255,7 +258,7 @@ mod tests {
     fn test_link_to_custom_target() {
         let mut env = Environment::new();
         let config = test_config();
-        register_functions(&mut env, &config, None);
+        register_functions(&mut env, &config, None, false, None);
 
         env.add_template("test", r##"{{ link_to("/about.html", "#main") }}"##)
             .unwrap();
@@ -269,7 +272,7 @@ mod tests {
     fn test_link_to_custom_block() {
         let mut env = Environment::new();
         let config = test_config();
-        register_functions(&mut env, &config, None);
+        register_functions(&mut env, &config, None, false, None);
 
         env.add_template("test", r##"{{ link_to("/about.html", "#sidebar", "sidebar") }}"##)
             .unwrap();
@@ -283,7 +286,7 @@ mod tests {
     fn test_link_to_no_fragments() {
         let mut env = Environment::new();
         let config = test_config_no_fragments();
-        register_functions(&mut env, &config, None);
+        register_functions(&mut env, &config, None, false, None);
 
         env.add_template("test", r##"{{ link_to("/about.html") }}"##)
             .unwrap();
@@ -300,7 +303,7 @@ mod tests {
     fn test_current_year() {
         let mut env = Environment::new();
         let config = test_config();
-        register_functions(&mut env, &config, None);
+        register_functions(&mut env, &config, None, false, None);
 
         env.add_template("test", "{{ current_year() }}")
             .unwrap();
@@ -317,7 +320,7 @@ mod tests {
     fn test_asset_with_leading_slash() {
         let mut env = Environment::new();
         let config = test_config();
-        register_functions(&mut env, &config, None);
+        register_functions(&mut env, &config, None, false, None);
 
         env.add_template("test", "{{ asset('/css/style.css') }}")
             .unwrap();
@@ -330,7 +333,7 @@ mod tests {
     fn test_asset_without_leading_slash() {
         let mut env = Environment::new();
         let config = test_config();
-        register_functions(&mut env, &config, None);
+        register_functions(&mut env, &config, None, false, None);
 
         env.add_template("test", "{{ asset('css/style.css') }}")
             .unwrap();
@@ -345,7 +348,7 @@ mod tests {
     fn test_site_global() {
         let mut env = Environment::new();
         let config = test_config();
-        register_functions(&mut env, &config, None);
+        register_functions(&mut env, &config, None, false, None);
 
         env.add_template("test", "{{ site.name }} - {{ site.base_url }}")
             .unwrap();
@@ -364,7 +367,7 @@ mod tests {
         manifest.insert("/css/style.css".into(), "/css/style.abc123.css".into());
         let manifest = Arc::new(manifest);
 
-        register_functions(&mut env, &config, Some(manifest));
+        register_functions(&mut env, &config, Some(manifest), false, None);
 
         env.add_template("test", "{{ asset('/css/style.css') }}")
             .unwrap();
@@ -377,7 +380,7 @@ mod tests {
     fn test_asset_without_manifest() {
         let mut env = Environment::new();
         let config = test_config();
-        register_functions(&mut env, &config, None);
+        register_functions(&mut env, &config, None, false, None);
 
         env.add_template("test", "{{ asset('/css/style.css') }}")
             .unwrap();
@@ -392,7 +395,7 @@ mod tests {
         let config = test_config();
         let manifest = Arc::new(AssetManifest::new());
 
-        register_functions(&mut env, &config, Some(manifest));
+        register_functions(&mut env, &config, Some(manifest), false, None);
 
         env.add_template("test", "{{ asset('/unknown.css') }}")
             .unwrap();
@@ -409,7 +412,7 @@ mod tests {
         manifest.insert("/css/style.css".into(), "/css/style.abc123.css".into());
         let manifest = Arc::new(manifest);
 
-        register_functions(&mut env, &config, Some(manifest));
+        register_functions(&mut env, &config, Some(manifest), false, None);
 
         // Path without leading slash should be normalized and then resolved.
         env.add_template("test", "{{ asset('css/style.css') }}")
@@ -424,7 +427,7 @@ mod tests {
         let mut env = Environment::new();
         let mut config = test_config();
         config.build.clean_links = true;
-        register_functions(&mut env, &config, None);
+        register_functions(&mut env, &config, None, false, None);
 
         env.add_template("test", r##"<a {{ link_to("/about.html") }}>About</a>"##)
             .unwrap();
@@ -441,7 +444,7 @@ mod tests {
         let mut env = Environment::new();
         let mut config = test_config();
         config.build.clean_links = true;
-        register_functions(&mut env, &config, None);
+        register_functions(&mut env, &config, None, false, None);
 
         env.add_template("test", r##"{{ link_to("/index.html") }}"##)
             .unwrap();
@@ -457,7 +460,7 @@ mod tests {
         let mut env = Environment::new();
         let mut config = test_config();
         config.build.clean_links = true;
-        register_functions(&mut env, &config, None);
+        register_functions(&mut env, &config, None, false, None);
 
         env.add_template("test", r##"{{ link_to("/about") }}"##)
             .unwrap();
@@ -473,7 +476,7 @@ mod tests {
         let mut env = Environment::new();
         let mut config = test_config_no_fragments();
         config.build.clean_links = true;
-        register_functions(&mut env, &config, None);
+        register_functions(&mut env, &config, None, false, None);
 
         env.add_template("test", r##"{{ link_to("/about.html") }}"##)
             .unwrap();
@@ -482,4 +485,5 @@ mod tests {
 
         assert_eq!(result.trim(), r##"href="/about""##);
     }
+
 }

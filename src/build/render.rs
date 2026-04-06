@@ -123,6 +123,8 @@ pub fn build(project_root: &Path, dev: bool, fresh: bool) -> Result<()> {
         } else {
             None
         },
+        false,
+        None, // collector wired in Task 8
     )?;
     tracing::debug!("Template engine configured.");
 
