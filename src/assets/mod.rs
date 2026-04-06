@@ -13,7 +13,7 @@
 //! - Known CDN hostnames (configurable via `site.toml`)
 
 pub mod cache;
-mod download;
+pub mod download;
 pub mod html_rewrite;
 pub mod images;
 mod rewrite;

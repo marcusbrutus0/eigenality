@@ -111,8 +111,6 @@ pub fn download_asset(
 /// sending `extra_headers` on every request (e.g. for source authentication).
 ///
 /// Returns the local filename on success.
-// Used by resolve_source_assets.
-#[allow(dead_code)]
 pub fn ensure_asset_with_headers(
     client: &reqwest::blocking::Client,
     cache: &mut AssetCache,
