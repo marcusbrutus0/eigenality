@@ -13,7 +13,7 @@ use minijinja::Value;
 
 use crate::build::clean_link::to_clean_link;
 use crate::build::content_hash::AssetManifest;
-use crate::build::source_asset::{SourceAssetCollector, resolve_url};
+use crate::build::source_asset::{SourceAssetCollector, SOURCE_ASSET_PROXY_PREFIX, resolve_url};
 use crate::config::SiteConfig;
 
 /// Register all custom functions on the given environment.
@@ -184,7 +184,7 @@ fn build_proxy_url(source_name: &str, resolved_url: &str, source_base_url: &str)
         let path = path.trim_start_matches('/');
         format!("/_proxy/{}/{}", source_name, path)
     } else {
-        format!("/_proxy/{}/__source_asset__/{}", source_name, resolved_url)
+        format!("/_proxy/{}/{}{}", source_name, SOURCE_ASSET_PROXY_PREFIX, resolved_url)
     }
 }
 

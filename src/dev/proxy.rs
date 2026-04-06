@@ -19,6 +19,7 @@ use axum::{
     response::{IntoResponse, Response},
 };
 
+use crate::build::source_asset::SOURCE_ASSET_PROXY_PREFIX;
 use crate::config::SourceConfig;
 
 /// Parsed proxy target from the URL path.
@@ -30,11 +31,9 @@ enum ProxyTarget {
     FullUrl(String),
 }
 
-const SOURCE_ASSET_PREFIX: &str = "__source_asset__/";
-
 /// Parse the `rest` path segment from `/_proxy/{source}/*rest`.
 fn parse_proxy_rest(rest: &str) -> ProxyTarget {
-    if let Some(full_url) = rest.strip_prefix(SOURCE_ASSET_PREFIX) {
+    if let Some(full_url) = rest.strip_prefix(SOURCE_ASSET_PROXY_PREFIX) {
         ProxyTarget::FullUrl(full_url.to_string())
     } else {
         ProxyTarget::RelativePath(rest.to_string())

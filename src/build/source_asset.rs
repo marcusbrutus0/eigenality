@@ -14,6 +14,10 @@ use crate::assets::cache::AssetCache;
 use crate::assets::download;
 use crate::config::SourceConfig;
 
+/// Sentinel prefix used by the dev proxy to identify full-URL forwarding requests.
+/// Includes trailing slash for direct use in URL construction.
+pub const SOURCE_ASSET_PROXY_PREFIX: &str = "__source_asset__/";
+
 /// A request to download an asset using a named source's auth headers.
 #[derive(Debug, Clone)]
 pub struct SourceAssetRequest {
@@ -84,7 +88,6 @@ pub fn resolve_source_assets(
 
     let dist_assets_dir = dist_dir.join("assets");
 
-    // Deduplicate by URL, keeping the first source_name for each.
     let mut seen: HashMap<&str, &str> = HashMap::new();
     for req in requests {
         seen.entry(req.url.as_str())
@@ -134,9 +137,12 @@ pub fn resolve_source_assets(
         return Ok(html.to_string());
     }
 
-    // Rewrite URLs in the HTML.
+    // Rewrite URLs in the HTML, longest-first to avoid partial-match corruption.
+    let mut sorted: Vec<_> = url_map.into_iter().collect();
+    sorted.sort_by(|a, b| b.0.len().cmp(&a.0.len()));
+
     let mut result = html.to_string();
-    for (original, local) in &url_map {
+    for (original, local) in &sorted {
         result = result.replace(original, local);
     }
     Ok(result)

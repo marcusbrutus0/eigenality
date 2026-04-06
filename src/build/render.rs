@@ -459,19 +459,14 @@ fn render_static_page(
     ).wrap_err_with(|| format!("Failed to localize assets for '{}'", tmpl_name))?;
 
     // 4a. Resolve authenticated source assets.
-    let source_requests = source_asset_collector.drain();
-    let full_html = if !source_requests.is_empty() {
-        source_asset::resolve_source_assets(
-            &full_html,
-            &source_requests,
-            &config.sources,
-            asset_cache,
-            asset_client,
-            dist_dir,
-        ).wrap_err_with(|| format!("Failed to resolve source assets for '{}'", tmpl_name))?
-    } else {
-        full_html
-    };
+    let full_html = source_asset::resolve_source_assets(
+        &full_html,
+        &source_asset_collector.drain(),
+        &config.sources,
+        asset_cache,
+        asset_client,
+        dist_dir,
+    ).wrap_err_with(|| format!("Failed to resolve source assets for '{}'", tmpl_name))?;
 
     // 4b. Image optimization: convert/compress/resize + rewrite <img> → <picture>.
     let full_html = assets::optimize_and_rewrite_images(
@@ -787,21 +782,16 @@ fn render_dynamic_page(
         })?;
 
         // Resolve authenticated source assets.
-        let source_requests = source_asset_collector.drain();
-        let full_html = if !source_requests.is_empty() {
-            source_asset::resolve_source_assets(
-                &full_html,
-                &source_requests,
-                &config.sources,
-                asset_cache,
-                asset_client,
-                dist_dir,
-            ).wrap_err_with(|| {
-                format!("Failed to resolve source assets for '{}' slug '{}'", tmpl_name, slug)
-            })?
-        } else {
-            full_html
-        };
+        let full_html = source_asset::resolve_source_assets(
+            &full_html,
+            &source_asset_collector.drain(),
+            &config.sources,
+            asset_cache,
+            asset_client,
+            dist_dir,
+        ).wrap_err_with(|| {
+            format!("Failed to resolve source assets for '{}' slug '{}'", tmpl_name, slug)
+        })?;
 
         // Image optimization: convert/compress/resize + rewrite <img> → <picture>.
         let full_html = assets::optimize_and_rewrite_images(
