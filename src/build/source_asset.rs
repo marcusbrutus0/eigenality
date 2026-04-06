@@ -82,4 +82,28 @@ mod tests {
         fn assert_send_sync<T: Send + Sync>() {}
         assert_send_sync::<SourceAssetCollector>();
     }
+
+    #[test]
+    fn resolve_url_absolute_passthrough() {
+        let result = resolve_url("https://cdn.example.com/img.jpg", "https://cms.example.com");
+        assert_eq!(result, "https://cdn.example.com/img.jpg");
+    }
+
+    #[test]
+    fn resolve_url_relative_with_leading_slash() {
+        let result = resolve_url("/uploads/photo.jpg", "https://cms.example.com");
+        assert_eq!(result, "https://cms.example.com/uploads/photo.jpg");
+    }
+
+    #[test]
+    fn resolve_url_relative_without_leading_slash() {
+        let result = resolve_url("uploads/photo.jpg", "https://cms.example.com");
+        assert_eq!(result, "https://cms.example.com/uploads/photo.jpg");
+    }
+
+    #[test]
+    fn resolve_url_base_with_trailing_slash() {
+        let result = resolve_url("/img.jpg", "https://cms.example.com/");
+        assert_eq!(result, "https://cms.example.com/img.jpg");
+    }
 }
