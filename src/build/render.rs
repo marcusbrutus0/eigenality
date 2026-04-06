@@ -32,6 +32,7 @@ use super::output;
 use super::robots;
 use super::seo;
 use super::sitemap;
+use super::source_asset::{self, SourceAssetCollector};
 use super::view_transitions;
 
 /// A record of a rendered page, used for sitemap generation and auditing.
@@ -111,6 +112,9 @@ pub fn build(project_root: &Path, dev: bool, fresh: bool) -> Result<()> {
     }
     tracing::info!("Copying static assets... ✓");
 
+    // Source asset collector: shared between template env and render pipeline.
+    let source_asset_collector = SourceAssetCollector::new();
+
     // Set up template engine (with plugin extensions).
     // Phase 2: Setup template engine (pass manifest for asset() function).
     let env = template::setup_environment(
@@ -124,7 +128,7 @@ pub fn build(project_root: &Path, dev: bool, fresh: bool) -> Result<()> {
             None
         },
         false,
-        None, // collector wired in Task 8
+        Some(source_asset_collector.clone()),
     )?;
     tracing::debug!("Template engine configured.");
 
@@ -197,6 +201,7 @@ pub fn build(project_root: &Path, dev: bool, fresh: bool) -> Result<()> {
                     &image_cache,
                     &mut css_cache,
                     &manifest,
+                    &source_asset_collector,
                 )?;
                 rendered_pages.push(result);
             }
@@ -217,6 +222,7 @@ pub fn build(project_root: &Path, dev: bool, fresh: bool) -> Result<()> {
                     &image_cache,
                     &mut css_cache,
                     &manifest,
+                    &source_asset_collector,
                 )?;
                 rendered_pages.extend(results);
             }
@@ -373,6 +379,7 @@ fn render_static_page(
     image_cache: &ImageCache,
     css_cache: &mut critical_css::StylesheetCache,
     manifest: &std::sync::Arc<content_hash::AssetManifest>,
+    source_asset_collector: &SourceAssetCollector,
 ) -> Result<RenderedPage> {
     let tmpl_name = page.template_path.to_string_lossy().to_string();
 
@@ -450,6 +457,21 @@ fn render_static_page(
         asset_client,
         dist_dir,
     ).wrap_err_with(|| format!("Failed to localize assets for '{}'", tmpl_name))?;
+
+    // 4a. Resolve authenticated source assets.
+    let source_requests = source_asset_collector.drain();
+    let full_html = if !source_requests.is_empty() {
+        source_asset::resolve_source_assets(
+            &full_html,
+            &source_requests,
+            &config.sources,
+            asset_cache,
+            asset_client,
+            dist_dir,
+        ).wrap_err_with(|| format!("Failed to resolve source assets for '{}'", tmpl_name))?
+    } else {
+        full_html
+    };
 
     // 4b. Image optimization: convert/compress/resize + rewrite <img> → <picture>.
     let full_html = assets::optimize_and_rewrite_images(
@@ -612,6 +634,7 @@ fn render_dynamic_page(
     image_cache: &ImageCache,
     css_cache: &mut critical_css::StylesheetCache,
     manifest: &std::sync::Arc<content_hash::AssetManifest>,
+    source_asset_collector: &SourceAssetCollector,
 ) -> Result<Vec<RenderedPage>> {
     let tmpl_name = page.template_path.to_string_lossy().to_string();
     let item_as = &page.frontmatter.item_as;
@@ -762,6 +785,23 @@ fn render_dynamic_page(
         ).wrap_err_with(|| {
             format!("Failed to localize assets for '{}' slug '{}'", tmpl_name, slug)
         })?;
+
+        // Resolve authenticated source assets.
+        let source_requests = source_asset_collector.drain();
+        let full_html = if !source_requests.is_empty() {
+            source_asset::resolve_source_assets(
+                &full_html,
+                &source_requests,
+                &config.sources,
+                asset_cache,
+                asset_client,
+                dist_dir,
+            ).wrap_err_with(|| {
+                format!("Failed to resolve source assets for '{}' slug '{}'", tmpl_name, slug)
+            })?
+        } else {
+            full_html
+        };
 
         // Image optimization: convert/compress/resize + rewrite <img> → <picture>.
         let full_html = assets::optimize_and_rewrite_images(
