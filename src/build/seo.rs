@@ -72,6 +72,17 @@ fn make_absolute_url(url: &str, base_url: &str) -> String {
         let mut result = String::with_capacity(base.len() + url.len());
         result.push_str(base);
         result.push_str(url);
+        // Collapse any double slashes in the path portion (after "://").
+        if let Some(scheme_end) = result.find("://") {
+            let path_start = scheme_end + 3;
+            while result[path_start..].contains("//") {
+                result = format!(
+                    "{}{}",
+                    &result[..path_start],
+                    result[path_start..].replace("//", "/"),
+                );
+            }
+        }
         result
     } else {
         url.to_string()
