@@ -210,6 +210,7 @@ impl DevBuildState {
             chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
 
         let dist_dir = project_root.join("dist");
+        let rate_limiter = RateLimiterPool::new(config.build.rate_limit, &config.sources);
         let mut rendered_pages: Vec<RenderedPage> = Vec::new();
 
         // Store frontmatter for change detection.
@@ -235,6 +236,7 @@ impl DevBuildState {
                         &mut self.asset_cache,
                         &self.asset_client,
                         &self.plugin_registry,
+                        &rate_limiter,
                     )?;
                     rendered_pages.push(result);
                 }
@@ -250,6 +252,7 @@ impl DevBuildState {
                         &mut self.asset_cache,
                         &self.asset_client,
                         &self.plugin_registry,
+                        &rate_limiter,
                     )?;
                     rendered_pages.extend(results);
                 }
@@ -307,6 +310,7 @@ fn render_static_page_dev(
     asset_cache: &mut AssetCache,
     asset_client: &reqwest::blocking::Client,
     plugin_registry: &PluginRegistry,
+    rate_limiter: &RateLimiterPool,
 ) -> Result<RenderedPage> {
     use crate::build::context::{self, PageMeta};
     use crate::build::fragments;
@@ -359,7 +363,6 @@ fn render_static_page_dev(
     // Strip markers, localize assets, run plugins, and inject reload script.
     let full_html = fragments::strip_fragment_markers(&rendered);
     let no_skip = HashSet::new();
-    let no_op_pool = RateLimiterPool::new(None, &HashMap::new());
     let full_html = assets::localize_assets(
         &full_html,
         &config.assets,
@@ -367,7 +370,7 @@ fn render_static_page_dev(
         asset_client,
         dist_dir,
         &no_skip,
-        &no_op_pool,
+        rate_limiter,
     ).wrap_err_with(|| format!("Failed to localize assets for '{}'", tmpl_name))?;
     let full_html = plugin_registry.post_render_html(
         full_html,
@@ -401,6 +404,7 @@ fn render_static_page_dev(
                 asset_cache,
                 asset_client,
                 dist_dir,
+                rate_limiter,
             )?;
             fragments::write_fragments(
                 dist_dir,
@@ -454,6 +458,7 @@ fn render_dynamic_page_dev(
     asset_cache: &mut AssetCache,
     asset_client: &reqwest::blocking::Client,
     plugin_registry: &PluginRegistry,
+    rate_limiter: &RateLimiterPool,
 ) -> Result<Vec<RenderedPage>> {
     use crate::build::context::{self, PageMeta};
     use crate::build::fragments;
@@ -541,7 +546,6 @@ fn render_dynamic_page_dev(
         // Strip markers, localize assets, run plugins, and inject reload script.
         let full_html = fragments::strip_fragment_markers(&rendered);
         let no_skip = HashSet::new();
-        let no_op_pool = RateLimiterPool::new(None, &HashMap::new());
         let full_html = assets::localize_assets(
             &full_html,
             &config.assets,
@@ -549,7 +553,7 @@ fn render_dynamic_page_dev(
             asset_client,
             dist_dir,
             &no_skip,
-            &no_op_pool,
+            rate_limiter,
         ).wrap_err_with(|| {
             format!("Failed to localize assets for '{}' slug '{}'", tmpl_name, slug)
         })?;
@@ -583,6 +587,7 @@ fn render_dynamic_page_dev(
                     asset_cache,
                     asset_client,
                     dist_dir,
+                    rate_limiter,
                 )?;
                 fragments::write_fragments(
                     dist_dir,
@@ -613,9 +618,9 @@ fn localize_fragments_dev(
     asset_cache: &mut AssetCache,
     asset_client: &reqwest::blocking::Client,
     dist_dir: &Path,
+    rate_limiter: &RateLimiterPool,
 ) -> Result<Vec<crate::build::fragments::Fragment>> {
     let no_skip = HashSet::new();
-    let no_op_pool = RateLimiterPool::new(None, &HashMap::new());
     let mut result = Vec::with_capacity(frags.len());
     for frag in frags {
         let localized_html = assets::localize_assets(
@@ -625,7 +630,7 @@ fn localize_fragments_dev(
             asset_client,
             dist_dir,
             &no_skip,
-            &no_op_pool,
+            rate_limiter,
         )?;
         result.push(crate::build::fragments::Fragment {
             block_name: frag.block_name.clone(),
