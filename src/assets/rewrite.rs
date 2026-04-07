@@ -9,7 +9,7 @@
 
 use eyre::{Result, WrapErr};
 use regex::Regex;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
 use crate::config::AssetsConfig;
@@ -49,6 +49,7 @@ pub fn localize_assets(
     cache: &mut AssetCache,
     client: &reqwest::blocking::Client,
     dist_dir: &Path,
+    skip_urls: &HashSet<String>,
 ) -> Result<String> {
     if !config.localize {
         return Ok(html.to_string());
@@ -79,6 +80,11 @@ pub fn localize_assets(
 
         // Skip URLs already pointing to /assets/.
         if url.starts_with("/assets/") {
+            continue;
+        }
+
+        // Skip URLs claimed by source_asset (downloaded with auth later).
+        if skip_urls.contains(url.as_str()) {
             continue;
         }
 

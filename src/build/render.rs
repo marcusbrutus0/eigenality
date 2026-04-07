@@ -450,12 +450,14 @@ fn render_static_page(
 
     // 4. Write full page (with markers stripped, assets localized, images optimized, plugins applied).
     let full_html = fragments::strip_fragment_markers(&rendered);
+    let source_asset_urls: HashSet<String> = source_asset_collector.urls().into_iter().collect();
     let full_html = assets::localize_assets(
         &full_html,
         &config.assets,
         asset_cache,
         asset_client,
         dist_dir,
+        &source_asset_urls,
     ).wrap_err_with(|| format!("Failed to localize assets for '{}'", tmpl_name))?;
 
     // 4a. Resolve authenticated source assets.
@@ -577,6 +579,7 @@ fn render_static_page(
                 asset_cache,
                 asset_client,
                 dist_dir,
+                &source_asset_urls,
             )?;
             let optimized_frags = optimize_fragment_images(
                 &localized_frags,
@@ -771,12 +774,14 @@ fn render_dynamic_page(
 
         // Write full page (with assets localized, images optimized, plugins applied).
         let full_html = fragments::strip_fragment_markers(&rendered);
+        let source_asset_urls: HashSet<String> = source_asset_collector.urls().into_iter().collect();
         let full_html = assets::localize_assets(
             &full_html,
             &config.assets,
             asset_cache,
             asset_client,
             dist_dir,
+            &source_asset_urls,
         ).wrap_err_with(|| {
             format!("Failed to localize assets for '{}' slug '{}'", tmpl_name, slug)
         })?;
@@ -906,6 +911,7 @@ fn render_dynamic_page(
                     asset_cache,
                     asset_client,
                     dist_dir,
+                    &source_asset_urls,
                 )?;
                 let optimized_frags = optimize_fragment_images(
                     &localized_frags,
@@ -956,6 +962,7 @@ fn localize_fragments(
     asset_cache: &mut AssetCache,
     asset_client: &reqwest::blocking::Client,
     dist_dir: &Path,
+    skip_urls: &HashSet<String>,
 ) -> Result<Vec<fragments::Fragment>> {
     let mut result = Vec::with_capacity(frags.len());
     for frag in frags {
@@ -965,6 +972,7 @@ fn localize_fragments(
             asset_cache,
             asset_client,
             dist_dir,
+            skip_urls,
         )?;
         result.push(fragments::Fragment {
             block_name: frag.block_name.clone(),
