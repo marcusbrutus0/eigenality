@@ -6,6 +6,7 @@
 use eyre::{Result, WrapErr, bail};
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
+use std::sync::Arc;
 
 use crate::assets;
 use crate::assets::cache::AssetCache;
@@ -135,8 +136,8 @@ pub fn build(project_root: &Path, dev: bool, fresh: bool) -> Result<()> {
 
     // Data fetcher.
     let data_cache = data::open_data_cache(project_root, fresh);
-    let rate_limiter = std::sync::Arc::new(RateLimiterPool::new(config.build.rate_limit, &config.sources));
-    let mut fetcher = DataFetcher::new(&config.sources, project_root, data_cache, std::sync::Arc::clone(&rate_limiter));
+    let rate_limiter = Arc::new(RateLimiterPool::new(config.build.rate_limit, &config.sources));
+    let mut fetcher = DataFetcher::new(&config.sources, project_root, data_cache, Arc::clone(&rate_limiter));
 
     // Asset localization.
     let mut asset_cache = AssetCache::open(project_root)

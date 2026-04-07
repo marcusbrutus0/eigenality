@@ -388,7 +388,14 @@ mod tests {
     use super::*;
     use serde_json::json;
     use std::fs;
+    use std::sync::Arc;
     use tempfile::TempDir;
+
+    use crate::build::rate_limit::RateLimiterPool;
+
+    fn no_op_pool() -> Arc<RateLimiterPool> {
+        Arc::new(RateLimiterPool::new(None, &HashMap::new()))
+    }
 
     /// Helper to write a file.
     fn write(dir: &std::path::Path, rel: &str, content: &str) {
@@ -547,7 +554,7 @@ mod tests {
         let root = tmp.path();
         write(root, "_data/nav.yaml", "- label: Home\n  url: /\n");
 
-        let pool = std::sync::Arc::new(crate::build::rate_limit::RateLimiterPool::new(None, &HashMap::new()));
+        let pool = no_op_pool();
         let mut fetcher = DataFetcher::new(&HashMap::new(), root, None, pool);
         let fm = Frontmatter {
             data: {
@@ -576,7 +583,7 @@ mod tests {
         write(root, "_data/nav.yaml", "- label: Home\n  url: /\n");
         write(root, "_data/config.json", r#"{"debug": false}"#);
 
-        let pool = std::sync::Arc::new(crate::build::rate_limit::RateLimiterPool::new(None, &HashMap::new()));
+        let pool = no_op_pool();
         let mut fetcher = DataFetcher::new(&HashMap::new(), root, None, pool);
         let fm = Frontmatter {
             data: {
@@ -610,7 +617,7 @@ mod tests {
     fn test_resolve_page_data_empty() {
         let tmp = TempDir::new().unwrap();
         let root = tmp.path();
-        let pool = std::sync::Arc::new(crate::build::rate_limit::RateLimiterPool::new(None, &HashMap::new()));
+        let pool = no_op_pool();
         let mut fetcher = DataFetcher::new(&HashMap::new(), root, None, pool);
         let fm = Frontmatter::default();
 
@@ -630,7 +637,7 @@ mod tests {
             r#"[{"id": 1, "title": "First"}, {"id": 2, "title": "Second"}]"#,
         );
 
-        let pool = std::sync::Arc::new(crate::build::rate_limit::RateLimiterPool::new(None, &HashMap::new()));
+        let pool = no_op_pool();
         let mut fetcher = DataFetcher::new(&HashMap::new(), root, None, pool);
         let fm = Frontmatter {
             collection: Some(DataQuery {
@@ -649,7 +656,7 @@ mod tests {
     fn test_resolve_dynamic_no_collection() {
         let tmp = TempDir::new().unwrap();
         let root = tmp.path();
-        let pool = std::sync::Arc::new(crate::build::rate_limit::RateLimiterPool::new(None, &HashMap::new()));
+        let pool = no_op_pool();
         let mut fetcher = DataFetcher::new(&HashMap::new(), root, None, pool);
         let fm = Frontmatter::default();
 
@@ -669,7 +676,7 @@ mod tests {
             r#"[{"id": 1, "name": "Alice"}, {"id": 2, "name": "Bob"}]"#,
         );
 
-        let pool = std::sync::Arc::new(crate::build::rate_limit::RateLimiterPool::new(None, &HashMap::new()));
+        let pool = no_op_pool();
         let mut fetcher = DataFetcher::new(&HashMap::new(), root, None, pool);
 
         let fm = Frontmatter {
@@ -708,7 +715,7 @@ mod tests {
         let root = tmp.path();
         write(root, "_data/sidebar.yaml", "- widget: recent\n");
 
-        let pool = std::sync::Arc::new(crate::build::rate_limit::RateLimiterPool::new(None, &HashMap::new()));
+        let pool = no_op_pool();
         let mut fetcher = DataFetcher::new(&HashMap::new(), root, None, pool);
 
         let fm = Frontmatter {
@@ -769,7 +776,7 @@ mod tests {
         let root = tmp.path();
         write(root, "_data/items.json", r#"[{"id": 1}, {"id": 2}]"#);
 
-        let pool = std::sync::Arc::new(crate::build::rate_limit::RateLimiterPool::new(None, &HashMap::new()));
+        let pool = no_op_pool();
         let mut fetcher = DataFetcher::new(&HashMap::new(), root, None, pool);
         let mut registry = PluginRegistry::new();
         registry.register(Box::new(TagPlugin));
@@ -833,7 +840,7 @@ mod tests {
             r#"[{"slug": "a", "title": "A"}, {"slug": "b", "title": "B"}]"#,
         );
 
-        let pool = std::sync::Arc::new(crate::build::rate_limit::RateLimiterPool::new(None, &HashMap::new()));
+        let pool = no_op_pool();
         let mut fetcher = DataFetcher::new(&HashMap::new(), root, None, pool);
         let mut registry = PluginRegistry::new();
         registry.register(Box::new(EnrichPlugin));
@@ -1002,7 +1009,7 @@ mod tests {
         let root = tmp.path();
         write(root, "_data/sidebar.yaml", "- widget: recent\n");
 
-        let pool = std::sync::Arc::new(crate::build::rate_limit::RateLimiterPool::new(None, &HashMap::new()));
+        let pool = no_op_pool();
         let mut fetcher = DataFetcher::new(&HashMap::new(), root, None, pool);
         let mut registry = PluginRegistry::new();
         registry.register(Box::new(PassthroughPlugin));
