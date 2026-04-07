@@ -29,6 +29,7 @@ use super::json_ld;
 use super::minify;
 use super::not_found;
 use super::output;
+use super::rate_limit::RateLimiterPool;
 use super::robots;
 use super::seo;
 use super::sitemap;
@@ -134,7 +135,8 @@ pub fn build(project_root: &Path, dev: bool, fresh: bool) -> Result<()> {
 
     // Data fetcher.
     let data_cache = data::open_data_cache(project_root, fresh);
-    let mut fetcher = DataFetcher::new(&config.sources, project_root, data_cache);
+    let rate_limiter = std::sync::Arc::new(RateLimiterPool::new(config.build.rate_limit, &config.sources));
+    let mut fetcher = DataFetcher::new(&config.sources, project_root, data_cache, rate_limiter);
 
     // Asset localization.
     let mut asset_cache = AssetCache::open(project_root)

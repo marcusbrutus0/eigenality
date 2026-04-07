@@ -16,6 +16,7 @@ use std::time::Instant;
 
 use crate::assets;
 use crate::assets::cache::AssetCache;
+use crate::build::rate_limit::RateLimiterPool;
 use crate::config::SiteConfig;
 use crate::data::{self, DataFetcher};
 use crate::discovery::{self, PageDef, PageType};
@@ -80,7 +81,8 @@ impl DevBuildState {
     pub fn new(project_root: &Path, fresh: bool) -> Result<Self> {
         let config = crate::config::load_config(project_root)?;
         let data_cache = crate::data::open_data_cache(project_root, fresh);
-        let fetcher = DataFetcher::new(&config.sources, project_root, data_cache);
+        let rate_limiter = std::sync::Arc::new(RateLimiterPool::new(config.build.rate_limit, &config.sources));
+        let fetcher = DataFetcher::new(&config.sources, project_root, data_cache, rate_limiter);
         let plugin_registry = registry::build_registry(&config.plugins, project_root)?;
         let asset_cache = AssetCache::open(project_root)
             .wrap_err("Failed to open asset cache")?;
@@ -117,7 +119,8 @@ impl DevBuildState {
                     // Reload config and plugins.
                     self.config = crate::config::load_config(&self.project_root)?;
                     let data_cache = crate::data::open_data_cache(&self.project_root, self.fresh);
-                    self.fetcher = DataFetcher::new(&self.config.sources, &self.project_root, data_cache);
+                    let rate_limiter = std::sync::Arc::new(RateLimiterPool::new(self.config.build.rate_limit, &self.config.sources));
+                    self.fetcher = DataFetcher::new(&self.config.sources, &self.project_root, data_cache, rate_limiter);
                     self.plugin_registry = registry::build_registry(&self.config.plugins, &self.project_root)?;
                     self.full_build()?;
                 }

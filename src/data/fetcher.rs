@@ -5,7 +5,9 @@ use eyre::{bail, Result, WrapErr};
 use serde_json::Value;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
+use crate::build::rate_limit::RateLimiterPool;
 use crate::config::SourceConfig;
 use crate::frontmatter::{DataQuery, HttpMethod};
 use crate::plugins::registry::PluginRegistry;
@@ -26,6 +28,8 @@ pub struct DataFetcher {
     client: reqwest::blocking::Client,
     /// Optional disk cache for conditional HTTP requests.
     data_cache: Option<super::cache::DataCache>,
+    /// Per-host rate limiter pool shared across all requests.
+    rate_limiter: Arc<RateLimiterPool>,
 }
 
 impl DataFetcher {
@@ -34,6 +38,7 @@ impl DataFetcher {
         sources: &HashMap<String, SourceConfig>,
         project_root: &Path,
         data_cache: Option<super::cache::DataCache>,
+        rate_limiter: Arc<RateLimiterPool>,
     ) -> Self {
         Self {
             sources: sources.clone(),
@@ -42,6 +47,7 @@ impl DataFetcher {
             data_dir: project_root.join("_data"),
             client: reqwest::blocking::Client::new(),
             data_cache,
+            rate_limiter,
         }
     }
 
@@ -152,6 +158,7 @@ impl DataFetcher {
         headers: reqwest::header::HeaderMap,
         body: Option<&serde_json::Value>,
     ) -> Result<reqwest::blocking::Response> {
+        self.rate_limiter.wait(url);
         let response = match method {
             HttpMethod::Get => self.client.get(url).headers(headers).send(),
             HttpMethod::Post => {
@@ -379,7 +386,8 @@ mod tests {
 
     /// Create a fetcher with no remote sources, pointed at a temp dir.
     fn test_fetcher(root: &Path) -> DataFetcher {
-        DataFetcher::new(&HashMap::new(), root, None)
+        let pool = Arc::new(RateLimiterPool::new(None, &HashMap::new()));
+        DataFetcher::new(&HashMap::new(), root, None, pool)
     }
 
     /// Helper to write a file.
@@ -895,7 +903,8 @@ mod tests {
             },
         );
 
-        let mut fetcher = DataFetcher::new(&sources, root, Some(data_cache));
+        let pool = Arc::new(RateLimiterPool::new(None, &HashMap::new()));
+        let mut fetcher = DataFetcher::new(&sources, root, Some(data_cache), pool);
 
         // First fetch: should get 200 with data.
         let result1 = fetcher
