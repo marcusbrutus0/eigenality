@@ -6,6 +6,7 @@
 use eyre::{Result, WrapErr, bail};
 
 use super::cache::{AssetCache, AssetCacheMeta, local_filename_for_url};
+use crate::build::rate_limit::RateLimiterPool;
 
 /// Result of attempting to download an asset.
 pub enum DownloadResult {
@@ -30,7 +31,9 @@ pub fn download_asset_with_headers(
     url: &str,
     cached_meta: Option<&AssetCacheMeta>,
     extra_headers: &reqwest::header::HeaderMap,
+    pool: &RateLimiterPool,
 ) -> Result<DownloadResult> {
+    pool.wait(url);
     let mut request = client.get(url);
 
     // Merge caller-supplied headers first so conditional headers below take precedence.
@@ -103,8 +106,9 @@ pub fn download_asset(
     client: &reqwest::blocking::Client,
     url: &str,
     cached_meta: Option<&AssetCacheMeta>,
+    pool: &RateLimiterPool,
 ) -> Result<DownloadResult> {
-    download_asset_with_headers(client, url, cached_meta, &reqwest::header::HeaderMap::new())
+    download_asset_with_headers(client, url, cached_meta, &reqwest::header::HeaderMap::new(), pool)
 }
 
 /// Ensure an asset is available in the cache (downloading or validating as needed),
@@ -116,13 +120,14 @@ pub fn ensure_asset_with_headers(
     cache: &mut AssetCache,
     url: &str,
     extra_headers: &reqwest::header::HeaderMap,
+    pool: &RateLimiterPool,
 ) -> Result<String> {
     let cached_meta = cache.get(url).cloned();
 
     // If we have the file cached, try a conditional request.
     if let Some(ref meta) = cached_meta {
         if cache.has_file(url) {
-            match download_asset_with_headers(client, url, Some(meta), extra_headers)? {
+            match download_asset_with_headers(client, url, Some(meta), extra_headers, pool)? {
                 DownloadResult::NotModified => {
                     tracing::debug!("  Source asset not modified (304): {}", url);
                     return Ok(meta.local_filename.clone());
@@ -144,7 +149,7 @@ pub fn ensure_asset_with_headers(
     }
 
     // No cache entry or file missing — full download.
-    match download_asset_with_headers(client, url, None, extra_headers)? {
+    match download_asset_with_headers(client, url, None, extra_headers, pool)? {
         DownloadResult::Downloaded {
             data,
             local_filename,
@@ -170,13 +175,19 @@ pub fn ensure_asset(
     client: &reqwest::blocking::Client,
     cache: &mut AssetCache,
     url: &str,
+    pool: &RateLimiterPool,
 ) -> Result<String> {
-    ensure_asset_with_headers(client, cache, url, &reqwest::header::HeaderMap::new())
+    ensure_asset_with_headers(client, cache, url, &reqwest::header::HeaderMap::new(), pool)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::HashMap;
+
+    fn no_op_pool() -> RateLimiterPool {
+        RateLimiterPool::new(None, &HashMap::new())
+    }
 
     /// Starts a tiny_http server that requires `Authorization: Bearer secret`.
     /// Returns 401 when the header is absent or wrong, 200 with a small body when correct.
@@ -220,8 +231,9 @@ mod tests {
         let client = reqwest::blocking::Client::new();
         let mut headers = HeaderMap::new();
         headers.insert(AUTHORIZATION, HeaderValue::from_static("Bearer secret"));
+        let pool = no_op_pool();
 
-        let result = download_asset_with_headers(&client, &url, None, &headers)
+        let result = download_asset_with_headers(&client, &url, None, &headers, &pool)
             .expect("download should succeed");
 
         match result {
@@ -259,7 +271,8 @@ mod tests {
         });
 
         let client = reqwest::blocking::Client::new();
-        let result = download_asset_with_headers(&client, &url, None, &HeaderMap::new());
+        let pool = no_op_pool();
+        let result = download_asset_with_headers(&client, &url, None, &HeaderMap::new(), &pool);
 
         assert!(result.is_err(), "expected error for 401 response");
     }

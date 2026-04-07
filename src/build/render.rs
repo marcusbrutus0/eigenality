@@ -136,7 +136,7 @@ pub fn build(project_root: &Path, dev: bool, fresh: bool) -> Result<()> {
     // Data fetcher.
     let data_cache = data::open_data_cache(project_root, fresh);
     let rate_limiter = std::sync::Arc::new(RateLimiterPool::new(config.build.rate_limit, &config.sources));
-    let mut fetcher = DataFetcher::new(&config.sources, project_root, data_cache, rate_limiter);
+    let mut fetcher = DataFetcher::new(&config.sources, project_root, data_cache, std::sync::Arc::clone(&rate_limiter));
 
     // Asset localization.
     let mut asset_cache = AssetCache::open(project_root)
@@ -204,6 +204,7 @@ pub fn build(project_root: &Path, dev: bool, fresh: bool) -> Result<()> {
                     &mut css_cache,
                     &manifest,
                     &source_asset_collector,
+                    &rate_limiter,
                 )?;
                 rendered_pages.push(result);
             }
@@ -225,6 +226,7 @@ pub fn build(project_root: &Path, dev: bool, fresh: bool) -> Result<()> {
                     &mut css_cache,
                     &manifest,
                     &source_asset_collector,
+                    &rate_limiter,
                 )?;
                 rendered_pages.extend(results);
             }
@@ -382,6 +384,7 @@ fn render_static_page(
     css_cache: &mut critical_css::StylesheetCache,
     manifest: &std::sync::Arc<content_hash::AssetManifest>,
     source_asset_collector: &SourceAssetCollector,
+    pool: &RateLimiterPool,
 ) -> Result<RenderedPage> {
     let tmpl_name = page.template_path.to_string_lossy().to_string();
 
@@ -460,6 +463,7 @@ fn render_static_page(
         asset_client,
         dist_dir,
         &source_asset_urls,
+        pool,
     ).wrap_err_with(|| format!("Failed to localize assets for '{}'", tmpl_name))?;
 
     // 4a. Resolve authenticated source assets.
@@ -470,6 +474,7 @@ fn render_static_page(
         asset_cache,
         asset_client,
         dist_dir,
+        pool,
     ).wrap_err_with(|| format!("Failed to resolve source assets for '{}'", tmpl_name))?;
 
     // 4b. Image optimization: convert/compress/resize + rewrite <img> → <picture>.
@@ -582,6 +587,7 @@ fn render_static_page(
                 asset_client,
                 dist_dir,
                 &source_asset_urls,
+                pool,
             )?;
             let optimized_frags = optimize_fragment_images(
                 &localized_frags,
@@ -635,6 +641,7 @@ fn render_dynamic_page(
     css_cache: &mut critical_css::StylesheetCache,
     manifest: &std::sync::Arc<content_hash::AssetManifest>,
     source_asset_collector: &SourceAssetCollector,
+    pool: &RateLimiterPool,
 ) -> Result<Vec<RenderedPage>> {
     let tmpl_name = page.template_path.to_string_lossy().to_string();
     let item_as = &page.frontmatter.item_as;
@@ -784,6 +791,7 @@ fn render_dynamic_page(
             asset_client,
             dist_dir,
             &source_asset_urls,
+            pool,
         ).wrap_err_with(|| {
             format!("Failed to localize assets for '{}' slug '{}'", tmpl_name, slug)
         })?;
@@ -796,6 +804,7 @@ fn render_dynamic_page(
             asset_cache,
             asset_client,
             dist_dir,
+            pool,
         ).wrap_err_with(|| {
             format!("Failed to resolve source assets for '{}' slug '{}'", tmpl_name, slug)
         })?;
@@ -914,6 +923,7 @@ fn render_dynamic_page(
                     asset_client,
                     dist_dir,
                     &source_asset_urls,
+                    pool,
                 )?;
                 let optimized_frags = optimize_fragment_images(
                     &localized_frags,
@@ -965,6 +975,7 @@ fn localize_fragments(
     asset_client: &reqwest::blocking::Client,
     dist_dir: &Path,
     skip_urls: &HashSet<String>,
+    pool: &RateLimiterPool,
 ) -> Result<Vec<fragments::Fragment>> {
     let mut result = Vec::with_capacity(frags.len());
     for frag in frags {
@@ -975,6 +986,7 @@ fn localize_fragments(
             asset_client,
             dist_dir,
             skip_urls,
+            pool,
         )?;
         result.push(fragments::Fragment {
             block_name: frag.block_name.clone(),

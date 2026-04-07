@@ -12,6 +12,7 @@ use regex::Regex;
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
+use crate::build::rate_limit::RateLimiterPool;
 use crate::config::AssetsConfig;
 
 use super::cache::AssetCache;
@@ -50,6 +51,7 @@ pub fn localize_assets(
     client: &reqwest::blocking::Client,
     dist_dir: &Path,
     skip_urls: &HashSet<String>,
+    pool: &RateLimiterPool,
 ) -> Result<String> {
     if !config.localize {
         return Ok(html.to_string());
@@ -95,7 +97,7 @@ pub fn localize_assets(
         }
 
         // Download (or validate cache).
-        match download::ensure_asset(client, cache, url) {
+        match download::ensure_asset(client, cache, url, pool) {
             Ok(local_filename) => {
                 // Copy from cache to dist/assets/.
                 cache.copy_to_dist(url, &dist_assets_dir)

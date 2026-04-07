@@ -12,6 +12,7 @@ use eyre::{Result, WrapErr};
 
 use crate::assets::cache::AssetCache;
 use crate::assets::download;
+use crate::build::rate_limit::RateLimiterPool;
 use crate::config::SourceConfig;
 
 /// Sentinel prefix used by the dev proxy to identify full-URL forwarding requests.
@@ -87,6 +88,7 @@ pub fn resolve_source_assets(
     cache: &mut AssetCache,
     client: &reqwest::blocking::Client,
     dist_dir: &Path,
+    pool: &RateLimiterPool,
 ) -> Result<String> {
     if requests.is_empty() {
         return Ok(html.to_string());
@@ -125,7 +127,7 @@ pub fn resolve_source_assets(
             }
         }
 
-        match download::ensure_asset_with_headers(client, cache, url, &headers) {
+        match download::ensure_asset_with_headers(client, cache, url, &headers, pool) {
             Ok(local_filename) => {
                 cache.copy_to_dist(url, &dist_assets_dir)
                     .wrap_err_with(|| {
@@ -157,6 +159,11 @@ pub fn resolve_source_assets(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::build::rate_limit::RateLimiterPool;
+
+    fn no_op_pool() -> RateLimiterPool {
+        RateLimiterPool::new(None, &HashMap::new())
+    }
 
     #[test]
     fn collector_push_and_drain() {
@@ -278,6 +285,7 @@ mod tests {
             url: asset_url.clone(),
         }];
 
+        let pool = no_op_pool();
         let result = resolve_source_assets(
             &html,
             &requests,
@@ -285,6 +293,7 @@ mod tests {
             &mut cache,
             &client,
             &dist_dir,
+            &pool,
         )
         .expect("resolve should succeed");
 
@@ -321,6 +330,7 @@ mod tests {
         let client = reqwest::blocking::Client::new();
         let dist_dir = tmp.path().join("dist");
 
+        let pool = no_op_pool();
         let result = resolve_source_assets(
             html,
             &[],
@@ -328,6 +338,7 @@ mod tests {
             &mut cache,
             &client,
             &dist_dir,
+            &pool,
         )
         .expect("should succeed");
 
@@ -396,6 +407,7 @@ mod tests {
             SourceAssetRequest { source_name: "api".into(), url: asset_url.clone() },
         ];
 
+        let pool = no_op_pool();
         let result = resolve_source_assets(
             &html,
             &requests,
@@ -403,6 +415,7 @@ mod tests {
             &mut cache,
             &client,
             &dist_dir,
+            &pool,
         )
         .expect("resolve should succeed");
 

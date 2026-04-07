@@ -359,6 +359,7 @@ fn render_static_page_dev(
     // Strip markers, localize assets, run plugins, and inject reload script.
     let full_html = fragments::strip_fragment_markers(&rendered);
     let no_skip = HashSet::new();
+    let no_op_pool = RateLimiterPool::new(None, &HashMap::new());
     let full_html = assets::localize_assets(
         &full_html,
         &config.assets,
@@ -366,6 +367,7 @@ fn render_static_page_dev(
         asset_client,
         dist_dir,
         &no_skip,
+        &no_op_pool,
     ).wrap_err_with(|| format!("Failed to localize assets for '{}'", tmpl_name))?;
     let full_html = plugin_registry.post_render_html(
         full_html,
@@ -539,6 +541,7 @@ fn render_dynamic_page_dev(
         // Strip markers, localize assets, run plugins, and inject reload script.
         let full_html = fragments::strip_fragment_markers(&rendered);
         let no_skip = HashSet::new();
+        let no_op_pool = RateLimiterPool::new(None, &HashMap::new());
         let full_html = assets::localize_assets(
             &full_html,
             &config.assets,
@@ -546,6 +549,7 @@ fn render_dynamic_page_dev(
             asset_client,
             dist_dir,
             &no_skip,
+            &no_op_pool,
         ).wrap_err_with(|| {
             format!("Failed to localize assets for '{}' slug '{}'", tmpl_name, slug)
         })?;
@@ -611,6 +615,7 @@ fn localize_fragments_dev(
     dist_dir: &Path,
 ) -> Result<Vec<crate::build::fragments::Fragment>> {
     let no_skip = HashSet::new();
+    let no_op_pool = RateLimiterPool::new(None, &HashMap::new());
     let mut result = Vec::with_capacity(frags.len());
     for frag in frags {
         let localized_html = assets::localize_assets(
@@ -620,6 +625,7 @@ fn localize_fragments_dev(
             asset_client,
             dist_dir,
             &no_skip,
+            &no_op_pool,
         )?;
         result.push(crate::build::fragments::Fragment {
             block_name: frag.block_name.clone(),
