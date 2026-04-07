@@ -234,7 +234,7 @@ use std::collections::HashMap;
 use std::num::NonZeroU32;
 use std::sync::Mutex;
 
-use governor::{Quota, RateLimiter as GovRateLimiter, clock::{Clock, DefaultClock}};
+use governor::{Quota, RateLimiter as GovRateLimiter};
 use url::Url;
 
 use crate::config::SourceConfig;
@@ -243,7 +243,7 @@ use crate::config::SourceConfig;
 type Limiter = GovRateLimiter<
     governor::state::NotKeyed,
     governor::state::InMemoryState,
-    DefaultClock,
+    governor::clock::DefaultClock,
 >;
 
 /// Manages per-host rate limiters for build-time HTTP requests.
@@ -252,8 +252,6 @@ type Limiter = GovRateLimiter<
 pub struct RateLimiterPool {
     /// Per-host limiters, created lazily on first request.
     limiters: Mutex<HashMap<String, Limiter>>,
-    /// Clock used for rate limit timing.
-    clock: DefaultClock,
     /// Global default rate limit (requests per second). `None` means no limit.
     global_rate: Option<u32>,
     /// Source host → per-source rate limit override.
@@ -277,7 +275,6 @@ impl RateLimiterPool {
 
         Self {
             limiters: Mutex::new(HashMap::new()),
-            clock: DefaultClock::default(),
             global_rate,
             source_rates,
         }
@@ -308,16 +305,8 @@ impl RateLimiterPool {
             GovRateLimiter::direct(quota)
         });
 
-        // Spin on check() — sleep for the indicated duration when denied.
-        loop {
-            match limiter.check() {
-                Ok(_) => break,
-                Err(not_until) => {
-                    let wait = not_until.wait_time_from(self.clock.now());
-                    std::thread::sleep(wait);
-                }
-            }
-        }
+        // Block the current thread until the rate limiter permits.
+        futures::executor::block_on(limiter.until_ready());
     }
 }
 
