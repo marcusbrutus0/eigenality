@@ -16,6 +16,7 @@ use std::time::Instant;
 
 use crate::assets;
 use crate::assets::cache::AssetCache;
+use crate::build::rate_limit::RateLimiterPool;
 use crate::config::SiteConfig;
 use crate::data::{self, DataFetcher};
 use crate::discovery::{self, PageDef, PageType};
@@ -80,7 +81,8 @@ impl DevBuildState {
     pub fn new(project_root: &Path, fresh: bool) -> Result<Self> {
         let config = crate::config::load_config(project_root)?;
         let data_cache = crate::data::open_data_cache(project_root, fresh);
-        let fetcher = DataFetcher::new(&config.sources, project_root, data_cache);
+        let rate_limiter = std::sync::Arc::new(RateLimiterPool::new(config.build.rate_limit, &config.sources));
+        let fetcher = DataFetcher::new(&config.sources, project_root, data_cache, rate_limiter);
         let plugin_registry = registry::build_registry(&config.plugins, project_root)?;
         let asset_cache = AssetCache::open(project_root)
             .wrap_err("Failed to open asset cache")?;
@@ -117,7 +119,8 @@ impl DevBuildState {
                     // Reload config and plugins.
                     self.config = crate::config::load_config(&self.project_root)?;
                     let data_cache = crate::data::open_data_cache(&self.project_root, self.fresh);
-                    self.fetcher = DataFetcher::new(&self.config.sources, &self.project_root, data_cache);
+                    let rate_limiter = std::sync::Arc::new(RateLimiterPool::new(self.config.build.rate_limit, &self.config.sources));
+                    self.fetcher = DataFetcher::new(&self.config.sources, &self.project_root, data_cache, rate_limiter);
                     self.plugin_registry = registry::build_registry(&self.config.plugins, &self.project_root)?;
                     self.full_build()?;
                 }
@@ -207,6 +210,7 @@ impl DevBuildState {
             chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
 
         let dist_dir = project_root.join("dist");
+        let rate_limiter = RateLimiterPool::new(config.build.rate_limit, &config.sources);
         let mut rendered_pages: Vec<RenderedPage> = Vec::new();
 
         // Store frontmatter for change detection.
@@ -232,6 +236,7 @@ impl DevBuildState {
                         &mut self.asset_cache,
                         &self.asset_client,
                         &self.plugin_registry,
+                        &rate_limiter,
                     )?;
                     rendered_pages.push(result);
                 }
@@ -247,6 +252,7 @@ impl DevBuildState {
                         &mut self.asset_cache,
                         &self.asset_client,
                         &self.plugin_registry,
+                        &rate_limiter,
                     )?;
                     rendered_pages.extend(results);
                 }
@@ -304,6 +310,7 @@ fn render_static_page_dev(
     asset_cache: &mut AssetCache,
     asset_client: &reqwest::blocking::Client,
     plugin_registry: &PluginRegistry,
+    rate_limiter: &RateLimiterPool,
 ) -> Result<RenderedPage> {
     use crate::build::context::{self, PageMeta};
     use crate::build::fragments;
@@ -363,6 +370,7 @@ fn render_static_page_dev(
         asset_client,
         dist_dir,
         &no_skip,
+        rate_limiter,
     ).wrap_err_with(|| format!("Failed to localize assets for '{}'", tmpl_name))?;
     let full_html = plugin_registry.post_render_html(
         full_html,
@@ -396,6 +404,7 @@ fn render_static_page_dev(
                 asset_cache,
                 asset_client,
                 dist_dir,
+                rate_limiter,
             )?;
             fragments::write_fragments(
                 dist_dir,
@@ -449,6 +458,7 @@ fn render_dynamic_page_dev(
     asset_cache: &mut AssetCache,
     asset_client: &reqwest::blocking::Client,
     plugin_registry: &PluginRegistry,
+    rate_limiter: &RateLimiterPool,
 ) -> Result<Vec<RenderedPage>> {
     use crate::build::context::{self, PageMeta};
     use crate::build::fragments;
@@ -543,6 +553,7 @@ fn render_dynamic_page_dev(
             asset_client,
             dist_dir,
             &no_skip,
+            rate_limiter,
         ).wrap_err_with(|| {
             format!("Failed to localize assets for '{}' slug '{}'", tmpl_name, slug)
         })?;
@@ -576,6 +587,7 @@ fn render_dynamic_page_dev(
                     asset_cache,
                     asset_client,
                     dist_dir,
+                    rate_limiter,
                 )?;
                 fragments::write_fragments(
                     dist_dir,
@@ -606,6 +618,7 @@ fn localize_fragments_dev(
     asset_cache: &mut AssetCache,
     asset_client: &reqwest::blocking::Client,
     dist_dir: &Path,
+    rate_limiter: &RateLimiterPool,
 ) -> Result<Vec<crate::build::fragments::Fragment>> {
     let no_skip = HashSet::new();
     let mut result = Vec::with_capacity(frags.len());
@@ -617,6 +630,7 @@ fn localize_fragments_dev(
             asset_client,
             dist_dir,
             &no_skip,
+            rate_limiter,
         )?;
         result.push(crate::build::fragments::Fragment {
             block_name: frag.block_name.clone(),

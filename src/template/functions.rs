@@ -578,6 +578,7 @@ mod tests {
             headers: std::collections::HashMap::from([
                 ("Authorization".to_string(), auth.to_string()),
             ]),
+            rate_limit: None,
         });
         config
     }

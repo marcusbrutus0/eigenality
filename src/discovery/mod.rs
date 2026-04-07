@@ -214,6 +214,7 @@ mod tests {
             SourceConfig {
                 url: "https://api.example.com".into(),
                 headers: HashMap::new(),
+                rate_limit: None,
             },
         );
         SiteConfig {

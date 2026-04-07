@@ -280,7 +280,14 @@ mod tests {
     use super::*;
     use serde_json::json;
     use std::fs;
+    use std::sync::Arc;
     use tempfile::TempDir;
+
+    use crate::build::rate_limit::RateLimiterPool;
+
+    fn no_op_pool() -> Arc<RateLimiterPool> {
+        Arc::new(RateLimiterPool::new(None, &std::collections::HashMap::new()))
+    }
 
     fn test_feed_config() -> FeedConfig {
         FeedConfig {
@@ -519,7 +526,8 @@ mod tests {
         )
         .unwrap();
 
-        let mut fetcher = DataFetcher::new(&std::collections::HashMap::new(), root, None);
+        let pool = no_op_pool();
+        let mut fetcher = DataFetcher::new(&std::collections::HashMap::new(), root, None, pool);
         let site = test_site_meta();
         let config = test_feed_config();
 
@@ -556,7 +564,8 @@ mod tests {
         fs::create_dir_all(&data_dir).unwrap();
         fs::write(data_dir.join("posts.json"), "[]").unwrap();
 
-        let mut fetcher = DataFetcher::new(&std::collections::HashMap::new(), root, None);
+        let pool = no_op_pool();
+        let mut fetcher = DataFetcher::new(&std::collections::HashMap::new(), root, None, pool);
         let site = test_site_meta();
         let config = test_feed_config();
 
@@ -596,7 +605,8 @@ mod tests {
         )
         .unwrap();
 
-        let mut fetcher = DataFetcher::new(&std::collections::HashMap::new(), root, None);
+        let pool = no_op_pool();
+        let mut fetcher = DataFetcher::new(&std::collections::HashMap::new(), root, None, pool);
         let site = test_site_meta();
         let mut config = test_feed_config();
         config.limit = 2;
@@ -633,7 +643,8 @@ mod tests {
         )
         .unwrap();
 
-        let mut fetcher = DataFetcher::new(&std::collections::HashMap::new(), root, None);
+        let pool = no_op_pool();
+        let mut fetcher = DataFetcher::new(&std::collections::HashMap::new(), root, None, pool);
         let site = test_site_meta();
         let mut config = test_feed_config();
         config.path = "blog/feed.xml".into();
@@ -663,7 +674,8 @@ mod tests {
         fs::create_dir_all(&data_dir).unwrap();
         fs::write(data_dir.join("posts.json"), "[]").unwrap();
 
-        let mut fetcher = DataFetcher::new(&std::collections::HashMap::new(), root, None);
+        let pool = no_op_pool();
+        let mut fetcher = DataFetcher::new(&std::collections::HashMap::new(), root, None, pool);
         let site = test_site_meta();
         let mut config = test_feed_config();
         config.author = Some("Jane Doe".into());
@@ -695,7 +707,8 @@ mod tests {
         fs::create_dir_all(&data_dir).unwrap();
         fs::write(data_dir.join("posts.json"), "[]").unwrap();
 
-        let mut fetcher = DataFetcher::new(&std::collections::HashMap::new(), root, None);
+        let pool = no_op_pool();
+        let mut fetcher = DataFetcher::new(&std::collections::HashMap::new(), root, None, pool);
         let mut site = test_site_meta();
         site.schema.author = Some("Schema Author".into());
         let config = test_feed_config(); // no author set
