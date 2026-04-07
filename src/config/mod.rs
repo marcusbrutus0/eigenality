@@ -105,6 +105,10 @@ pub struct BuildConfig {
     /// Default: true.
     #[serde(default = "default_true")]
     pub not_found: bool,
+    /// Optional global rate limit for outbound HTTP requests (requests per second).
+    /// When set, all build-time HTTP requests are throttled to this rate per host.
+    #[serde(default)]
+    pub rate_limit: Option<u32>,
 }
 
 impl Default for BuildConfig {
@@ -123,6 +127,7 @@ impl Default for BuildConfig {
             bundling: BundlingConfig::default(),
             view_transitions: ViewTransitionsConfig::default(),
             not_found: true,
+            rate_limit: None,
         }
     }
 }
@@ -695,6 +700,10 @@ pub struct SourceConfig {
     pub url: String,
     #[serde(default)]
     pub headers: HashMap<String, String>,
+    /// Optional per-source rate limit (requests per second).
+    /// Overrides the global `[build] rate_limit` for this source's host.
+    #[serde(default)]
+    pub rate_limit: Option<u32>,
 }
 
 /// Load and parse `site.toml` from the given project root.
@@ -1878,5 +1887,28 @@ enabled = true
 "#;
         let config: SiteConfig = toml::from_str(toml_str).unwrap();
         assert!(config.build.view_transitions.enabled);
+    }
+
+    #[test]
+    fn parse_rate_limit_global_and_per_source() {
+        let toml_str = r#"
+[site]
+name = "test"
+base_url = "https://example.com"
+
+[build]
+rate_limit = 10
+
+[sources.api]
+url = "https://api.example.com"
+rate_limit = 5
+
+[sources.cdn]
+url = "https://cdn.example.com"
+"#;
+        let config: SiteConfig = toml::from_str(toml_str).expect("parse failed");
+        assert_eq!(config.build.rate_limit, Some(10));
+        assert_eq!(config.sources["api"].rate_limit, Some(5));
+        assert_eq!(config.sources["cdn"].rate_limit, None);
     }
 }

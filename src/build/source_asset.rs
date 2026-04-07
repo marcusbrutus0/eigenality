@@ -264,6 +264,7 @@ mod tests {
                     h.insert("Authorization".into(), "Bearer secret".into());
                     h
                 },
+                rate_limit: None,
             },
         );
 
@@ -380,6 +381,7 @@ mod tests {
             SourceConfig {
                 url: format!("http://{}", addr),
                 headers: HashMap::new(),
+                rate_limit: None,
             },
         );
 

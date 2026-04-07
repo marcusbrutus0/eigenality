@@ -891,6 +891,7 @@ mod tests {
             SourceConfig {
                 url: format!("http://127.0.0.1:{}", port),
                 headers: HashMap::new(),
+                rate_limit: None,
             },
         );
 
