@@ -18,6 +18,7 @@ pub mod output;
 pub mod render;
 pub mod robots;
 pub mod seo;
+pub mod rate_limit;
 pub mod sitemap;
 pub mod source_asset;
 pub mod view_transitions;
