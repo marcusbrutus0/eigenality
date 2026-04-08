@@ -47,12 +47,6 @@ impl SourceAssetCollector {
         reqs.push(SourceAssetRequest { source_name, url });
     }
 
-    /// Snapshot the collected URLs (without draining).
-    pub fn urls(&self) -> Vec<String> {
-        let reqs = self.requests.lock().expect("collector lock poisoned");
-        reqs.iter().map(|r| r.url.clone()).collect()
-    }
-
     /// Drain all collected requests.
     pub fn drain(&self) -> Vec<SourceAssetRequest> {
         let mut reqs = self.requests.lock().expect("collector lock poisoned");

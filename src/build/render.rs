@@ -61,11 +61,11 @@ pub struct RenderedPage {
 #[derive(Clone)]
 pub(crate) struct BuildContext {
     pub config: Arc<SiteConfig>,
-    pub env: Arc<AsyncMutex<minijinja::Environment<'static>>>,
+    pub env: Arc<minijinja::Environment<'static>>,
     pub fetcher: Arc<AsyncMutex<DataFetcher>>,
     pub global_data: Arc<HashMap<String, serde_json::Value>>,
-    pub dist_dir: std::path::PathBuf,
-    pub build_time: String,
+    pub dist_dir: Arc<std::path::Path>,
+    pub build_time: Arc<str>,
     pub output_paths: Arc<AsyncMutex<HashSet<String>>>,
     pub data_query_count: Arc<AtomicU32>,
     pub asset_cache: Arc<AsyncMutex<AssetCache>>,
@@ -213,11 +213,11 @@ pub async fn build(project_root: &Path, dev: bool, fresh: bool) -> Result<()> {
     // Build the shared context for concurrent rendering.
     let ctx = BuildContext {
         config: Arc::new(config),
-        env: Arc::new(AsyncMutex::new(env)),
+        env: Arc::new(env),
         fetcher: Arc::new(AsyncMutex::new(fetcher)),
         global_data: Arc::new(global_data),
-        dist_dir: dist_dir.clone(),
-        build_time: build_time.clone(),
+        dist_dir: dist_dir.clone().into(),
+        build_time: build_time.clone().into(),
         output_paths: Arc::new(AsyncMutex::new(HashSet::new())),
         data_query_count: Arc::new(AtomicU32::new(0)),
         asset_cache: Arc::new(AsyncMutex::new(asset_cache)),
@@ -244,7 +244,7 @@ pub async fn build(project_root: &Path, dev: bool, fresh: bool) -> Result<()> {
                         let rp = render_static_page(page, &ctx).await?;
                         Ok(vec![rp])
                     }
-                    PageType::Dynamic { param_name: _ } => {
+                    PageType::Dynamic { .. } => {
                         render_dynamic_page(page, &ctx).await
                     }
                 }
@@ -437,39 +437,31 @@ async fn render_static_page(
 
     let tpl_ctx = context::build_page_context(config, &ctx.global_data, &page_data, meta, None);
 
-    // Resolve SEO/schema expressions and render template under the env lock.
-    let (resolved_seo, resolved_schema, rendered) = {
-        let env = ctx.env.lock().await;
+    let resolved_seo = seo::resolve_seo_expressions(
+        &page.frontmatter.seo,
+        &ctx.env,
+        &tpl_ctx,
+    );
 
-        let resolved_seo = seo::resolve_seo_expressions(
-            &page.frontmatter.seo,
-            &env,
-            &tpl_ctx,
-        );
+    let resolved_schema = json_ld::resolve_schema_expressions(
+        &page.frontmatter.schema,
+        &ctx.env,
+        &tpl_ctx,
+    );
 
-        let resolved_schema = json_ld::resolve_schema_expressions(
-            &page.frontmatter.schema,
-            &env,
-            &tpl_ctx,
-        );
+    let tmpl = ctx.env.get_template(&tmpl_name)
+        .wrap_err_with(|| format!("Template '{}' not found in environment", tmpl_name))?;
 
-        // 3. Render template.
-        let tmpl = env.get_template(&tmpl_name)
-            .wrap_err_with(|| format!("Template '{}' not found in environment", tmpl_name))?;
-
-        let rendered = match tmpl.render(&tpl_ctx) {
-            Ok(html) => html,
-            Err(err) => {
-                let te = TemplateError::from_minijinja(&err, &tmpl_name, None);
-                eprintln!("{}", te.format_console(&tmpl_name, None));
-                return Err(eyre::eyre!(
-                    "Failed to render template '{}': {}",
-                    tmpl_name, te.short_msg
-                ));
-            }
-        };
-
-        (resolved_seo, resolved_schema, rendered)
+    let rendered = match tmpl.render(&tpl_ctx) {
+        Ok(html) => html,
+        Err(err) => {
+            let te = TemplateError::from_minijinja(&err, &tmpl_name, None);
+            eprintln!("{}", te.format_console(&tmpl_name, None));
+            return Err(eyre::eyre!(
+                "Failed to render template '{}': {}",
+                tmpl_name, te.short_msg
+            ));
+        }
     };
 
     // Extract fragment block names (before marker stripping) for view transitions.
@@ -479,13 +471,21 @@ async fn render_static_page(
         Vec::new()
     };
 
-    // 4. Write full page (with markers stripped, assets localized, images optimized, plugins applied).
     let full_html = fragments::strip_fragment_markers(&rendered);
-    let source_asset_urls: HashSet<String> = ctx.source_asset_collector.urls().into_iter().collect();
 
+    // Drain source asset requests accumulated during this page's render.
+    // Done immediately after render so concurrent pages don't steal each other's requests.
+    let page_source_requests = ctx.source_asset_collector.drain();
+    let source_asset_urls: HashSet<String> = if page_source_requests.is_empty() {
+        HashSet::new()
+    } else {
+        page_source_requests.iter().map(|r| r.url.clone()).collect()
+    };
+
+    // Localize remote assets and resolve authenticated source assets under one lock.
     let full_html = {
         let mut cache = ctx.asset_cache.lock().await;
-        assets::localize_assets(
+        let html = assets::localize_assets(
             &full_html,
             &config.assets,
             &mut cache,
@@ -494,15 +494,11 @@ async fn render_static_page(
             &source_asset_urls,
             &ctx.rate_limiter,
         ).await
-        .wrap_err_with(|| format!("Failed to localize assets for '{}'", tmpl_name))?
-    };
+        .wrap_err_with(|| format!("Failed to localize assets for '{}'", tmpl_name))?;
 
-    // 4a. Resolve authenticated source assets.
-    let full_html = {
-        let mut cache = ctx.asset_cache.lock().await;
         source_asset::resolve_source_assets(
-            &full_html,
-            &ctx.source_asset_collector.drain(),
+            &html,
+            &page_source_requests,
             &config.sources,
             &mut cache,
             &ctx.asset_client,
@@ -692,6 +688,9 @@ async fn render_dynamic_page(
         items.len(),
     );
 
+    let tmpl = ctx.env.get_template(&tmpl_name)
+        .wrap_err_with(|| format!("Template '{}' not found in environment", tmpl_name))?;
+
     let mut rendered_pages = Vec::new();
     let mut seen_slugs: HashSet<String> = HashSet::new();
 
@@ -780,39 +779,28 @@ async fn render_dynamic_page(
             Some((item_as, item)),
         );
 
-        // Resolve SEO/schema expressions and render template under the env lock.
-        let (resolved_seo, resolved_schema, rendered) = {
-            let env = ctx.env.lock().await;
+        let resolved_seo = seo::resolve_seo_expressions(
+            &page.frontmatter.seo,
+            &ctx.env,
+            &tpl_ctx,
+        );
 
-            let resolved_seo = seo::resolve_seo_expressions(
-                &page.frontmatter.seo,
-                &env,
-                &tpl_ctx,
-            );
+        let resolved_schema = json_ld::resolve_schema_expressions(
+            &page.frontmatter.schema,
+            &ctx.env,
+            &tpl_ctx,
+        );
 
-            let resolved_schema = json_ld::resolve_schema_expressions(
-                &page.frontmatter.schema,
-                &env,
-                &tpl_ctx,
-            );
-
-            // Render.
-            let tmpl = env.get_template(&tmpl_name)
-                .wrap_err_with(|| format!("Template '{}' not found in environment", tmpl_name))?;
-
-            let rendered = match tmpl.render(&tpl_ctx) {
-                Ok(html) => html,
-                Err(err) => {
-                    let te = TemplateError::from_minijinja(&err, &tmpl_name, Some(&slug));
-                    eprintln!("{}", te.format_console(&tmpl_name, Some(&slug)));
-                    return Err(eyre::eyre!(
-                        "Failed to render template '{}' for item with slug '{}': {}",
-                        tmpl_name, slug, te.short_msg
-                    ));
-                }
-            };
-
-            (resolved_seo, resolved_schema, rendered)
+        let rendered = match tmpl.render(&tpl_ctx) {
+            Ok(html) => html,
+            Err(err) => {
+                let te = TemplateError::from_minijinja(&err, &tmpl_name, Some(&slug));
+                eprintln!("{}", te.format_console(&tmpl_name, Some(&slug)));
+                return Err(eyre::eyre!(
+                    "Failed to render template '{}' for item with slug '{}': {}",
+                    tmpl_name, slug, te.short_msg
+                ));
+            }
         };
 
         // Extract fragment block names (before marker stripping) for view transitions.
@@ -822,13 +810,18 @@ async fn render_dynamic_page(
             Vec::new()
         };
 
-        // Write full page (with assets localized, images optimized, plugins applied).
         let full_html = fragments::strip_fragment_markers(&rendered);
-        let source_asset_urls: HashSet<String> = ctx.source_asset_collector.urls().into_iter().collect();
+
+        let page_source_requests = ctx.source_asset_collector.drain();
+        let source_asset_urls: HashSet<String> = if page_source_requests.is_empty() {
+            HashSet::new()
+        } else {
+            page_source_requests.iter().map(|r| r.url.clone()).collect()
+        };
 
         let full_html = {
             let mut cache = ctx.asset_cache.lock().await;
-            assets::localize_assets(
+            let html = assets::localize_assets(
                 &full_html,
                 &config.assets,
                 &mut cache,
@@ -839,15 +832,11 @@ async fn render_dynamic_page(
             ).await
             .wrap_err_with(|| {
                 format!("Failed to localize assets for '{}' slug '{}'", tmpl_name, slug)
-            })?
-        };
+            })?;
 
-        // Resolve authenticated source assets.
-        let full_html = {
-            let mut cache = ctx.asset_cache.lock().await;
             source_asset::resolve_source_assets(
-                &full_html,
-                &ctx.source_asset_collector.drain(),
+                &html,
+                &page_source_requests,
                 &config.sources,
                 &mut cache,
                 &ctx.asset_client,
