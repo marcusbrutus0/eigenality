@@ -39,7 +39,7 @@ pub struct DataCache {
 pub(crate) fn cache_key_hash(key: &str) -> String {
     use sha2::{Digest, Sha256};
     let digest = Sha256::digest(key.as_bytes());
-    format!("{:x}", digest)
+    format!("{}", hex::encode(digest))
 }
 
 impl DataCache {
