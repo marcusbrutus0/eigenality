@@ -25,7 +25,7 @@ pub struct DataFetcher {
     /// Path to the project's `_data/` directory.
     data_dir: PathBuf,
     /// HTTP client (reused across requests).
-    client: reqwest::blocking::Client,
+    client: reqwest::Client,
     /// Optional disk cache for conditional HTTP requests.
     data_cache: Option<super::cache::DataCache>,
     /// Per-host rate limiter pool shared across all requests.
@@ -45,7 +45,7 @@ impl DataFetcher {
             url_cache: HashMap::new(),
             file_cache: HashMap::new(),
             data_dir: project_root.join("_data"),
-            client: reqwest::blocking::Client::new(),
+            client: reqwest::Client::new(),
             data_cache,
             rate_limiter,
         }
@@ -57,7 +57,7 @@ impl DataFetcher {
     /// (`source` + `path` fields). After fetching the raw data, `root`
     /// extraction, plugin transforms, and transforms (filter, sort, limit)
     /// are applied.
-    pub fn fetch(
+    pub async fn fetch(
         &mut self,
         query: &DataQuery,
         plugin_registry: Option<&PluginRegistry>,
@@ -81,7 +81,8 @@ impl DataFetcher {
                 query.path.as_deref().unwrap_or(""),
                 &query.method,
                 query.body.as_ref(),
-            )?
+            )
+            .await?
         } else {
             bail!(
                 "DataQuery has neither `file` nor `source` set. \
@@ -151,22 +152,22 @@ impl DataFetcher {
     }
 
     /// Send an HTTP request with the given method, headers, and optional body.
-    fn send_request(
+    async fn send_request(
         &self,
         method: &HttpMethod,
         url: &str,
         headers: reqwest::header::HeaderMap,
         body: Option<&serde_json::Value>,
-    ) -> Result<reqwest::blocking::Response> {
-        self.rate_limiter.wait(url);
+    ) -> Result<reqwest::Response> {
+        self.rate_limiter.wait(url).await;
         let response = match method {
-            HttpMethod::Get => self.client.get(url).headers(headers).send(),
+            HttpMethod::Get => self.client.get(url).headers(headers).send().await,
             HttpMethod::Post => {
                 let mut req = self.client.post(url).headers(headers);
                 if let Some(b) = body {
                     req = req.json(b);
                 }
-                req.send()
+                req.send().await
             }
         }
         .wrap_err_with(|| format!("HTTP request failed for {}", url))?;
@@ -174,7 +175,7 @@ impl DataFetcher {
     }
 
     /// Fetch data from a remote source defined in `site.toml`.
-    fn fetch_source(
+    async fn fetch_source(
         &mut self,
         source_name: &str,
         path: &str,
@@ -239,7 +240,7 @@ impl DataFetcher {
             tracing::debug!("Conditional request for {} (etag: {:?})", full_url, meta.etag);
         }
 
-        let response = self.send_request(method, &full_url, headers, body)?;
+        let response = self.send_request(method, &full_url, headers, body).await?;
         let status = response.status();
 
         // Handle 304 Not Modified: read body from disk cache.
@@ -257,12 +258,12 @@ impl DataFetcher {
                             full_url, e,
                         );
                         let retry_headers = Self::build_source_headers(source)?;
-                        let retry_response = self.send_request(method, &full_url, retry_headers, body)?;
+                        let retry_response = self.send_request(method, &full_url, retry_headers, body).await?;
                         let retry_status = retry_response.status();
                         if !retry_status.is_success() {
                             bail!("HTTP {} from {} (retry after bad 304 cache)", retry_status, full_url);
                         }
-                        return self.handle_success_response(retry_response, cache_key, &full_url);
+                        return self.handle_success_response(retry_response, cache_key, &full_url).await;
                     }
                 }
             }
@@ -273,14 +274,14 @@ impl DataFetcher {
             bail!("HTTP {} from {}", status, full_url);
         }
 
-        self.handle_success_response(response, cache_key, &full_url)
+        self.handle_success_response(response, cache_key, &full_url).await
     }
 
     /// Process a successful HTTP response: extract cache headers, store in disk
     /// cache, parse JSON, and populate the in-memory cache.
-    fn handle_success_response(
+    async fn handle_success_response(
         &mut self,
-        response: reqwest::blocking::Response,
+        response: reqwest::Response,
         cache_key: String,
         full_url: &str,
     ) -> Result<Value> {
@@ -297,6 +298,7 @@ impl DataFetcher {
 
         let raw_bytes = response
             .bytes()
+            .await
             .wrap_err_with(|| format!("Failed to read response bytes from {}", full_url))?;
 
         if let Some(dc) = self.data_cache.as_mut() {
@@ -319,6 +321,19 @@ impl DataFetcher {
         Ok(value)
     }
 
+    /// Blocking wrapper around [`fetch()`](Self::fetch) for callers that are
+    /// not yet async. Works both inside and outside a tokio runtime.
+    ///
+    /// This is a transitional API — callers should migrate to `fetch().await`
+    /// as the async conversion progresses.
+    pub fn fetch_blocking(
+        &mut self,
+        query: &DataQuery,
+        plugin_registry: Option<&PluginRegistry>,
+    ) -> Result<Value> {
+        block_on_async(self.fetch(query, plugin_registry))
+    }
+
     /// Clear the file cache (used when `_data/` files change during dev).
     pub fn clear_file_cache(&mut self) {
         self.file_cache.clear();
@@ -328,6 +343,19 @@ impl DataFetcher {
     #[allow(unused)]
     pub fn clear_url_cache(&mut self) {
         self.url_cache.clear();
+    }
+}
+
+/// Run an async future to completion, working both inside and outside a tokio
+/// runtime. This is a transitional helper for the sync→async migration.
+fn block_on_async<F: std::future::Future>(f: F) -> F::Output {
+    match tokio::runtime::Handle::try_current() {
+        Ok(handle) => tokio::task::block_in_place(|| handle.block_on(f)),
+        Err(_) => {
+            let rt = tokio::runtime::Runtime::new()
+                .expect("failed to create tokio runtime for blocking bridge");
+            rt.block_on(f)
+        }
     }
 }
 
@@ -434,8 +462,8 @@ mod tests {
 
     // --- fetch_file tests ---
 
-    #[test]
-    fn test_fetch_file_yaml() {
+    #[tokio::test]
+    async fn test_fetch_file_yaml() {
         let tmp = TempDir::new().unwrap();
         let root = tmp.path();
         write(root, "_data/nav.yaml", "- label: Home\n  url: /\n");
@@ -446,14 +474,14 @@ mod tests {
             ..Default::default()
         };
 
-        let result = fetcher.fetch(&query, None).unwrap();
+        let result = fetcher.fetch(&query, None).await.unwrap();
         assert!(result.is_array());
         assert_eq!(result.as_array().unwrap().len(), 1);
         assert_eq!(result[0]["label"], "Home");
     }
 
-    #[test]
-    fn test_fetch_file_json() {
+    #[tokio::test]
+    async fn test_fetch_file_json() {
         let tmp = TempDir::new().unwrap();
         let root = tmp.path();
         write(root, "_data/config.json", r#"{"debug": true}"#);
@@ -464,12 +492,12 @@ mod tests {
             ..Default::default()
         };
 
-        let result = fetcher.fetch(&query, None).unwrap();
+        let result = fetcher.fetch(&query, None).await.unwrap();
         assert_eq!(result["debug"], true);
     }
 
-    #[test]
-    fn test_fetch_file_with_root() {
+    #[tokio::test]
+    async fn test_fetch_file_with_root() {
         let tmp = TempDir::new().unwrap();
         let root = tmp.path();
         write(
@@ -485,12 +513,12 @@ mod tests {
             ..Default::default()
         };
 
-        let result = fetcher.fetch(&query, None).unwrap();
+        let result = fetcher.fetch(&query, None).await.unwrap();
         assert_eq!(result, json!([1, 2, 3]));
     }
 
-    #[test]
-    fn test_fetch_file_with_transforms() {
+    #[tokio::test]
+    async fn test_fetch_file_with_transforms() {
         let tmp = TempDir::new().unwrap();
         let root = tmp.path();
         write(
@@ -517,15 +545,15 @@ mod tests {
             ..Default::default()
         };
 
-        let result = fetcher.fetch(&query, None).unwrap();
+        let result = fetcher.fetch(&query, None).await.unwrap();
         let arr = result.as_array().unwrap();
         assert_eq!(arr.len(), 2);
         assert_eq!(arr[0]["id"], 1);
         assert_eq!(arr[1]["id"], 2);
     }
 
-    #[test]
-    fn test_fetch_file_caching() {
+    #[tokio::test]
+    async fn test_fetch_file_caching() {
         let tmp = TempDir::new().unwrap();
         let root = tmp.path();
         write(root, "_data/nav.yaml", "- label: Home\n");
@@ -537,17 +565,17 @@ mod tests {
         };
 
         // First fetch reads file.
-        let r1 = fetcher.fetch(&query, None).unwrap();
+        let r1 = fetcher.fetch(&query, None).await.unwrap();
 
         // Delete the file — cached result should still work.
         fs::remove_file(root.join("_data/nav.yaml")).unwrap();
-        let r2 = fetcher.fetch(&query, None).unwrap();
+        let r2 = fetcher.fetch(&query, None).await.unwrap();
 
         assert_eq!(r1, r2);
     }
 
-    #[test]
-    fn test_fetch_file_missing() {
+    #[tokio::test]
+    async fn test_fetch_file_missing() {
         let tmp = TempDir::new().unwrap();
         let root = tmp.path();
         fs::create_dir_all(root.join("_data")).unwrap();
@@ -558,25 +586,25 @@ mod tests {
             ..Default::default()
         };
 
-        let result = fetcher.fetch(&query, None);
+        let result = fetcher.fetch(&query, None).await;
         assert!(result.is_err());
     }
 
-    #[test]
-    fn test_fetch_no_file_or_source_errors() {
+    #[tokio::test]
+    async fn test_fetch_no_file_or_source_errors() {
         let tmp = TempDir::new().unwrap();
         let root = tmp.path();
         let mut fetcher = test_fetcher(root);
         let query = DataQuery::default();
 
-        let result = fetcher.fetch(&query, None);
+        let result = fetcher.fetch(&query, None).await;
         assert!(result.is_err());
         let err = result.unwrap_err().to_string();
         assert!(err.contains("neither"));
     }
 
-    #[test]
-    fn test_fetch_unknown_source_errors() {
+    #[tokio::test]
+    async fn test_fetch_unknown_source_errors() {
         let tmp = TempDir::new().unwrap();
         let root = tmp.path();
         let mut fetcher = test_fetcher(root);
@@ -586,14 +614,14 @@ mod tests {
             ..Default::default()
         };
 
-        let result = fetcher.fetch(&query, None);
+        let result = fetcher.fetch(&query, None).await;
         assert!(result.is_err());
         let err = result.unwrap_err().to_string();
         assert!(err.contains("nonexistent"));
     }
 
-    #[test]
-    fn test_clear_caches() {
+    #[tokio::test]
+    async fn test_clear_caches() {
         let tmp = TempDir::new().unwrap();
         let root = tmp.path();
         write(root, "_data/data.json", r#"{"v": 1}"#);
@@ -604,7 +632,7 @@ mod tests {
             ..Default::default()
         };
 
-        let _ = fetcher.fetch(&query, None).unwrap();
+        let _ = fetcher.fetch(&query, None).await.unwrap();
         assert!(!fetcher.file_cache.is_empty());
 
         fetcher.clear_file_cache();
@@ -618,8 +646,8 @@ mod tests {
 
     // --- Plugin integration tests ---
 
-    #[test]
-    fn test_fetch_with_plugin_registry_transforms_data() {
+    #[tokio::test]
+    async fn test_fetch_with_plugin_registry_transforms_data() {
         use crate::plugins::registry::PluginRegistry;
         use crate::plugins::Plugin;
 
@@ -661,14 +689,14 @@ mod tests {
             ..Default::default()
         };
 
-        let result = fetcher.fetch(&query, Some(&registry)).unwrap();
+        let result = fetcher.fetch(&query, Some(&registry)).await.unwrap();
         let arr = result.as_array().unwrap();
         assert!(arr[0]["added"].as_bool().unwrap());
         assert!(arr[1]["added"].as_bool().unwrap());
     }
 
-    #[test]
-    fn test_fetch_with_none_plugin_registry_no_transform() {
+    #[tokio::test]
+    async fn test_fetch_with_none_plugin_registry_no_transform() {
         let tmp = TempDir::new().unwrap();
         let root = tmp.path();
         write(root, "_data/items.json", r#"[{"id": 1}]"#);
@@ -679,15 +707,15 @@ mod tests {
             ..Default::default()
         };
 
-        let result = fetcher.fetch(&query, None).unwrap();
+        let result = fetcher.fetch(&query, None).await.unwrap();
         let arr = result.as_array().unwrap();
         // No "added" field since no plugin.
         assert!(arr[0].get("added").is_none());
         assert_eq!(arr[0]["id"], 1);
     }
 
-    #[test]
-    fn test_fetch_plugin_runs_after_root_extraction() {
+    #[tokio::test]
+    async fn test_fetch_plugin_runs_after_root_extraction() {
         use crate::plugins::registry::PluginRegistry;
         use crate::plugins::Plugin;
 
@@ -732,12 +760,12 @@ mod tests {
             ..Default::default()
         };
 
-        let result = fetcher.fetch(&query, Some(&registry)).unwrap();
+        let result = fetcher.fetch(&query, Some(&registry)).await.unwrap();
         assert_eq!(result.as_array().unwrap().len(), 2);
     }
 
-    #[test]
-    fn test_fetch_plugin_runs_before_filter_sort_limit() {
+    #[tokio::test]
+    async fn test_fetch_plugin_runs_before_filter_sort_limit() {
         use crate::plugins::registry::PluginRegistry;
         use crate::plugins::Plugin;
 
@@ -793,7 +821,7 @@ mod tests {
 
         // The plugin adds "status" = "published" to all items,
         // then the filter keeps only those (all 3), then limit=2.
-        let result = fetcher.fetch(&query, Some(&registry)).unwrap();
+        let result = fetcher.fetch(&query, Some(&registry)).await.unwrap();
         let arr = result.as_array().unwrap();
         assert_eq!(arr.len(), 2);
         assert_eq!(arr[0]["status"], "published");
@@ -827,8 +855,8 @@ mod tests {
 
     // --- DataCache conditional request tests ---
 
-    #[test]
-    fn fetch_source_uses_data_cache_on_304() {
+    #[tokio::test]
+    async fn fetch_source_uses_data_cache_on_304() {
         use std::io::{BufRead, BufReader, Write};
         use std::net::TcpListener;
 
@@ -909,6 +937,7 @@ mod tests {
         // First fetch: should get 200 with data.
         let result1 = fetcher
             .fetch_source("test_api", "/data", &HttpMethod::Get, None)
+            .await
             .unwrap();
         assert_eq!(result1, serde_json::json!([{"id": 1}]));
 
@@ -918,6 +947,7 @@ mod tests {
         // Second fetch: server returns 304, data comes from disk cache.
         let result2 = fetcher
             .fetch_source("test_api", "/data", &HttpMethod::Get, None)
+            .await
             .unwrap();
         assert_eq!(result2, serde_json::json!([{"id": 1}]));
 

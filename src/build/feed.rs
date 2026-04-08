@@ -71,7 +71,7 @@ fn generate_feed(
 
     // Fetch collection data.
     let data = fetcher
-        .fetch(&query, plugin_registry)
+        .fetch_blocking(&query, plugin_registry)
         .wrap_err("Failed to fetch feed data")?;
 
     let items = match data {

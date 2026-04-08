@@ -40,7 +40,7 @@ pub fn resolve_page_data(
 
     for (name, query) in &frontmatter.data {
         let value = fetcher
-            .fetch(query, plugin_registry)
+            .fetch_blocking(query, plugin_registry)
             .wrap_err_with(|| format!("Failed to resolve data query '{}'", name))?;
         result.insert(name.clone(), value);
     }
@@ -67,7 +67,7 @@ pub fn resolve_dynamic_page_data(
         .ok_or_else(|| eyre::eyre!("Dynamic page has no `collection` in frontmatter"))?;
 
     let collection = fetcher
-        .fetch(collection_query, plugin_registry)
+        .fetch_blocking(collection_query, plugin_registry)
         .wrap_err("Failed to fetch collection")?;
 
     match collection {
@@ -105,7 +105,7 @@ pub fn resolve_item_data(
         verify_no_remaining_interpolation(&interpolated, name)?;
 
         let value = fetcher
-            .fetch(&interpolated, plugin_registry)
+            .fetch_blocking(&interpolated, plugin_registry)
             .wrap_err_with(|| format!("Failed to resolve data query '{}'", name))?;
         result.insert(name.clone(), value);
     }
