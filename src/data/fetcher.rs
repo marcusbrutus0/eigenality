@@ -321,19 +321,6 @@ impl DataFetcher {
         Ok(value)
     }
 
-    /// Blocking wrapper around [`fetch()`](Self::fetch) for callers that are
-    /// not yet async. Works both inside and outside a tokio runtime.
-    ///
-    /// This is a transitional API — callers should migrate to `fetch().await`
-    /// as the async conversion progresses.
-    pub fn fetch_blocking(
-        &mut self,
-        query: &DataQuery,
-        plugin_registry: Option<&PluginRegistry>,
-    ) -> Result<Value> {
-        block_on_async(self.fetch(query, plugin_registry))
-    }
-
     /// Clear the file cache (used when `_data/` files change during dev).
     pub fn clear_file_cache(&mut self) {
         self.file_cache.clear();
@@ -343,19 +330,6 @@ impl DataFetcher {
     #[allow(unused)]
     pub fn clear_url_cache(&mut self) {
         self.url_cache.clear();
-    }
-}
-
-/// Run an async future to completion, working both inside and outside a tokio
-/// runtime. This is a transitional helper for the sync→async migration.
-fn block_on_async<F: std::future::Future>(f: F) -> F::Output {
-    match tokio::runtime::Handle::try_current() {
-        Ok(handle) => tokio::task::block_in_place(|| handle.block_on(f)),
-        Err(_) => {
-            let rt = tokio::runtime::Runtime::new()
-                .expect("failed to create tokio runtime for blocking bridge");
-            rt.block_on(f)
-        }
     }
 }
 
