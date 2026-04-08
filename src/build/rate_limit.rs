@@ -1,8 +1,8 @@
 //! Build-time HTTP rate limiting.
 //!
 //! `RateLimiterPool` manages per-host token-bucket rate limiters using the
-//! `governor` crate.  Before each outbound request, call `pool.wait(url)` —
-//! it blocks until a token is available for the target host.
+//! `governor` crate.  Before each outbound request, call `pool.wait(url).await` —
+//! it yields until a token is available for the target host.
 
 use std::collections::HashMap;
 use std::num::NonZeroU32;
@@ -54,11 +54,11 @@ impl RateLimiterPool {
         }
     }
 
-    /// Block until a token is available for the given URL's host.
+    /// Yield until a token is available for the given URL's host.
     ///
     /// If no rate limit is configured (neither global nor per-source) for the
     /// host, returns immediately.
-    pub fn wait(&self, url: &str) {
+    pub async fn wait(&self, url: &str) {
         let host = match extract_host(url) {
             Some(h) => h,
             None => return,
@@ -85,7 +85,7 @@ impl RateLimiterPool {
             }))
         };
 
-        futures::executor::block_on(limiter.until_ready());
+        limiter.until_ready().await;
     }
 }
 
@@ -108,34 +108,34 @@ mod tests {
         }
     }
 
-    #[test]
-    fn no_config_means_no_wait() {
+    #[tokio::test]
+    async fn no_config_means_no_wait() {
         let pool = RateLimiterPool::new(None, &HashMap::new());
         // Should return immediately — no limiter configured.
-        pool.wait("https://api.example.com/data");
-        pool.wait("https://cdn.example.com/image.png");
+        pool.wait("https://api.example.com/data").await;
+        pool.wait("https://cdn.example.com/image.png").await;
     }
 
-    #[test]
-    fn global_rate_limit_applies() {
+    #[tokio::test]
+    async fn global_rate_limit_applies() {
         let pool = RateLimiterPool::new(Some(100), &HashMap::new());
         let start = std::time::Instant::now();
         // First request should be instant (token available).
-        pool.wait("https://api.example.com/data");
+        pool.wait("https://api.example.com/data").await;
         assert!(start.elapsed() < std::time::Duration::from_millis(50));
     }
 
-    #[test]
-    fn per_source_overrides_global() {
+    #[tokio::test]
+    async fn per_source_overrides_global() {
         let mut sources = HashMap::new();
         sources.insert("api".to_string(), source("https://api.example.com", Some(2)));
         let pool = RateLimiterPool::new(Some(100), &sources);
 
         // First request is free.
-        pool.wait("https://api.example.com/data");
+        pool.wait("https://api.example.com/data").await;
         let start = std::time::Instant::now();
         // Second request should be throttled at ~2/s = ~500ms wait.
-        pool.wait("https://api.example.com/other");
+        pool.wait("https://api.example.com/other").await;
         let elapsed = start.elapsed();
         assert!(
             elapsed >= std::time::Duration::from_millis(400),
@@ -144,16 +144,16 @@ mod tests {
         );
     }
 
-    #[test]
-    fn different_hosts_have_independent_limiters() {
+    #[tokio::test]
+    async fn different_hosts_have_independent_limiters() {
         let mut sources = HashMap::new();
         sources.insert("slow".to_string(), source("https://slow.example.com", Some(1)));
         let pool = RateLimiterPool::new(Some(100), &sources);
 
-        pool.wait("https://slow.example.com/a");
+        pool.wait("https://slow.example.com/a").await;
         // A different host should not be affected by slow.example.com's limiter.
         let start = std::time::Instant::now();
-        pool.wait("https://fast.example.com/b");
+        pool.wait("https://fast.example.com/b").await;
         assert!(start.elapsed() < std::time::Duration::from_millis(50));
     }
 }
