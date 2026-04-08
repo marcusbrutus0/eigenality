@@ -31,7 +31,7 @@ use super::fetcher::DataFetcher;
 ///
 /// Returns a map of query name → resolved value, ready to be merged into the
 /// template context.
-pub fn resolve_page_data(
+pub async fn resolve_page_data(
     frontmatter: &Frontmatter,
     fetcher: &mut DataFetcher,
     plugin_registry: Option<&PluginRegistry>,
@@ -40,7 +40,8 @@ pub fn resolve_page_data(
 
     for (name, query) in &frontmatter.data {
         let value = fetcher
-            .fetch_blocking(query, plugin_registry)
+            .fetch(query, plugin_registry)
+            .await
             .wrap_err_with(|| format!("Failed to resolve data query '{}'", name))?;
         result.insert(name.clone(), value);
     }
@@ -56,7 +57,7 @@ pub fn resolve_page_data(
 /// - A function-like closure isn't easy here, so instead we return the raw
 ///   collection and let the caller iterate, calling `resolve_item_data` for
 ///   each item.
-pub fn resolve_dynamic_page_data(
+pub async fn resolve_dynamic_page_data(
     frontmatter: &Frontmatter,
     fetcher: &mut DataFetcher,
     plugin_registry: Option<&PluginRegistry>,
@@ -67,7 +68,8 @@ pub fn resolve_dynamic_page_data(
         .ok_or_else(|| eyre::eyre!("Dynamic page has no `collection` in frontmatter"))?;
 
     let collection = fetcher
-        .fetch_blocking(collection_query, plugin_registry)
+        .fetch(collection_query, plugin_registry)
+        .await
         .wrap_err("Failed to fetch collection")?;
 
     match collection {
@@ -84,7 +86,7 @@ pub fn resolve_dynamic_page_data(
 /// Filter values containing `{{ item.field }}` patterns are interpolated using
 /// the current item's data. Interpolation is ONE level deep — if an
 /// interpolated query itself references `{{ }}`, an error is returned.
-pub fn resolve_item_data(
+pub async fn resolve_item_data(
     frontmatter: &Frontmatter,
     item: &Value,
     item_as: &str,
@@ -105,7 +107,8 @@ pub fn resolve_item_data(
         verify_no_remaining_interpolation(&interpolated, name)?;
 
         let value = fetcher
-            .fetch_blocking(&interpolated, plugin_registry)
+            .fetch(&interpolated, plugin_registry)
+            .await
             .wrap_err_with(|| format!("Failed to resolve data query '{}'", name))?;
         result.insert(name.clone(), value);
     }
@@ -116,7 +119,7 @@ pub fn resolve_item_data(
 /// Convenience wrapper: resolve data queries for a single item of a dynamic page.
 ///
 /// Uses the frontmatter's `item_as` field as the interpolation prefix.
-pub fn resolve_dynamic_page_data_for_item(
+pub async fn resolve_dynamic_page_data_for_item(
     frontmatter: &Frontmatter,
     item: &Value,
     fetcher: &mut DataFetcher,
@@ -129,6 +132,7 @@ pub fn resolve_dynamic_page_data_for_item(
         fetcher,
         plugin_registry,
     )
+    .await
 }
 
 /// Interpolate `{{ item_as.field }}` patterns in a DataQuery's filter values.
@@ -548,8 +552,8 @@ mod tests {
 
     // --- resolve_page_data tests ---
 
-    #[test]
-    fn test_resolve_page_data_file() {
+    #[tokio::test]
+    async fn test_resolve_page_data_file() {
         let tmp = TempDir::new().unwrap();
         let root = tmp.path();
         write(root, "_data/nav.yaml", "- label: Home\n  url: /\n");
@@ -571,13 +575,13 @@ mod tests {
             ..Default::default()
         };
 
-        let result = resolve_page_data(&fm, &mut fetcher, None).unwrap();
+        let result = resolve_page_data(&fm, &mut fetcher, None).await.unwrap();
         assert_eq!(result.len(), 1);
         assert!(result["nav"].is_array());
     }
 
-    #[test]
-    fn test_resolve_page_data_multiple() {
+    #[tokio::test]
+    async fn test_resolve_page_data_multiple() {
         let tmp = TempDir::new().unwrap();
         let root = tmp.path();
         write(root, "_data/nav.yaml", "- label: Home\n  url: /\n");
@@ -607,28 +611,28 @@ mod tests {
             ..Default::default()
         };
 
-        let result = resolve_page_data(&fm, &mut fetcher, None).unwrap();
+        let result = resolve_page_data(&fm, &mut fetcher, None).await.unwrap();
         assert_eq!(result.len(), 2);
         assert!(result.contains_key("nav"));
         assert!(result.contains_key("config"));
     }
 
-    #[test]
-    fn test_resolve_page_data_empty() {
+    #[tokio::test]
+    async fn test_resolve_page_data_empty() {
         let tmp = TempDir::new().unwrap();
         let root = tmp.path();
         let pool = no_op_pool();
         let mut fetcher = DataFetcher::new(&HashMap::new(), root, None, pool);
         let fm = Frontmatter::default();
 
-        let result = resolve_page_data(&fm, &mut fetcher, None).unwrap();
+        let result = resolve_page_data(&fm, &mut fetcher, None).await.unwrap();
         assert!(result.is_empty());
     }
 
     // --- resolve_dynamic_page_data tests ---
 
-    #[test]
-    fn test_resolve_dynamic_collection_from_file() {
+    #[tokio::test]
+    async fn test_resolve_dynamic_collection_from_file() {
         let tmp = TempDir::new().unwrap();
         let root = tmp.path();
         write(
@@ -647,27 +651,29 @@ mod tests {
             ..Default::default()
         };
 
-        let items = resolve_dynamic_page_data(&fm, &mut fetcher, None).unwrap();
+        let items = resolve_dynamic_page_data(&fm, &mut fetcher, None)
+            .await
+            .unwrap();
         assert_eq!(items.len(), 2);
         assert_eq!(items[0]["title"], "First");
     }
 
-    #[test]
-    fn test_resolve_dynamic_no_collection() {
+    #[tokio::test]
+    async fn test_resolve_dynamic_no_collection() {
         let tmp = TempDir::new().unwrap();
         let root = tmp.path();
         let pool = no_op_pool();
         let mut fetcher = DataFetcher::new(&HashMap::new(), root, None, pool);
         let fm = Frontmatter::default();
 
-        let result = resolve_dynamic_page_data(&fm, &mut fetcher, None);
+        let result = resolve_dynamic_page_data(&fm, &mut fetcher, None).await;
         assert!(result.is_err());
     }
 
     // --- resolve_item_data tests ---
 
-    #[test]
-    fn test_resolve_item_data_with_interpolation() {
+    #[tokio::test]
+    async fn test_resolve_item_data_with_interpolation() {
         let tmp = TempDir::new().unwrap();
         let root = tmp.path();
         write(
@@ -701,7 +707,9 @@ mod tests {
         };
 
         let item = json!({"author_id": 2, "title": "My Post"});
-        let result = resolve_item_data(&fm, &item, "post", &mut fetcher, None).unwrap();
+        let result = resolve_item_data(&fm, &item, "post", &mut fetcher, None)
+            .await
+            .unwrap();
 
         assert_eq!(result.len(), 1);
         let authors = result["author"].as_array().unwrap();
@@ -709,8 +717,8 @@ mod tests {
         assert_eq!(authors[0]["name"], "Bob");
     }
 
-    #[test]
-    fn test_resolve_item_data_no_interpolation() {
+    #[tokio::test]
+    async fn test_resolve_item_data_no_interpolation() {
         let tmp = TempDir::new().unwrap();
         let root = tmp.path();
         write(root, "_data/sidebar.yaml", "- widget: recent\n");
@@ -735,15 +743,17 @@ mod tests {
         };
 
         let item = json!({"id": 1});
-        let result = resolve_item_data(&fm, &item, "post", &mut fetcher, None).unwrap();
+        let result = resolve_item_data(&fm, &item, "post", &mut fetcher, None)
+            .await
+            .unwrap();
         assert_eq!(result.len(), 1);
         assert!(result["sidebar"].is_array());
     }
 
     // --- Plugin registry integration tests ---
 
-    #[test]
-    fn test_resolve_page_data_with_plugin_registry() {
+    #[tokio::test]
+    async fn test_resolve_page_data_with_plugin_registry() {
         use crate::plugins::registry::PluginRegistry;
         use crate::plugins::Plugin;
 
@@ -796,14 +806,16 @@ mod tests {
             ..Default::default()
         };
 
-        let result = resolve_page_data(&fm, &mut fetcher, Some(&registry)).unwrap();
+        let result = resolve_page_data(&fm, &mut fetcher, Some(&registry))
+            .await
+            .unwrap();
         let items = result["items"].as_array().unwrap();
         assert!(items[0]["tagged"].as_bool().unwrap());
         assert!(items[1]["tagged"].as_bool().unwrap());
     }
 
-    #[test]
-    fn test_resolve_dynamic_page_data_with_plugin_registry() {
+    #[tokio::test]
+    async fn test_resolve_dynamic_page_data_with_plugin_registry() {
         use crate::plugins::registry::PluginRegistry;
         use crate::plugins::Plugin;
 
@@ -853,7 +865,9 @@ mod tests {
             ..Default::default()
         };
 
-        let items = resolve_dynamic_page_data(&fm, &mut fetcher, Some(&registry)).unwrap();
+        let items = resolve_dynamic_page_data(&fm, &mut fetcher, Some(&registry))
+            .await
+            .unwrap();
         assert_eq!(items.len(), 2);
         assert!(items[0]["enriched"].as_bool().unwrap());
         assert!(items[1]["enriched"].as_bool().unwrap());
@@ -991,8 +1005,8 @@ mod tests {
         assert!(verify_no_remaining_interpolation(&query, "test").is_ok());
     }
 
-    #[test]
-    fn test_resolve_dynamic_page_data_for_item_with_plugin() {
+    #[tokio::test]
+    async fn test_resolve_dynamic_page_data_for_item_with_plugin() {
         use crate::plugins::registry::PluginRegistry;
         use crate::plugins::Plugin;
 
@@ -1032,7 +1046,9 @@ mod tests {
 
         let item = json!({"id": 1, "title": "Test"});
         let result =
-            resolve_dynamic_page_data_for_item(&fm, &item, &mut fetcher, Some(&registry)).unwrap();
+            resolve_dynamic_page_data_for_item(&fm, &item, &mut fetcher, Some(&registry))
+                .await
+                .unwrap();
         assert_eq!(result.len(), 1);
         assert!(result["sidebar"].is_array());
     }
