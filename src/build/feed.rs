@@ -16,7 +16,7 @@ use super::sitemap::escape_xml;
 /// Generate Atom feeds for all configured `[feed.*]` definitions.
 ///
 /// Returns the number of feeds written.
-pub fn generate_feeds(
+pub async fn generate_feeds(
     dist_dir: &Path,
     config: &SiteConfig,
     fetcher: &mut DataFetcher,
@@ -35,6 +35,7 @@ pub fn generate_feeds(
             plugin_registry,
             build_time,
         )
+        .await
         .wrap_err_with(|| format!("Failed to generate feed '{}'", name))?;
         count += 1;
     }
@@ -58,7 +59,7 @@ fn build_feed_query(config: &FeedConfig) -> DataQuery {
 }
 
 /// Generate a single Atom feed and write it to disk.
-fn generate_feed(
+async fn generate_feed(
     dist_dir: &Path,
     feed_name: &str,
     feed_config: &FeedConfig,
@@ -71,7 +72,8 @@ fn generate_feed(
 
     // Fetch collection data.
     let data = fetcher
-        .fetch_blocking(&query, plugin_registry)
+        .fetch(&query, plugin_registry)
+        .await
         .wrap_err("Failed to fetch feed data")?;
 
     let items = match data {
@@ -507,8 +509,8 @@ mod tests {
 
     // --- generate_feed (integration with filesystem) ---
 
-    #[test]
-    fn test_generate_feed_basic() {
+    #[tokio::test]
+    async fn test_generate_feed_basic() {
         let tmp = TempDir::new().unwrap();
         let root = tmp.path();
         let dist = root.join("dist");
@@ -540,6 +542,7 @@ mod tests {
             None,
             "2026-03-18T00:00:00Z",
         )
+        .await
         .unwrap();
 
         let xml = fs::read_to_string(dist.join("feed.xml")).unwrap();
@@ -553,8 +556,8 @@ mod tests {
         assert!(xml.contains("</feed>"));
     }
 
-    #[test]
-    fn test_generate_feed_empty_collection() {
+    #[tokio::test]
+    async fn test_generate_feed_empty_collection() {
         let tmp = TempDir::new().unwrap();
         let root = tmp.path();
         let dist = root.join("dist");
@@ -578,6 +581,7 @@ mod tests {
             None,
             "2026-03-18T00:00:00Z",
         )
+        .await
         .unwrap();
 
         let xml = fs::read_to_string(dist.join("feed.xml")).unwrap();
@@ -586,8 +590,8 @@ mod tests {
         assert!(!xml.contains("<entry>"));
     }
 
-    #[test]
-    fn test_generate_feed_limit() {
+    #[tokio::test]
+    async fn test_generate_feed_limit() {
         let tmp = TempDir::new().unwrap();
         let root = tmp.path();
         let dist = root.join("dist");
@@ -620,6 +624,7 @@ mod tests {
             None,
             "2026-03-18T00:00:00Z",
         )
+        .await
         .unwrap();
 
         let xml = fs::read_to_string(dist.join("feed.xml")).unwrap();
@@ -628,8 +633,8 @@ mod tests {
         assert_eq!(entry_count, 2);
     }
 
-    #[test]
-    fn test_generate_feed_nested_path() {
+    #[tokio::test]
+    async fn test_generate_feed_nested_path() {
         let tmp = TempDir::new().unwrap();
         let root = tmp.path();
         let dist = root.join("dist");
@@ -658,13 +663,14 @@ mod tests {
             None,
             "2026-03-18T00:00:00Z",
         )
+        .await
         .unwrap();
 
         assert!(dist.join("blog/feed.xml").exists());
     }
 
-    #[test]
-    fn test_generate_feed_with_author() {
+    #[tokio::test]
+    async fn test_generate_feed_with_author() {
         let tmp = TempDir::new().unwrap();
         let root = tmp.path();
         let dist = root.join("dist");
@@ -689,6 +695,7 @@ mod tests {
             None,
             "2026-03-18T00:00:00Z",
         )
+        .await
         .unwrap();
 
         let xml = fs::read_to_string(dist.join("feed.xml")).unwrap();
@@ -696,8 +703,8 @@ mod tests {
         assert!(xml.contains("<name>Jane Doe</name>"));
     }
 
-    #[test]
-    fn test_generate_feed_author_from_schema() {
+    #[tokio::test]
+    async fn test_generate_feed_author_from_schema() {
         let tmp = TempDir::new().unwrap();
         let root = tmp.path();
         let dist = root.join("dist");
@@ -722,6 +729,7 @@ mod tests {
             None,
             "2026-03-18T00:00:00Z",
         )
+        .await
         .unwrap();
 
         let xml = fs::read_to_string(dist.join("feed.xml")).unwrap();
