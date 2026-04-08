@@ -270,8 +270,8 @@ mod tests {
         assert!(gi.contains("dist"));
     }
 
-    #[test]
-    fn test_init_scaffold_is_buildable() {
+    #[tokio::test]
+    async fn test_init_scaffold_is_buildable() {
         let tmp = TempDir::new().unwrap();
         let project_name = tmp.path().join("buildable-site");
         let name = project_name.to_string_lossy().to_string();
@@ -279,7 +279,7 @@ mod tests {
         init_project(&name).unwrap();
 
         // The scaffolded site should be buildable.
-        let result = crate::build::build(&project_name, true, false);
+        let result = crate::build::build(&project_name, true, false).await;
         assert!(result.is_ok(), "Scaffolded site failed to build: {:#}", result.unwrap_err());
 
         // Check output files exist.

@@ -26,8 +26,8 @@ fn write(dir: &Path, rel: &str, content: &str) {
 // Full example site build
 // ============================================================================
 
-#[test]
-fn test_full_build_example_site() {
+#[tokio::test]
+async fn test_full_build_example_site() {
     // Build the actual example_site that ships with the project.
     let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
     let example_site = manifest_dir.join("example_site");
@@ -42,7 +42,7 @@ fn test_full_build_example_site() {
     let site_toml = site_toml.replace("[build]", "[build]\nminify = false");
     fs::write(root.join("site.toml"), site_toml).unwrap();
 
-    eigen::build::build(root, true, false).unwrap();
+    eigen::build::build(root, true, false).await.unwrap();
 
     // Verify dist/ structure.
     assert!(root.join("dist").is_dir(), "dist/ should exist");
@@ -97,8 +97,8 @@ fn test_full_build_example_site() {
 // Dynamic pages
 // ============================================================================
 
-#[test]
-fn test_dynamic_pages_generate_one_per_item() {
+#[tokio::test]
+async fn test_dynamic_pages_generate_one_per_item() {
     let tmp = TempDir::new().unwrap();
     let root = tmp.path();
 
@@ -133,7 +133,7 @@ item_as: post
         {"slug": "third-post", "title": "Third Post", "author": "Carol"}
     ]"#);
 
-    eigen::build::build(root, true, false).unwrap();
+    eigen::build::build(root, true, false).await.unwrap();
 
     // Verify all three pages generated.
     assert!(root.join("dist/posts/hello-world.html").exists());
@@ -156,8 +156,8 @@ item_as: post
     assert!(!frag.contains("<!DOCTYPE html>"));
 }
 
-#[test]
-fn test_dynamic_page_empty_collection_no_error() {
+#[tokio::test]
+async fn test_dynamic_page_empty_collection_no_error() {
     let tmp = TempDir::new().unwrap();
     let root = tmp.path();
 
@@ -184,15 +184,15 @@ collection:
     write(root, "_data/items.json", "[]");
 
     // Should succeed without error.
-    eigen::build::build(root, true, false).unwrap();
+    eigen::build::build(root, true, false).await.unwrap();
 
     // No pages should be generated for empty collection.
     let sitemap = fs::read_to_string(root.join("dist/sitemap.xml")).unwrap();
     assert!(!sitemap.contains("<url>"), "No pages should be in sitemap");
 }
 
-#[test]
-fn test_dynamic_page_with_nested_data_queries() {
+#[tokio::test]
+async fn test_dynamic_page_with_nested_data_queries() {
     let tmp = TempDir::new().unwrap();
     let root = tmp.path();
 
@@ -236,7 +236,7 @@ data:
         {"id": "2", "name": "Bob"}
     ]"#);
 
-    eigen::build::build(root, true, false).unwrap();
+    eigen::build::build(root, true, false).await.unwrap();
 
     let post1 = fs::read_to_string(root.join("dist/post-1.html")).unwrap();
     assert!(post1.contains("Post One"));
@@ -253,8 +253,8 @@ data:
 // Fragment generation
 // ============================================================================
 
-#[test]
-fn test_fragment_markers_stripped_from_full_page() {
+#[tokio::test]
+async fn test_fragment_markers_stripped_from_full_page() {
     let tmp = TempDir::new().unwrap();
     let root = tmp.path();
 
@@ -275,7 +275,7 @@ minify = false
     write(root, "templates/index.html", r#"{% extends "_base.html" %}
 {% block content %}<h1>Home</h1><p>Welcome</p>{% endblock %}"#);
 
-    eigen::build::build(root, true, false).unwrap();
+    eigen::build::build(root, true, false).await.unwrap();
 
     // Full page: no markers.
     let full = fs::read_to_string(root.join("dist/index.html")).unwrap();
@@ -291,8 +291,8 @@ minify = false
     assert!(!frag.contains("<!--FRAG:"), "Fragment must not contain markers");
 }
 
-#[test]
-fn test_multiple_fragment_blocks() {
+#[tokio::test]
+async fn test_multiple_fragment_blocks() {
     let tmp = TempDir::new().unwrap();
     let root = tmp.path();
 
@@ -323,7 +323,7 @@ fragment_blocks:
 {% block sidebar %}<aside>About sidebar</aside>{% endblock %}
 {% block content %}<h1>About</h1>{% endblock %}"#);
 
-    eigen::build::build(root, true, false).unwrap();
+    eigen::build::build(root, true, false).await.unwrap();
 
     // Content fragment.
     assert!(root.join("dist/_fragments/about.html").exists());
@@ -336,8 +336,8 @@ fragment_blocks:
     assert!(sidebar_frag.contains("<aside>About sidebar</aside>"));
 }
 
-#[test]
-fn test_fragments_disabled() {
+#[tokio::test]
+async fn test_fragments_disabled() {
     let tmp = TempDir::new().unwrap();
     let root = tmp.path();
 
@@ -357,7 +357,7 @@ minify = false
     write(root, "templates/index.html", r#"{% extends "_base.html" %}
 {% block content %}<h1>Home</h1>{% endblock %}"#);
 
-    eigen::build::build(root, true, false).unwrap();
+    eigen::build::build(root, true, false).await.unwrap();
 
     assert!(root.join("dist/index.html").exists());
     assert!(!root.join("dist/_fragments").exists(), "_fragments dir should not exist");
@@ -370,8 +370,8 @@ minify = false
 // HTMX link_to function
 // ============================================================================
 
-#[test]
-fn test_link_to_generates_htmx_attributes() {
+#[tokio::test]
+async fn test_link_to_generates_htmx_attributes() {
     let tmp = TempDir::new().unwrap();
     let root = tmp.path();
 
@@ -396,7 +396,7 @@ minify = false
 <a {{ link_to("/posts.html", "#main") }}>Posts</a>
 {% endblock %}"##);
 
-    eigen::build::build(root, true, false).unwrap();
+    eigen::build::build(root, true, false).await.unwrap();
 
     let html = fs::read_to_string(root.join("dist/index.html")).unwrap();
 
@@ -416,8 +416,8 @@ minify = false
     );
 }
 
-#[test]
-fn test_link_to_without_fragments_is_plain_href() {
+#[tokio::test]
+async fn test_link_to_without_fragments_is_plain_href() {
     let tmp = TempDir::new().unwrap();
     let root = tmp.path();
 
@@ -433,7 +433,7 @@ minify = false
 
     write(root, "templates/index.html", r#"<a {{ link_to("/about.html") }}>About</a>"#);
 
-    eigen::build::build(root, true, false).unwrap();
+    eigen::build::build(root, true, false).await.unwrap();
 
     let html = fs::read_to_string(root.join("dist/index.html")).unwrap();
     assert!(html.contains(r#"href="/about.html""#));
@@ -444,8 +444,8 @@ minify = false
 // Custom filters in rendered output
 // ============================================================================
 
-#[test]
-fn test_markdown_filter_in_output() {
+#[tokio::test]
+async fn test_markdown_filter_in_output() {
     let tmp = TempDir::new().unwrap();
     let root = tmp.path();
 
@@ -464,15 +464,15 @@ minify = false
     write(root, "templates/index.html",
           "---\ndata:\n  content:\n    file: \"content.yaml\"\n---\n{{ content.text | markdown }}");
 
-    eigen::build::build(root, true, false).unwrap();
+    eigen::build::build(root, true, false).await.unwrap();
 
     let html = fs::read_to_string(root.join("dist/index.html")).unwrap();
     assert!(html.contains("<h1>Hello</h1>"));
     assert!(html.contains("<strong>bold</strong>"));
 }
 
-#[test]
-fn test_date_filter_in_output() {
+#[tokio::test]
+async fn test_date_filter_in_output() {
     let tmp = TempDir::new().unwrap();
     let root = tmp.path();
 
@@ -489,14 +489,14 @@ minify = false
     write(root, "templates/index.html",
           r#"{{ "2024-03-15" | date("%B %d, %Y") }}"#);
 
-    eigen::build::build(root, true, false).unwrap();
+    eigen::build::build(root, true, false).await.unwrap();
 
     let html = fs::read_to_string(root.join("dist/index.html")).unwrap();
     assert!(html.contains("March 15, 2024"));
 }
 
-#[test]
-fn test_slugify_filter_in_output() {
+#[tokio::test]
+async fn test_slugify_filter_in_output() {
     let tmp = TempDir::new().unwrap();
     let root = tmp.path();
 
@@ -513,14 +513,14 @@ minify = false
     write(root, "templates/index.html",
           r#"{{ "Hello World! #1" | slugify }}"#);
 
-    eigen::build::build(root, true, false).unwrap();
+    eigen::build::build(root, true, false).await.unwrap();
 
     let html = fs::read_to_string(root.join("dist/index.html")).unwrap();
     assert!(html.contains("hello-world-1"));
 }
 
-#[test]
-fn test_absolute_filter_in_output() {
+#[tokio::test]
+async fn test_absolute_filter_in_output() {
     let tmp = TempDir::new().unwrap();
     let root = tmp.path();
 
@@ -537,14 +537,14 @@ minify = false
     write(root, "templates/index.html",
           r#"{{ "/about.html" | absolute }}"#);
 
-    eigen::build::build(root, true, false).unwrap();
+    eigen::build::build(root, true, false).await.unwrap();
 
     let html = fs::read_to_string(root.join("dist/index.html")).unwrap();
     assert!(html.contains("https://example.com/about.html"));
 }
 
-#[test]
-fn test_json_filter_in_output() {
+#[tokio::test]
+async fn test_json_filter_in_output() {
     let tmp = TempDir::new().unwrap();
     let root = tmp.path();
 
@@ -567,7 +567,7 @@ data:
 
     write(root, "_data/info.json", r#"{"key": "value", "num": 42}"#);
 
-    eigen::build::build(root, true, false).unwrap();
+    eigen::build::build(root, true, false).await.unwrap();
 
     let html = fs::read_to_string(root.join("dist/index.html")).unwrap();
     assert!(html.contains("var data ="));
@@ -584,8 +584,8 @@ data:
 // Custom functions in rendered output
 // ============================================================================
 
-#[test]
-fn test_current_year_function_in_output() {
+#[tokio::test]
+async fn test_current_year_function_in_output() {
     let tmp = TempDir::new().unwrap();
     let root = tmp.path();
 
@@ -602,15 +602,15 @@ minify = false
     write(root, "templates/index.html",
           r#"<footer>&copy; {{ current_year() }}</footer>"#);
 
-    eigen::build::build(root, true, false).unwrap();
+    eigen::build::build(root, true, false).await.unwrap();
 
     let html = fs::read_to_string(root.join("dist/index.html")).unwrap();
     let year = chrono::Local::now().format("%Y").to_string();
     assert!(html.contains(&format!("&copy; {}", year)));
 }
 
-#[test]
-fn test_asset_function_in_output() {
+#[tokio::test]
+async fn test_asset_function_in_output() {
     let tmp = TempDir::new().unwrap();
     let root = tmp.path();
 
@@ -627,14 +627,14 @@ minify = false
     write(root, "templates/index.html",
           r#"<link rel="stylesheet" href="{{ asset('css/style.css') }}">"#);
 
-    eigen::build::build(root, true, false).unwrap();
+    eigen::build::build(root, true, false).await.unwrap();
 
     let html = fs::read_to_string(root.join("dist/index.html")).unwrap();
     assert!(html.contains(r#"href="/css/style.css""#));
 }
 
-#[test]
-fn test_site_global_in_output() {
+#[tokio::test]
+async fn test_site_global_in_output() {
     let tmp = TempDir::new().unwrap();
     let root = tmp.path();
 
@@ -651,7 +651,7 @@ minify = false
     write(root, "templates/index.html",
           r#"<title>{{ site.name }}</title><base href="{{ site.base_url }}">"#);
 
-    eigen::build::build(root, true, false).unwrap();
+    eigen::build::build(root, true, false).await.unwrap();
 
     let html = fs::read_to_string(root.join("dist/index.html")).unwrap();
     assert!(html.contains("<title>My Awesome Site</title>"));
@@ -662,8 +662,8 @@ minify = false
 // Global data (_data/) in templates
 // ============================================================================
 
-#[test]
-fn test_global_data_yaml_in_template() {
+#[tokio::test]
+async fn test_global_data_yaml_in_template() {
     let tmp = TempDir::new().unwrap();
     let root = tmp.path();
 
@@ -693,7 +693,7 @@ data:
   url: /blog
 "#);
 
-    eigen::build::build(root, true, false).unwrap();
+    eigen::build::build(root, true, false).await.unwrap();
 
     let html = fs::read_to_string(root.join("dist/index.html")).unwrap();
     assert!(html.contains(r#"<a href="/">Home</a>"#));
@@ -701,8 +701,8 @@ data:
     assert!(html.contains(r#"<a href="/blog">Blog</a>"#));
 }
 
-#[test]
-fn test_global_data_json_in_template() {
+#[tokio::test]
+async fn test_global_data_json_in_template() {
     let tmp = TempDir::new().unwrap();
     let root = tmp.path();
 
@@ -725,7 +725,7 @@ data:
 
     write(root, "_data/config.json", r#"{"theme": "dark", "debug": false}"#);
 
-    eigen::build::build(root, true, false).unwrap();
+    eigen::build::build(root, true, false).await.unwrap();
 
     let html = fs::read_to_string(root.join("dist/index.html")).unwrap();
     assert!(html.contains("Theme: dark"));
@@ -736,8 +736,8 @@ data:
 // Data transforms (sort, filter, limit) in rendered output
 // ============================================================================
 
-#[test]
-fn test_data_sort_filter_limit_in_build() {
+#[tokio::test]
+async fn test_data_sort_filter_limit_in_build() {
     let tmp = TempDir::new().unwrap();
     let root = tmp.path();
 
@@ -770,7 +770,7 @@ data:
         {"id": 5, "title": "Fifth", "status": "published"}
     ]"#);
 
-    eigen::build::build(root, true, false).unwrap();
+    eigen::build::build(root, true, false).await.unwrap();
 
     let html = fs::read_to_string(root.join("dist/index.html")).unwrap();
     // Filtered to published (1,3,4,5), sorted by -id (5,4,3,1), limited to 2 (5,4).
@@ -785,8 +785,8 @@ data:
 // Page metadata (page object)
 // ============================================================================
 
-#[test]
-fn test_page_metadata_available() {
+#[tokio::test]
+async fn test_page_metadata_available() {
     let tmp = TempDir::new().unwrap();
     let root = tmp.path();
 
@@ -810,7 +810,7 @@ PATH:{{ page.current_path }}
 BASE:{{ page.base_url }}
 {% endblock %}"#);
 
-    eigen::build::build(root, true, false).unwrap();
+    eigen::build::build(root, true, false).await.unwrap();
 
     let html = fs::read_to_string(root.join("dist/docs/guide.html")).unwrap();
     assert!(html.contains("URL:/docs/guide.html"));
@@ -822,8 +822,8 @@ BASE:{{ page.base_url }}
 // Sitemap priorities
 // ============================================================================
 
-#[test]
-fn test_sitemap_priorities() {
+#[tokio::test]
+async fn test_sitemap_priorities() {
     let tmp = TempDir::new().unwrap();
     let root = tmp.path();
 
@@ -855,7 +855,7 @@ collection:
 
     write(root, "_data/items.json", r#"[{"slug": "test-item", "title": "Test"}]"#);
 
-    eigen::build::build(root, true, false).unwrap();
+    eigen::build::build(root, true, false).await.unwrap();
 
     let sitemap = fs::read_to_string(root.join("dist/sitemap.xml")).unwrap();
 
@@ -880,8 +880,8 @@ collection:
 // Edge cases
 // ============================================================================
 
-#[test]
-fn test_template_includes_partial() {
+#[tokio::test]
+async fn test_template_includes_partial() {
     let tmp = TempDir::new().unwrap();
     let root = tmp.path();
 
@@ -901,15 +901,15 @@ minify = false
     write(root, "templates/index.html",
           "<main>Hello</main>{% include \"_partials/footer.html\" %}");
 
-    eigen::build::build(root, true, false).unwrap();
+    eigen::build::build(root, true, false).await.unwrap();
 
     let html = fs::read_to_string(root.join("dist/index.html")).unwrap();
     assert!(html.contains("<main>Hello</main>"));
     assert!(html.contains("<footer>© Include Test</footer>"));
 }
 
-#[test]
-fn test_template_extends_base_layout() {
+#[tokio::test]
+async fn test_template_extends_base_layout() {
     let tmp = TempDir::new().unwrap();
     let root = tmp.path();
 
@@ -933,7 +933,7 @@ minify = false
 {% block title %}Home — {{ site.name }}{% endblock %}
 {% block content %}<h1>Welcome</h1>{% endblock %}"#);
 
-    eigen::build::build(root, true, false).unwrap();
+    eigen::build::build(root, true, false).await.unwrap();
 
     let html = fs::read_to_string(root.join("dist/index.html")).unwrap();
     assert!(html.contains("<!DOCTYPE html>"));
@@ -941,8 +941,8 @@ minify = false
     assert!(html.contains("<h1>Welcome</h1>"));
 }
 
-#[test]
-fn test_missing_slug_field_item_skipped() {
+#[tokio::test]
+async fn test_missing_slug_field_item_skipped() {
     let tmp = TempDir::new().unwrap();
     let root = tmp.path();
 
@@ -973,7 +973,7 @@ slug_field: slug
         {"name": "No Slug"}
     ]"#);
 
-    eigen::build::build(root, true, false).unwrap();
+    eigen::build::build(root, true, false).await.unwrap();
 
     // Good item should be generated.
     assert!(root.join("dist/good-item.html").exists());
@@ -985,8 +985,8 @@ slug_field: slug
     assert_eq!(url_count, 1, "Only one page should be generated");
 }
 
-#[test]
-fn test_deeply_nested_static_pages() {
+#[tokio::test]
+async fn test_deeply_nested_static_pages() {
     let tmp = TempDir::new().unwrap();
     let root = tmp.path();
 
@@ -1002,15 +1002,15 @@ minify = false
 
     write(root, "templates/a/b/c/deep.html", "<p>Deep page</p>");
 
-    eigen::build::build(root, true, false).unwrap();
+    eigen::build::build(root, true, false).await.unwrap();
 
     assert!(root.join("dist/a/b/c/deep.html").exists());
     let html = fs::read_to_string(root.join("dist/a/b/c/deep.html")).unwrap();
     assert!(html.contains("<p>Deep page</p>"));
 }
 
-#[test]
-fn test_static_and_dynamic_pages_coexist() {
+#[tokio::test]
+async fn test_static_and_dynamic_pages_coexist() {
     let tmp = TempDir::new().unwrap();
     let root = tmp.path();
 
@@ -1049,7 +1049,7 @@ item_as: post
         {"slug": "second", "title": "Second Post"}
     ]"#);
 
-    eigen::build::build(root, true, false).unwrap();
+    eigen::build::build(root, true, false).await.unwrap();
 
     assert!(root.join("dist/index.html").exists());
     assert!(root.join("dist/about.html").exists());
@@ -1065,8 +1065,8 @@ item_as: post
 // Init command
 // ============================================================================
 
-#[test]
-fn test_init_creates_buildable_project() {
+#[tokio::test]
+async fn test_init_creates_buildable_project() {
     let tmp = TempDir::new().unwrap();
     let project_path = tmp.path().join("new-site");
     let name = project_path.to_string_lossy().to_string();
@@ -1089,7 +1089,7 @@ fn test_init_creates_buildable_project() {
     fs::write(project_path.join("site.toml"), site_toml).unwrap();
 
     // Build the scaffolded project.
-    eigen::build::build(&project_path, true, false).unwrap();
+    eigen::build::build(&project_path, true, false).await.unwrap();
 
     // Verify output.
     assert!(project_path.join("dist/index.html").exists());
@@ -1143,8 +1143,8 @@ fn test_live_reload_script_injection() {
     assert!(script_pos < body_pos);
 }
 
-#[test]
-fn test_live_reload_not_injected_in_build() {
+#[tokio::test]
+async fn test_live_reload_not_injected_in_build() {
     let tmp = TempDir::new().unwrap();
     let root = tmp.path();
 
@@ -1161,7 +1161,7 @@ minify = false
     write(root, "templates/index.html",
           "<html><body><h1>Hello</h1></body></html>");
 
-    eigen::build::build(root, true, false).unwrap();
+    eigen::build::build(root, true, false).await.unwrap();
 
     let html = fs::read_to_string(root.join("dist/index.html")).unwrap();
     assert!(
@@ -1178,8 +1178,8 @@ minify = false
 // Plugin system integration tests
 // ============================================================================
 
-#[test]
-fn test_build_with_no_plugins() {
+#[tokio::test]
+async fn test_build_with_no_plugins() {
     let tmp = TempDir::new().unwrap();
     let root = tmp.path();
 
@@ -1195,13 +1195,13 @@ minify = false
 
     write(root, "templates/index.html", "<h1>Hello</h1>");
 
-    eigen::build::build(root, true, false).unwrap();
+    eigen::build::build(root, true, false).await.unwrap();
     let html = fs::read_to_string(root.join("dist/index.html")).unwrap();
     assert!(html.contains("<h1>Hello</h1>"));
 }
 
-#[test]
-fn test_build_with_strapi_plugin_config() {
+#[tokio::test]
+async fn test_build_with_strapi_plugin_config() {
     // Test that a site.toml with [plugins.strapi] parses and builds correctly.
     let tmp = TempDir::new().unwrap();
     let root = tmp.path();
@@ -1221,13 +1221,13 @@ media_base_url = "http://localhost:1337"
 
     write(root, "templates/index.html", "<h1>Hello</h1>");
 
-    eigen::build::build(root, true, false).unwrap();
+    eigen::build::build(root, true, false).await.unwrap();
     let html = fs::read_to_string(root.join("dist/index.html")).unwrap();
     assert!(html.contains("<h1>Hello</h1>"));
 }
 
-#[test]
-fn test_strapi_plugin_transforms_data_in_build() {
+#[tokio::test]
+async fn test_strapi_plugin_transforms_data_in_build() {
     // Build a site that uses local JSON data structured like a Strapi response,
     // and verify the strapi plugin flattens the attributes.
     let tmp = TempDir::new().unwrap();
@@ -1268,14 +1268,14 @@ data:
 ---
 {% for p in posts %}{{ p.title }} {% endfor %}"#);
 
-    eigen::build::build(root, true, false).unwrap();
+    eigen::build::build(root, true, false).await.unwrap();
     let html = fs::read_to_string(root.join("dist/index.html")).unwrap();
     assert!(html.contains("Hello"));
     assert!(html.contains("World"));
 }
 
-#[test]
-fn test_strapi_media_template_function() {
+#[tokio::test]
+async fn test_strapi_media_template_function() {
     // Test that the strapi plugin registers its template function.
     let tmp = TempDir::new().unwrap();
     let root = tmp.path();
@@ -1296,13 +1296,13 @@ media_base_url = "http://localhost:1337"
     write(root, "templates/index.html",
           r#"<img src="{{ strapi_media('/uploads/photo.jpg') }}">"#);
 
-    eigen::build::build(root, true, false).unwrap();
+    eigen::build::build(root, true, false).await.unwrap();
     let html = fs::read_to_string(root.join("dist/index.html")).unwrap();
     assert!(html.contains("http://localhost:1337/uploads/photo.jpg"));
 }
 
-#[test]
-fn test_strapi_media_function_absolute_url_passthrough() {
+#[tokio::test]
+async fn test_strapi_media_function_absolute_url_passthrough() {
     let tmp = TempDir::new().unwrap();
     let root = tmp.path();
 
@@ -1322,14 +1322,14 @@ media_base_url = "http://localhost:1337"
     write(root, "templates/index.html",
           r#"<img src="{{ strapi_media('https://cdn.example.com/photo.jpg') }}">"#);
 
-    eigen::build::build(root, true, false).unwrap();
+    eigen::build::build(root, true, false).await.unwrap();
     let html = fs::read_to_string(root.join("dist/index.html")).unwrap();
     // Absolute URL should pass through unchanged.
     assert!(html.contains("https://cdn.example.com/photo.jpg"));
 }
 
-#[test]
-fn test_unknown_plugin_in_config_does_not_break_build() {
+#[tokio::test]
+async fn test_unknown_plugin_in_config_does_not_break_build() {
     let tmp = TempDir::new().unwrap();
     let root = tmp.path();
 
@@ -1349,13 +1349,13 @@ some_option = true
     write(root, "templates/index.html", "<h1>Hello</h1>");
 
     // Should succeed — unknown plugins are warned but not fatal.
-    eigen::build::build(root, true, false).unwrap();
+    eigen::build::build(root, true, false).await.unwrap();
     let html = fs::read_to_string(root.join("dist/index.html")).unwrap();
     assert!(html.contains("<h1>Hello</h1>"));
 }
 
-#[test]
-fn test_multiple_plugins_in_config() {
+#[tokio::test]
+async fn test_multiple_plugins_in_config() {
     let tmp = TempDir::new().unwrap();
     let root = tmp.path();
 
@@ -1378,13 +1378,13 @@ entries = []
     write(root, "templates/index.html",
           r#"<img src="{{ strapi_media('/uploads/test.jpg') }}">"#);
 
-    eigen::build::build(root, true, false).unwrap();
+    eigen::build::build(root, true, false).await.unwrap();
     let html = fs::read_to_string(root.join("dist/index.html")).unwrap();
     assert!(html.contains("http://localhost:1337/uploads/test.jpg"));
 }
 
-#[test]
-fn test_build_dynamic_pages_with_strapi_plugin() {
+#[tokio::test]
+async fn test_build_dynamic_pages_with_strapi_plugin() {
     // Test that dynamic page generation works correctly when the strapi plugin
     // is active but data comes from local files (plugin should be a no-op).
     let tmp = TempDir::new().unwrap();
@@ -1420,7 +1420,7 @@ item_as: post
         {"slug": "world", "title": "World"}
     ]"#);
 
-    eigen::build::build(root, true, false).unwrap();
+    eigen::build::build(root, true, false).await.unwrap();
     assert!(root.join("dist/hello.html").exists());
     assert!(root.join("dist/world.html").exists());
 
@@ -1471,8 +1471,8 @@ base_url = "https://test.com"
 // HTML minification
 // ============================================================================
 
-#[test]
-fn test_build_with_minification_enabled() {
+#[tokio::test]
+async fn test_build_with_minification_enabled() {
     let tmp = TempDir::new().unwrap();
     let root = tmp.path();
 
@@ -1509,7 +1509,7 @@ minify = true
     <p>Welcome to the site.</p>
 {% endblock %}"#);
 
-    eigen::build::build(root, true, false).unwrap();
+    eigen::build::build(root, true, false).await.unwrap();
 
     let html = fs::read_to_string(root.join("dist/index.html")).unwrap();
 
@@ -1535,8 +1535,8 @@ minify = true
     assert!(!frag.contains("<!-- this comment should be stripped -->"));
 }
 
-#[test]
-fn test_build_minification_disabled() {
+#[tokio::test]
+async fn test_build_minification_disabled() {
     let tmp = TempDir::new().unwrap();
     let root = tmp.path();
 
@@ -1558,7 +1558,7 @@ minify = false
   </body>
 </html>"#);
 
-    eigen::build::build(root, true, false).unwrap();
+    eigen::build::build(root, true, false).await.unwrap();
 
     let html = fs::read_to_string(root.join("dist/index.html")).unwrap();
 
@@ -1569,8 +1569,8 @@ minify = false
     assert!(html.contains("    <h1>"));
 }
 
-#[test]
-fn test_minification_preserves_picture_srcset() {
+#[tokio::test]
+async fn test_minification_preserves_picture_srcset() {
     // Verify that minification doesn't break <picture> elements with srcset.
     let tmp = TempDir::new().unwrap();
     let root = tmp.path();
@@ -1594,7 +1594,7 @@ optimize = false
   <img src="/img/hero.jpg" alt="Hero image" class="hero" loading="lazy">
 </picture>"#);
 
-    eigen::build::build(root, true, false).unwrap();
+    eigen::build::build(root, true, false).await.unwrap();
 
     let html = fs::read_to_string(root.join("dist/index.html")).unwrap();
 
@@ -1612,8 +1612,8 @@ optimize = false
 
 /// When `not_found = true` and no `templates/404.html` exists, a built-in
 /// default page should be written to `dist/404.html`.
-#[test]
-fn test_not_found_writes_default_when_no_template() {
+#[tokio::test]
+async fn test_not_found_writes_default_when_no_template() {
     let tmp = TempDir::new().unwrap();
     let root = tmp.path();
 
@@ -1630,7 +1630,7 @@ not_found = true
 
     write(root, "templates/index.html", "<h1>Home</h1>");
 
-    eigen::build::build(root, false, false).unwrap();
+    eigen::build::build(root, false, false).await.unwrap();
 
     let path_404 = root.join("dist/404.html");
     assert!(path_404.exists(), "dist/404.html should be created by default");
@@ -1644,8 +1644,8 @@ not_found = true
 
 /// When `not_found = false` (default), no `dist/404.html` should be created
 /// even if a `templates/404.html` template exists.
-#[test]
-fn test_not_found_flag_disabled_suppresses_404_page() {
+#[tokio::test]
+async fn test_not_found_flag_disabled_suppresses_404_page() {
     let tmp = TempDir::new().unwrap();
     let root = tmp.path();
 
@@ -1662,7 +1662,7 @@ not_found = false
 
     write(root, "templates/index.html", "<h1>Home</h1>");
 
-    eigen::build::build(root, false, false).unwrap();
+    eigen::build::build(root, false, false).await.unwrap();
 
     assert!(
         !root.join("dist/404.html").exists(),
@@ -1672,8 +1672,8 @@ not_found = false
 
 /// When `not_found = true` and `templates/404.html` exists, the custom template
 /// is rendered instead of the built-in default.
-#[test]
-fn test_not_found_custom_template_overrides_default() {
+#[tokio::test]
+async fn test_not_found_custom_template_overrides_default() {
     let tmp = TempDir::new().unwrap();
     let root = tmp.path();
 
@@ -1698,7 +1698,7 @@ not_found = true
     write(root, "templates/index.html", r#"{% extends "_base.html" %}
 {% block content %}<h1>Home</h1>{% endblock %}"#);
 
-    eigen::build::build(root, false, false).unwrap();
+    eigen::build::build(root, false, false).await.unwrap();
 
     let path_404 = root.join("dist/404.html");
     assert!(path_404.exists(), "dist/404.html should exist");
@@ -1721,8 +1721,8 @@ not_found = true
 
 /// The default 404 page is not included in sitemap.xml since it is a special
 /// error page (not a regular content page).
-#[test]
-fn test_not_found_default_excluded_from_sitemap() {
+#[tokio::test]
+async fn test_not_found_default_excluded_from_sitemap() {
     let tmp = TempDir::new().unwrap();
     let root = tmp.path();
 
@@ -1741,7 +1741,7 @@ sitemap = true
     write(root, "templates/index.html", "<h1>Home</h1>");
     write(root, "templates/about.html", "<h1>About</h1>");
 
-    eigen::build::build(root, false, false).unwrap();
+    eigen::build::build(root, false, false).await.unwrap();
 
     let sitemap = fs::read_to_string(root.join("dist/sitemap.xml")).unwrap();
     // The default 404 page (written directly, not via template rendering) must
@@ -1754,8 +1754,8 @@ sitemap = true
 
 /// With `clean_urls = true`, 404.html must still be written as `dist/404.html`
 /// (not `dist/404/index.html`) so the hosting server can serve it correctly.
-#[test]
-fn test_not_found_clean_urls_does_not_affect_404_path() {
+#[tokio::test]
+async fn test_not_found_clean_urls_does_not_affect_404_path() {
     let tmp = TempDir::new().unwrap();
     let root = tmp.path();
 
@@ -1781,7 +1781,7 @@ clean_urls = true
     write(root, "templates/404.html", r#"{% extends "_base.html" %}
 {% block content %}<h1>Custom 404</h1>{% endblock %}"#);
 
-    eigen::build::build(root, false, false).unwrap();
+    eigen::build::build(root, false, false).await.unwrap();
 
     // With clean_urls: index goes to index.html, about goes to about/index.html.
     assert!(root.join("dist/index.html").exists(), "index.html should stay as-is");
@@ -1803,8 +1803,8 @@ clean_urls = true
 
 /// The full example site build should include a rendered `dist/404.html`
 /// (using the custom template added to example_site/templates/404.html).
-#[test]
-fn test_full_build_example_site_includes_404() {
+#[tokio::test]
+async fn test_full_build_example_site_includes_404() {
     let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
     let example_site = manifest_dir.join("example_site");
 
@@ -1817,7 +1817,7 @@ fn test_full_build_example_site_includes_404() {
     let site_toml = site_toml.replace("[build]", "[build]\nminify = false");
     fs::write(root.join("site.toml"), site_toml).unwrap();
 
-    eigen::build::build(root, false, false).unwrap();
+    eigen::build::build(root, false, false).await.unwrap();
 
     let path_404 = root.join("dist/404.html");
     assert!(path_404.exists(), "dist/404.html should be built from example_site template");
@@ -1832,8 +1832,8 @@ fn test_full_build_example_site_includes_404() {
 
 /// Dynamic page with POST data query: collection from a local file, per-item
 /// data query that declares method: post with a body containing interpolation.
-#[test]
-fn test_post_method_dynamic_page_with_body_interpolation() {
+#[tokio::test]
+async fn test_post_method_dynamic_page_with_body_interpolation() {
     let tmp = TempDir::new().unwrap();
     let root = tmp.path();
 
@@ -1882,7 +1882,7 @@ data:
     ]"#);
 
     // The build should succeed — POST fields must not cause errors.
-    eigen::build::build(root, true, false).unwrap();
+    eigen::build::build(root, true, false).await.unwrap();
 
     let alpha = fs::read_to_string(root.join("dist/alpha.html")).unwrap();
     assert!(alpha.contains("<h1>Alpha</h1>"), "Alpha page should render project name");
@@ -1935,8 +1935,8 @@ data:
 /// Verify the full pipeline: frontmatter with POST body containing
 /// `{{ item.field }}` interpolation is correctly resolved per-item
 /// via `resolve_dynamic_page_data_for_item`.
-#[test]
-fn test_post_method_body_interpolation_via_resolve_item_data() {
+#[tokio::test]
+async fn test_post_method_body_interpolation_via_resolve_item_data() {
     let tmp = TempDir::new().unwrap();
     let root = tmp.path();
 
@@ -1985,7 +1985,7 @@ fn test_post_method_body_interpolation_via_resolve_item_data() {
     let item = serde_json::json!({"entry_id": "e2", "slug": "rec-2"});
     let result = eigen::data::resolve_dynamic_page_data_for_item(
         &fm, &item, &mut fetcher, None,
-    ).unwrap();
+    ).await.unwrap();
 
     // The filter should have matched only the entry with entry_id "e2".
     let entries = result["entries"].as_array().expect("entries should be an array");
@@ -1995,8 +1995,8 @@ fn test_post_method_body_interpolation_via_resolve_item_data() {
 
 /// Verify that a static page with `method: post` and a body (no interpolation)
 /// parses and builds correctly through the full pipeline.
-#[test]
-fn test_post_method_static_page_full_build() {
+#[tokio::test]
+async fn test_post_method_static_page_full_build() {
     let tmp = TempDir::new().unwrap();
     let root = tmp.path();
 
@@ -2041,7 +2041,7 @@ data:
         {"name": "Bob"}
     ]"#);
 
-    eigen::build::build(root, true, false).unwrap();
+    eigen::build::build(root, true, false).await.unwrap();
 
     let html = fs::read_to_string(root.join("dist/index.html")).unwrap();
     // Sort ascending by name, limit 2 → Alice, Bob.
@@ -2085,8 +2085,8 @@ data:
 // clean_links feature
 // ============================================================================
 
-#[test]
-fn test_clean_links_strips_html_extension_from_link_to() {
+#[tokio::test]
+async fn test_clean_links_strips_html_extension_from_link_to() {
     let tmp = TempDir::new().unwrap();
     let root = tmp.path();
 
@@ -2112,7 +2112,7 @@ clean_links = true
     write(root, "templates/about.html", r#"{% extends "_base.html" %}
 {% block content %}<h1>About</h1>{% endblock %}"#);
 
-    eigen::build::build(root, true, false).unwrap();
+    eigen::build::build(root, true, false).await.unwrap();
 
     let html = fs::read_to_string(root.join("dist/index.html")).unwrap();
 
@@ -2128,8 +2128,8 @@ clean_links = true
 // source_asset integration
 // ============================================================================
 
-#[test]
-fn source_asset_downloads_with_auth_headers() {
+#[tokio::test]
+async fn source_asset_downloads_with_auth_headers() {
     // Start a mock server that requires an auth header.
     let server = tiny_http::Server::http("127.0.0.1:0").unwrap();
     let addr = server.server_addr().to_ip().unwrap();
@@ -2188,7 +2188,7 @@ headers = {{ Authorization = "Bearer test-token-123" }}
     std::fs::create_dir_all(root.join("static")).unwrap();
 
     // Build.
-    eigen::build::build(root, false, true).unwrap();
+    eigen::build::build(root, false, true).await.unwrap();
 
     handle.join().unwrap();
 

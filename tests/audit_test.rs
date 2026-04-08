@@ -32,8 +32,8 @@ fn setup_minimal_site(root: &Path, site_toml: &str) {
 // 1. Audit finds issues on a minimal site
 // ============================================================================
 
-#[test]
-fn test_audit_finds_issues_on_minimal_site() {
+#[tokio::test]
+async fn test_audit_finds_issues_on_minimal_site() {
     let tmp = TempDir::new().unwrap();
     let root = tmp.path();
 
@@ -49,7 +49,7 @@ minify = false
     setup_minimal_site(root, site_toml);
 
     // Full build: creates dist/ with rendered pages and sitemap.
-    eigen::build::build(root, true, false).unwrap();
+    eigen::build::build(root, true, false).await.unwrap();
 
     let config = eigen::config::load_config(root).unwrap();
     let dist = root.join("dist");
@@ -82,8 +82,8 @@ minify = false
 // 2. Audit respects ignore list
 // ============================================================================
 
-#[test]
-fn test_audit_respects_ignore_list() {
+#[tokio::test]
+async fn test_audit_respects_ignore_list() {
     let tmp = TempDir::new().unwrap();
     let root = tmp.path();
 
@@ -100,7 +100,7 @@ ignore = ["seo/robots-txt", "seo/feed"]
 "#;
 
     setup_minimal_site(root, site_toml);
-    eigen::build::build(root, true, false).unwrap();
+    eigen::build::build(root, true, false).await.unwrap();
 
     let config = eigen::config::load_config(root).unwrap();
     let dist = root.join("dist");
@@ -129,8 +129,8 @@ ignore = ["seo/robots-txt", "seo/feed"]
 // 3. Audit output files are written
 // ============================================================================
 
-#[test]
-fn test_audit_output_files_written() {
+#[tokio::test]
+async fn test_audit_output_files_written() {
     let tmp = TempDir::new().unwrap();
     let root = tmp.path();
 
@@ -144,7 +144,7 @@ minify = false
 "#;
 
     setup_minimal_site(root, site_toml);
-    eigen::build::build(root, true, false).unwrap();
+    eigen::build::build(root, true, false).await.unwrap();
 
     let config = eigen::config::load_config(root).unwrap();
     let dist = root.join("dist");
