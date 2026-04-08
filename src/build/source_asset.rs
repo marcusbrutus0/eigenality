@@ -81,12 +81,12 @@ pub fn resolve_url(url_or_path: &str, base_url: &str) -> String {
 ///
 /// Called after `localize_assets` in the render pipeline. Each request is
 /// downloaded with the named source's configured headers (auth, API keys).
-pub fn resolve_source_assets(
+pub async fn resolve_source_assets(
     html: &str,
     requests: &[SourceAssetRequest],
     sources: &HashMap<String, SourceConfig>,
     cache: &mut AssetCache,
-    client: &reqwest::blocking::Client,
+    client: &reqwest::Client,
     dist_dir: &Path,
     pool: &RateLimiterPool,
 ) -> Result<String> {
@@ -127,7 +127,7 @@ pub fn resolve_source_assets(
             }
         }
 
-        match download::ensure_asset_with_headers(client, cache, url, &headers, pool) {
+        match download::ensure_asset_with_headers(client, cache, url, &headers, pool).await {
             Ok(local_filename) => {
                 cache.copy_to_dist(url, &dist_assets_dir)
                     .wrap_err_with(|| {
@@ -213,8 +213,8 @@ mod tests {
     /// Start a mock server that requires `Authorization: Bearer secret`,
     /// download the asset via `resolve_source_assets`, and verify the URL
     /// is rewritten and the file lands in `dist/assets/`.
-    #[test]
-    fn resolve_source_assets_downloads_and_rewrites() {
+    #[tokio::test]
+    async fn resolve_source_assets_downloads_and_rewrites() {
         use std::thread;
 
         let server =
@@ -259,7 +259,7 @@ mod tests {
         std::fs::create_dir_all(&dist_dir).expect("create dist");
 
         let mut cache = AssetCache::open(project_root).expect("asset cache");
-        let client = reqwest::blocking::Client::new();
+        let client = reqwest::Client::new();
 
         let mut sources = HashMap::new();
         sources.insert(
@@ -295,6 +295,7 @@ mod tests {
             &dist_dir,
             &pool,
         )
+        .await
         .expect("resolve should succeed");
 
         handle.join().expect("server thread");
@@ -321,13 +322,13 @@ mod tests {
         assert_eq!(file_content, b"fake-png-bytes");
     }
 
-    #[test]
-    fn resolve_source_assets_empty_requests_returns_html_unchanged() {
+    #[tokio::test]
+    async fn resolve_source_assets_empty_requests_returns_html_unchanged() {
         let html = "<html><body>hello</body></html>";
         let sources = HashMap::new();
         let tmp = tempfile::TempDir::new().expect("tempdir");
         let mut cache = AssetCache::open(tmp.path()).expect("asset cache");
-        let client = reqwest::blocking::Client::new();
+        let client = reqwest::Client::new();
         let dist_dir = tmp.path().join("dist");
 
         let pool = no_op_pool();
@@ -340,13 +341,14 @@ mod tests {
             &dist_dir,
             &pool,
         )
+        .await
         .expect("should succeed");
 
         assert_eq!(result, html);
     }
 
-    #[test]
-    fn resolve_source_assets_deduplicates_urls() {
+    #[tokio::test]
+    async fn resolve_source_assets_deduplicates_urls() {
         use std::sync::atomic::{AtomicUsize, Ordering};
         use std::thread;
 
@@ -384,7 +386,7 @@ mod tests {
         std::fs::create_dir_all(&dist_dir).expect("create dist");
 
         let mut cache = AssetCache::open(tmp.path()).expect("asset cache");
-        let client = reqwest::blocking::Client::new();
+        let client = reqwest::Client::new();
 
         let mut sources = HashMap::new();
         sources.insert(
@@ -417,6 +419,7 @@ mod tests {
             &dist_dir,
             &pool,
         )
+        .await
         .expect("resolve should succeed");
 
         handle.join().expect("server thread");
