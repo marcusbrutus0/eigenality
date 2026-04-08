@@ -44,11 +44,11 @@ const DEFAULT_CDN_SKIP_HOSTS: &[&str] = &[
 ///
 /// Returns the rewritten HTML string with remote URLs replaced by local
 /// `/assets/...` paths.
-pub fn localize_assets(
+pub async fn localize_assets(
     html: &str,
     config: &AssetsConfig,
     cache: &mut AssetCache,
-    client: &reqwest::blocking::Client,
+    client: &reqwest::Client,
     dist_dir: &Path,
     skip_urls: &HashSet<String>,
     pool: &RateLimiterPool,
@@ -97,7 +97,7 @@ pub fn localize_assets(
         }
 
         // Download (or validate cache).
-        match download::ensure_asset(client, cache, url, pool) {
+        match download::ensure_asset(client, cache, url, pool).await {
             Ok(local_filename) => {
                 // Copy from cache to dist/assets/.
                 cache.copy_to_dist(url, &dist_assets_dir)
