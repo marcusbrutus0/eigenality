@@ -32,25 +32,16 @@ use super::watcher::{self, RebuildScope};
 ///
 /// 1. Loads config and performs initial build (with live-reload injection).
 /// 2. Starts file watcher in a background thread.
-/// 3. Starts rebuild loop in a dedicated background thread (not an async
-///    task, since the build uses `reqwest::blocking::Client` which cannot
-///    run inside an async runtime).
+/// 3. Starts async rebuild loop in a tokio task.
 /// 4. Starts Axum HTTP server.
 pub async fn dev_command(project_root: &Path, port: u16, host: &str, fresh: bool) -> Result<()> {
     // Canonicalize the project root.
     let project_root = std::fs::canonicalize(project_root)?;
 
-    // Perform the initial build on a blocking thread so that
-    // `reqwest::blocking::Client` is not created inside the async runtime.
-    let build_root = project_root.clone();
-    let build_state = tokio::task::spawn_blocking(move || -> Result<DevBuildState> {
-        tracing::info!("Performing initial build...");
-        let state = DevBuildState::new(&build_root, fresh)?;
-        tracing::info!("Initial build complete.");
-        Ok(state)
-    })
-    .await
-    .map_err(|e| eyre::eyre!("Initial build task panicked: {}", e))??;
+    // Perform the initial build.
+    tracing::info!("Performing initial build...");
+    let build_state = DevBuildState::new(&project_root, fresh).await?;
+    tracing::info!("Initial build complete.");
 
     // Load config for proxy routes.
     let config = crate::config::load_config(&project_root)?;
@@ -70,56 +61,38 @@ pub async fn dev_command(project_root: &Path, port: u16, host: &str, fresh: bool
         }
     });
 
-    // Start rebuild loop in a dedicated OS thread.
-    //
-    // The build pipeline uses `reqwest::blocking::Client` which panics if
-    // run inside a Tokio async context.  By using a plain thread with a
-    // `std::sync::mpsc` channel we keep all blocking I/O off the async
-    // runtime entirely.
+    // Start async rebuild loop.
+    let build_state = std::sync::Arc::new(tokio::sync::Mutex::new(build_state));
+    let rebuild_state = build_state.clone();
     let mut rebuild_rx = rebuild_tx.subscribe();
     let reload_signal = reload_tx.clone();
-
-    // Bridge: async task receives from the broadcast channel and forwards
-    // to a std mpsc channel consumed by the rebuild thread.
-    let (sync_tx, sync_rx) = std::sync::mpsc::channel::<RebuildScope>();
 
     tokio::spawn(async move {
         loop {
             match rebuild_rx.recv().await {
                 Ok(scope) => {
-                    if sync_tx.send(scope).is_err() {
-                        break; // rebuild thread gone
+                    let mut state = rebuild_state.lock().await;
+                    match state.rebuild(scope).await {
+                        Ok(()) => {
+                            let _ = reload_signal.send(());
+                        }
+                        Err(e) => {
+                            if e.has_error_page {
+                                eprintln!("  Waiting for next change...\n");
+                                let _ = reload_signal.send(());
+                            } else {
+                                eprintln!("\n  Build error: {:#}", e.report);
+                                eprintln!("  Waiting for next change...\n");
+                            }
+                        }
                     }
                 }
                 Err(broadcast::error::RecvError::Lagged(_)) => {
-                    if sync_tx.send(RebuildScope::Full).is_err() {
-                        break;
-                    }
-                }
-                Err(broadcast::error::RecvError::Closed) => break,
-            }
-        }
-    });
-
-    std::thread::spawn(move || {
-        let mut build_state = build_state;
-        while let Ok(scope) = sync_rx.recv() {
-            match build_state.rebuild(scope) {
-                Ok(()) => {
-                    // Signal all SSE clients to reload.
+                    let mut state = rebuild_state.lock().await;
+                    let _ = state.rebuild(RebuildScope::Full).await;
                     let _ = reload_signal.send(());
                 }
-                Err(e) => {
-                    if e.has_error_page {
-                        // A template error page was written to dist/ — reload
-                        // the browser so the user sees it instead of stale content.
-                        eprintln!("  Waiting for next change...\n");
-                        let _ = reload_signal.send(());
-                    } else {
-                        eprintln!("\n  Build error: {:#}", e.report);
-                        eprintln!("  Waiting for next change...\n");
-                    }
-                }
+                Err(broadcast::error::RecvError::Closed) => break,
             }
         }
     });

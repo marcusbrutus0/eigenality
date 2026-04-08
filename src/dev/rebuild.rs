@@ -71,14 +71,14 @@ pub struct DevBuildState {
     /// Asset cache for localized remote assets.
     asset_cache: AssetCache,
     /// HTTP client for asset downloads.
-    asset_client: reqwest::blocking::Client,
+    asset_client: reqwest::Client,
     /// Whether to bypass the data cache (--fresh mode).
     fresh: bool,
 }
 
 impl DevBuildState {
     /// Create a new dev build state and perform the initial full build.
-    pub fn new(project_root: &Path, fresh: bool) -> Result<Self> {
+    pub async fn new(project_root: &Path, fresh: bool) -> Result<Self> {
         let config = crate::config::load_config(project_root)?;
         let data_cache = crate::data::open_data_cache(project_root, fresh);
         let rate_limiter = std::sync::Arc::new(RateLimiterPool::new(config.build.rate_limit, &config.sources));
@@ -86,7 +86,7 @@ impl DevBuildState {
         let plugin_registry = registry::build_registry(&config.plugins, project_root)?;
         let asset_cache = AssetCache::open(project_root)
             .wrap_err("Failed to open asset cache")?;
-        let asset_client = reqwest::blocking::Client::new();
+        let asset_client = reqwest::Client::new();
 
         let mut state = Self {
             project_root: project_root.to_path_buf(),
@@ -99,7 +99,7 @@ impl DevBuildState {
             fresh,
         };
 
-        state.full_build()?;
+        state.full_build().await?;
         Ok(state)
     }
 
@@ -109,10 +109,10 @@ impl DevBuildState {
     /// If the error is a template render error, an HTML error page will have
     /// been written to dist/ and `has_error_page` will be `true` — the caller
     /// should still trigger a browser reload so the user sees the error.
-    pub fn rebuild(&mut self, scope: RebuildScope) -> std::result::Result<(), DevBuildError> {
+    pub async fn rebuild(&mut self, scope: RebuildScope) -> std::result::Result<(), DevBuildError> {
         let start = Instant::now();
 
-        let result: Result<()> = (|| {
+        let result: Result<()> = async {
             match scope {
                 RebuildScope::Full => {
                     tracing::info!("Full rebuild (config changed)...");
@@ -122,12 +122,12 @@ impl DevBuildState {
                     let rate_limiter = std::sync::Arc::new(RateLimiterPool::new(self.config.build.rate_limit, &self.config.sources));
                     self.fetcher = DataFetcher::new(&self.config.sources, &self.project_root, data_cache, rate_limiter);
                     self.plugin_registry = registry::build_registry(&self.config.plugins, &self.project_root)?;
-                    self.full_build()?;
+                    self.full_build().await?;
                 }
                 RebuildScope::DataOnly => {
                     tracing::info!("Rebuild (data changed)...");
                     self.fetcher.clear_file_cache();
-                    self.full_build()?;
+                    self.full_build().await?;
                 }
                 RebuildScope::Templates(changed) => {
                     tracing::info!("Rebuild (templates changed: {:?})...", changed);
@@ -142,9 +142,9 @@ impl DevBuildState {
 
                     if has_layout_change {
                         tracing::debug!("  Layout/partial changed — full rebuild.");
-                        self.full_build()?;
+                        self.full_build().await?;
                     } else {
-                        self.full_build()?;
+                        self.full_build().await?;
                     }
                 }
                 RebuildScope::StaticOnly => {
@@ -160,7 +160,7 @@ impl DevBuildState {
             let elapsed = start.elapsed();
             tracing::info!("Rebuild completed in {:.1?}", elapsed);
             Ok(())
-        })();
+        }.await;
 
         result.map_err(|e| {
             // Check if any error page HTML files were written by the render
@@ -176,7 +176,7 @@ impl DevBuildState {
     }
 
     /// Perform a full build with live-reload injection.
-    fn full_build(&mut self) -> Result<()> {
+    async fn full_build(&mut self) -> Result<()> {
         let config = &self.config;
         let project_root = &self.project_root;
 
@@ -237,7 +237,7 @@ impl DevBuildState {
                         &self.asset_client,
                         &self.plugin_registry,
                         &rate_limiter,
-                    )?;
+                    ).await?;
                     rendered_pages.push(result);
                 }
                 PageType::Dynamic { param_name: _ } => {
@@ -253,7 +253,7 @@ impl DevBuildState {
                         &self.asset_client,
                         &self.plugin_registry,
                         &rate_limiter,
-                    )?;
+                    ).await?;
                     rendered_pages.extend(results);
                 }
             }
@@ -299,7 +299,7 @@ impl DevBuildState {
 }
 
 /// Render a static page with live-reload script injection.
-fn render_static_page_dev(
+async fn render_static_page_dev(
     page: &PageDef,
     env: &minijinja::Environment<'_>,
     fetcher: &mut DataFetcher,
@@ -308,7 +308,7 @@ fn render_static_page_dev(
     dist_dir: &Path,
     build_time: &str,
     asset_cache: &mut AssetCache,
-    asset_client: &reqwest::blocking::Client,
+    asset_client: &reqwest::Client,
     plugin_registry: &PluginRegistry,
     rate_limiter: &RateLimiterPool,
 ) -> Result<RenderedPage> {
@@ -319,6 +319,7 @@ fn render_static_page_dev(
 
     // Resolve data queries.
     let page_data = data::resolve_page_data(&page.frontmatter, fetcher, Some(plugin_registry))
+        .await
         .wrap_err_with(|| format!("Failed to resolve data for {}", tmpl_name))?;
 
     let output_path = if config.build.clean_urls && page.template_path.file_stem().unwrap_or_default() != "index" {
@@ -371,7 +372,8 @@ fn render_static_page_dev(
         dist_dir,
         &no_skip,
         rate_limiter,
-    ).wrap_err_with(|| format!("Failed to localize assets for '{}'", tmpl_name))?;
+    ).await
+    .wrap_err_with(|| format!("Failed to localize assets for '{}'", tmpl_name))?;
     let full_html = plugin_registry.post_render_html(
         full_html,
         &url_path,
@@ -383,9 +385,9 @@ fn render_static_page_dev(
 
     let full_path = dist_dir.join(&output_path);
     if let Some(parent) = full_path.parent() {
-        std::fs::create_dir_all(parent)?;
+        tokio::fs::create_dir_all(parent).await?;
     }
-    std::fs::write(&full_path, &full_html)?;
+    tokio::fs::write(&full_path, &full_html).await?;
 
     // Write fragments (also localize assets).
     if config.build.fragments {
@@ -405,7 +407,7 @@ fn render_static_page_dev(
                 asset_client,
                 dist_dir,
                 rate_limiter,
-            )?;
+            ).await?;
             fragments::write_fragments(
                 dist_dir,
                 &output_path,
@@ -447,7 +449,7 @@ fn write_dev_error_pages(dist_dir: &Path, output_path: &Path, error_html: &str) 
 }
 
 /// Render all pages for a dynamic template with live-reload script injection.
-fn render_dynamic_page_dev(
+async fn render_dynamic_page_dev(
     page: &PageDef,
     env: &minijinja::Environment<'_>,
     fetcher: &mut DataFetcher,
@@ -456,7 +458,7 @@ fn render_dynamic_page_dev(
     dist_dir: &Path,
     build_time: &str,
     asset_cache: &mut AssetCache,
-    asset_client: &reqwest::blocking::Client,
+    asset_client: &reqwest::Client,
     plugin_registry: &PluginRegistry,
     rate_limiter: &RateLimiterPool,
 ) -> Result<Vec<RenderedPage>> {
@@ -470,6 +472,7 @@ fn render_dynamic_page_dev(
 
     // Fetch collection.
     let items = data::resolve_dynamic_page_data(&page.frontmatter, fetcher, Some(plugin_registry))
+        .await
         .wrap_err_with(|| format!("Failed to fetch collection for {}", tmpl_name))?;
 
     if items.is_empty() {
@@ -507,7 +510,8 @@ fn render_dynamic_page_dev(
 
         // Resolve nested data.
         let item_data =
-            data::resolve_dynamic_page_data_for_item(&page.frontmatter, item, fetcher, Some(plugin_registry))?;
+            data::resolve_dynamic_page_data_for_item(&page.frontmatter, item, fetcher, Some(plugin_registry))
+                .await?;
 
         let output_path = if config.build.clean_urls {
             page.output_dir.join(&slug).join("index.html")
@@ -554,7 +558,8 @@ fn render_dynamic_page_dev(
             dist_dir,
             &no_skip,
             rate_limiter,
-        ).wrap_err_with(|| {
+        ).await
+        .wrap_err_with(|| {
             format!("Failed to localize assets for '{}' slug '{}'", tmpl_name, slug)
         })?;
         let full_html = plugin_registry.post_render_html(
@@ -566,9 +571,9 @@ fn render_dynamic_page_dev(
 
         let full_path = dist_dir.join(&output_path);
         if let Some(parent) = full_path.parent() {
-            std::fs::create_dir_all(parent)?;
+            tokio::fs::create_dir_all(parent).await?;
         }
-        std::fs::write(&full_path, &full_html)?;
+        tokio::fs::write(&full_path, &full_html).await?;
 
         // Write fragments (also localize assets).
         if config.build.fragments {
@@ -588,7 +593,7 @@ fn render_dynamic_page_dev(
                     asset_client,
                     dist_dir,
                     rate_limiter,
-                )?;
+                ).await?;
                 fragments::write_fragments(
                     dist_dir,
                     &output_path,
@@ -612,11 +617,11 @@ fn render_dynamic_page_dev(
 }
 
 /// Localize assets in fragment HTML for dev builds.
-fn localize_fragments_dev(
+async fn localize_fragments_dev(
     frags: &[crate::build::fragments::Fragment],
     assets_config: &crate::config::AssetsConfig,
     asset_cache: &mut AssetCache,
-    asset_client: &reqwest::blocking::Client,
+    asset_client: &reqwest::Client,
     dist_dir: &Path,
     rate_limiter: &RateLimiterPool,
 ) -> Result<Vec<crate::build::fragments::Fragment>> {
@@ -631,7 +636,7 @@ fn localize_fragments_dev(
             dist_dir,
             &no_skip,
             rate_limiter,
-        )?;
+        ).await?;
         result.push(crate::build::fragments::Fragment {
             block_name: frag.block_name.clone(),
             html: localized_html,
