@@ -15,7 +15,8 @@ use cli::{Cli, Command};
 use eyre::Result;
 use std::time::Instant;
 
-fn main() -> Result<()> {
+#[tokio::main]
+async fn main() -> Result<()> {
     // Install eyre's panic and error report handlers.
     color_eyre::install().ok();
 
@@ -32,7 +33,7 @@ fn main() -> Result<()> {
             if fresh {
                 tracing::info!("Fresh mode: bypassing data cache.");
             }
-            build::build(&project, false, fresh)?;
+            build::build(&project, false, fresh).await?;
             let elapsed = start.elapsed();
             eprintln!("Built site in {:.1?}", elapsed);
             Ok(())
@@ -51,11 +52,7 @@ fn main() -> Result<()> {
                 tracing::info!("Fresh mode: bypassing data cache.");
             }
 
-            // Build and run the async dev server on the Tokio runtime.
-            let rt = tokio::runtime::Runtime::new()?;
-            rt.block_on(async {
-                dev::dev_command(&project, port, &host, fresh).await
-            })?;
+            dev::dev_command(&project, port, &host, fresh).await?;
 
             Ok(())
         }
@@ -65,7 +62,7 @@ fn main() -> Result<()> {
 
             if !no_build {
                 tracing::info!("Building site...");
-                build::build(&project, false, false)?;
+                build::build(&project, false, false).await?;
             }
 
             let config = config::load_config(&project)?;

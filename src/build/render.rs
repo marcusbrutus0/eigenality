@@ -6,7 +6,11 @@
 use eyre::{Result, WrapErr, bail};
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
+
+use futures::stream::{self, StreamExt};
+use tokio::sync::Mutex as AsyncMutex;
 
 use crate::assets;
 use crate::assets::cache::AssetCache;
@@ -50,10 +54,34 @@ pub struct RenderedPage {
     pub template_path: Option<String>,
 }
 
+/// Shared context for concurrent page rendering.
+///
+/// All fields are wrapped in `Arc` (and `AsyncMutex` where mutable access is
+/// needed) so the struct can be cheaply cloned across async tasks.
+#[derive(Clone)]
+pub(crate) struct BuildContext {
+    pub config: Arc<SiteConfig>,
+    pub env: Arc<AsyncMutex<minijinja::Environment<'static>>>,
+    pub fetcher: Arc<AsyncMutex<DataFetcher>>,
+    pub global_data: Arc<HashMap<String, serde_json::Value>>,
+    pub dist_dir: std::path::PathBuf,
+    pub build_time: String,
+    pub output_paths: Arc<AsyncMutex<HashSet<String>>>,
+    pub data_query_count: Arc<AtomicU32>,
+    pub asset_cache: Arc<AsyncMutex<AssetCache>>,
+    pub asset_client: reqwest::Client,
+    pub plugin_registry: Arc<PluginRegistry>,
+    pub image_cache: Arc<ImageCache>,
+    pub css_cache: Arc<AsyncMutex<critical_css::StylesheetCache>>,
+    pub manifest: Arc<content_hash::AssetManifest>,
+    pub source_asset_collector: SourceAssetCollector,
+    pub rate_limiter: Arc<RateLimiterPool>,
+}
+
 /// Run the full build process.
 ///
 /// This is the main entry point for `eigen build`.
-pub fn build(project_root: &Path, dev: bool, fresh: bool) -> Result<()> {
+pub async fn build(project_root: &Path, dev: bool, fresh: bool) -> Result<()> {
     let config = crate::config::load_config(project_root)?;
     tracing::info!("Loading config... ✓ ({})", config.site.name);
 
@@ -104,7 +132,7 @@ pub fn build(project_root: &Path, dev: bool, fresh: bool) -> Result<()> {
     )?;
     // Phase 1: Copy static assets (with content hashing if enabled).
     let manifest = output::copy_static_assets(project_root, &config.build.content_hash)?;
-    let manifest = std::sync::Arc::new(manifest);
+    let manifest = Arc::new(manifest);
 
     if !manifest.is_empty() {
         tracing::info!(
@@ -137,12 +165,12 @@ pub fn build(project_root: &Path, dev: bool, fresh: bool) -> Result<()> {
     // Data fetcher.
     let data_cache = data::open_data_cache(project_root, fresh);
     let rate_limiter = Arc::new(RateLimiterPool::new(config.build.rate_limit, &config.sources));
-    let mut fetcher = DataFetcher::new(&config.sources, project_root, data_cache, Arc::clone(&rate_limiter));
+    let fetcher = DataFetcher::new(&config.sources, project_root, data_cache, Arc::clone(&rate_limiter));
 
     // Asset localization.
-    let mut asset_cache = AssetCache::open(project_root)
+    let asset_cache = AssetCache::open(project_root)
         .wrap_err("Failed to open asset cache")?;
-    let asset_client = reqwest::blocking::Client::new();
+    let asset_client = reqwest::Client::new();
     if config.assets.localize {
         tracing::info!("Asset localization enabled.");
     }
@@ -164,7 +192,7 @@ pub fn build(project_root: &Path, dev: bool, fresh: bool) -> Result<()> {
     }
 
     // Critical CSS cache.
-    let mut css_cache = critical_css::StylesheetCache::new();
+    let css_cache = critical_css::StylesheetCache::new();
     if config.build.critical_css.enabled {
         tracing::info!("Critical CSS inlining enabled.");
     }
@@ -181,95 +209,93 @@ pub fn build(project_root: &Path, dev: bool, fresh: bool) -> Result<()> {
     let build_time = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
 
     let dist_dir = project_root.join("dist");
-    let mut rendered_pages: Vec<RenderedPage> = Vec::new();
-    let mut output_paths: HashSet<String> = HashSet::new();
-    let mut data_query_count = 0u32;
 
-    for page in &pages {
-        match &page.page_type {
-            PageType::Static => {
-                let result = render_static_page(
-                    page,
-                    &env,
-                    &mut fetcher,
-                    &global_data,
-                    &config,
-                    &dist_dir,
-                    &build_time,
-                    &mut output_paths,
-                    &mut data_query_count,
-                    &mut asset_cache,
-                    &asset_client,
-                    &plugin_registry,
-                    &image_cache,
-                    &mut css_cache,
-                    &manifest,
-                    &source_asset_collector,
-                    &rate_limiter,
-                )?;
-                rendered_pages.push(result);
+    // Build the shared context for concurrent rendering.
+    let ctx = BuildContext {
+        config: Arc::new(config),
+        env: Arc::new(AsyncMutex::new(env)),
+        fetcher: Arc::new(AsyncMutex::new(fetcher)),
+        global_data: Arc::new(global_data),
+        dist_dir: dist_dir.clone(),
+        build_time: build_time.clone(),
+        output_paths: Arc::new(AsyncMutex::new(HashSet::new())),
+        data_query_count: Arc::new(AtomicU32::new(0)),
+        asset_cache: Arc::new(AsyncMutex::new(asset_cache)),
+        asset_client,
+        plugin_registry: Arc::new(plugin_registry),
+        image_cache: Arc::new(image_cache),
+        css_cache: Arc::new(AsyncMutex::new(css_cache)),
+        manifest: manifest.clone(),
+        source_asset_collector,
+        rate_limiter,
+    };
+
+    // Render pages concurrently.
+    let concurrency = std::thread::available_parallelism()
+        .map(|n| n.get() * 2)
+        .unwrap_or(8);
+
+    let results: Vec<Result<Vec<RenderedPage>>> = stream::iter(pages.iter())
+        .map(|page| {
+            let ctx = ctx.clone();
+            async move {
+                match &page.page_type {
+                    PageType::Static => {
+                        let rp = render_static_page(page, &ctx).await?;
+                        Ok(vec![rp])
+                    }
+                    PageType::Dynamic { param_name: _ } => {
+                        render_dynamic_page(page, &ctx).await
+                    }
+                }
             }
-            PageType::Dynamic { param_name: _ } => {
-                let results = render_dynamic_page(
-                    page,
-                    &env,
-                    &mut fetcher,
-                    &global_data,
-                    &config,
-                    &dist_dir,
-                    &build_time,
-                    &mut output_paths,
-                    &mut data_query_count,
-                    &mut asset_cache,
-                    &asset_client,
-                    &plugin_registry,
-                    &image_cache,
-                    &mut css_cache,
-                    &manifest,
-                    &source_asset_collector,
-                    &rate_limiter,
-                )?;
-                rendered_pages.extend(results);
-            }
-        }
+        })
+        .buffer_unordered(concurrency)
+        .collect()
+        .await;
+
+    let mut rendered_pages: Vec<RenderedPage> = Vec::new();
+    for result in results {
+        rendered_pages.extend(result?);
     }
 
     // Generate 404 page (default or custom template, controlled by not_found flag).
-    if config.build.not_found {
+    if ctx.config.build.not_found {
         not_found::write_default_if_missing(project_root, &dist_dir)?;
     }
 
     // Generate sitemap.
-    if config.sitemap.enabled {
-        sitemap::generate_sitemap(&dist_dir, &rendered_pages, &config, &build_time)?;
+    if ctx.config.sitemap.enabled {
+        sitemap::generate_sitemap(&dist_dir, &rendered_pages, &ctx.config, &build_time)?;
         tracing::info!("Generating sitemap... ✓");
     }
 
     // Generate robots.txt.
-    if config.robots.enabled {
-        robots::write(project_root, &dist_dir, &config)?;
+    if ctx.config.robots.enabled {
+        robots::write(project_root, &dist_dir, &ctx.config)?;
     }
 
-
     // Generate Atom feeds.
-    if !config.feed.is_empty() {
+    if !ctx.config.feed.is_empty() {
+        let mut fetcher = ctx.fetcher.lock().await;
         let feed_count = feed::generate_feeds(
             &dist_dir,
-            &config,
+            &ctx.config,
             &mut fetcher,
-            Some(&plugin_registry),
+            Some(&ctx.plugin_registry),
             &build_time,
-        )?;
+        ).await?;
+        drop(fetcher);
         tracing::info!("Generating {} feed(s)... done", feed_count);
     }
 
     // Run post-build hooks
-    plugin_registry.post_build(&dist_dir, project_root)?;
+    ctx.plugin_registry.post_build(&dist_dir, project_root)?;
 
     // Phase 2.5: CSS/JS bundling and tree-shaking.
-    let bundled_files = if config.build.bundling.enabled {
+    let bundled_files = if ctx.config.build.bundling.enabled {
         let files = bundling::bundle_assets(
-            &dist_dir, &config.build.bundling, config.build.minify,
+            &dist_dir, &ctx.config.build.bundling, ctx.config.build.minify,
         ).wrap_err("CSS/JS bundling failed")?;
         if !files.is_empty() {
             tracing::info!(
@@ -283,7 +309,7 @@ pub fn build(project_root: &Path, dev: bool, fresh: bool) -> Result<()> {
     };
 
     // Phase 3: Content hash rewrite.
-    if config.build.content_hash.enabled {
+    if ctx.config.build.content_hash.enabled {
         // Hash bundled files (generated, not from static/).
         let bundle_manifest = if !bundled_files.is_empty() {
             Some(content_hash::hash_additional_files(
@@ -303,6 +329,7 @@ pub fn build(project_root: &Path, dev: bool, fresh: bool) -> Result<()> {
         }
     }
 
+    let data_query_count = ctx.data_query_count.load(Ordering::Relaxed);
     tracing::info!(
         "Rendering pages... ✓ ({} pages, {} data queries)",
         rendered_pages.len(),
@@ -368,31 +395,22 @@ fn register_output_path(
 /// 3. Render template → full HTML string.
 /// 4. Write to dist/{output_path}.
 /// 5. Extract and write fragments if enabled.
-fn render_static_page(
+async fn render_static_page(
     page: &PageDef,
-    env: &minijinja::Environment<'_>,
-    fetcher: &mut DataFetcher,
-    global_data: &HashMap<String, serde_json::Value>,
-    config: &SiteConfig,
-    dist_dir: &Path,
-    build_time: &str,
-    output_paths: &mut HashSet<String>,
-    data_query_count: &mut u32,
-    asset_cache: &mut AssetCache,
-    asset_client: &reqwest::blocking::Client,
-    plugin_registry: &PluginRegistry,
-    image_cache: &ImageCache,
-    css_cache: &mut critical_css::StylesheetCache,
-    manifest: &std::sync::Arc<content_hash::AssetManifest>,
-    source_asset_collector: &SourceAssetCollector,
-    pool: &RateLimiterPool,
+    ctx: &BuildContext,
 ) -> Result<RenderedPage> {
     let tmpl_name = page.template_path.to_string_lossy().to_string();
+    let config = &*ctx.config;
+    let dist_dir = &ctx.dist_dir;
 
     // 1. Resolve data queries.
-    *data_query_count += page.frontmatter.data.len() as u32;
-    let page_data = data::resolve_page_data(&page.frontmatter, fetcher, Some(plugin_registry))
-        .wrap_err_with(|| format!("Failed to resolve data for template '{}'", tmpl_name))?;
+    ctx.data_query_count.fetch_add(page.frontmatter.data.len() as u32, Ordering::Relaxed);
+    let page_data = {
+        let mut fetcher = ctx.fetcher.lock().await;
+        data::resolve_page_data(&page.frontmatter, &mut fetcher, Some(&ctx.plugin_registry))
+            .await
+            .wrap_err_with(|| format!("Failed to resolve data for template '{}'", tmpl_name))?
+    };
 
     let stem = page.template_path.file_stem().unwrap_or_default();
     let output_path = if config.build.clean_urls && stem != "index" && stem != "404" {
@@ -404,7 +422,10 @@ fn render_static_page(
     let url_path = format!("/{}", output_path.to_string_lossy().replace('\\', "/"));
 
     // Check for output path collision.
-    register_output_path(&url_path, &tmpl_name, output_paths)?;
+    {
+        let mut output_paths = ctx.output_paths.lock().await;
+        register_output_path(&url_path, &tmpl_name, &mut output_paths)?;
+    }
 
     // 2. Build context.
     let is_index = output_path.file_name()
@@ -412,39 +433,43 @@ fn render_static_page(
         .map(|f| f == "index.html")
         .unwrap_or(false);
 
-    let meta = PageMeta::new(&url_path, &output_path, config, build_time);
+    let meta = PageMeta::new(&url_path, &output_path, config, &ctx.build_time);
 
-    let ctx = context::build_page_context(config, global_data, &page_data, meta, None);
+    let tpl_ctx = context::build_page_context(config, &ctx.global_data, &page_data, meta, None);
 
-    // Resolve SEO template expressions (static pages rarely use these,
-    // but support them for consistency).
-    let resolved_seo = seo::resolve_seo_expressions(
-        &page.frontmatter.seo,
-        env,
-        &ctx,
-    );
+    // Resolve SEO/schema expressions and render template under the env lock.
+    let (resolved_seo, resolved_schema, rendered) = {
+        let env = ctx.env.lock().await;
 
-    // Resolve schema template expressions.
-    let resolved_schema = json_ld::resolve_schema_expressions(
-        &page.frontmatter.schema,
-        env,
-        &ctx,
-    );
+        let resolved_seo = seo::resolve_seo_expressions(
+            &page.frontmatter.seo,
+            &env,
+            &tpl_ctx,
+        );
 
-    // 3. Render template.
-    let tmpl = env.get_template(&tmpl_name)
-        .wrap_err_with(|| format!("Template '{}' not found in environment", tmpl_name))?;
+        let resolved_schema = json_ld::resolve_schema_expressions(
+            &page.frontmatter.schema,
+            &env,
+            &tpl_ctx,
+        );
 
-    let rendered = match tmpl.render(&ctx) {
-        Ok(html) => html,
-        Err(err) => {
-            let te = TemplateError::from_minijinja(&err, &tmpl_name, None);
-            eprintln!("{}", te.format_console(&tmpl_name, None));
-            return Err(eyre::eyre!(
-                "Failed to render template '{}': {}",
-                tmpl_name, te.short_msg
-            ));
-        }
+        // 3. Render template.
+        let tmpl = env.get_template(&tmpl_name)
+            .wrap_err_with(|| format!("Template '{}' not found in environment", tmpl_name))?;
+
+        let rendered = match tmpl.render(&tpl_ctx) {
+            Ok(html) => html,
+            Err(err) => {
+                let te = TemplateError::from_minijinja(&err, &tmpl_name, None);
+                eprintln!("{}", te.format_console(&tmpl_name, None));
+                return Err(eyre::eyre!(
+                    "Failed to render template '{}': {}",
+                    tmpl_name, te.short_msg
+                ));
+            }
+        };
+
+        (resolved_seo, resolved_schema, rendered)
     };
 
     // Extract fragment block names (before marker stripping) for view transitions.
@@ -456,44 +481,53 @@ fn render_static_page(
 
     // 4. Write full page (with markers stripped, assets localized, images optimized, plugins applied).
     let full_html = fragments::strip_fragment_markers(&rendered);
-    let source_asset_urls: HashSet<String> = source_asset_collector.urls().into_iter().collect();
-    let full_html = assets::localize_assets(
-        &full_html,
-        &config.assets,
-        asset_cache,
-        asset_client,
-        dist_dir,
-        &source_asset_urls,
-        pool,
-    ).wrap_err_with(|| format!("Failed to localize assets for '{}'", tmpl_name))?;
+    let source_asset_urls: HashSet<String> = ctx.source_asset_collector.urls().into_iter().collect();
+
+    let full_html = {
+        let mut cache = ctx.asset_cache.lock().await;
+        assets::localize_assets(
+            &full_html,
+            &config.assets,
+            &mut cache,
+            &ctx.asset_client,
+            dist_dir,
+            &source_asset_urls,
+            &ctx.rate_limiter,
+        ).await
+        .wrap_err_with(|| format!("Failed to localize assets for '{}'", tmpl_name))?
+    };
 
     // 4a. Resolve authenticated source assets.
-    let full_html = source_asset::resolve_source_assets(
-        &full_html,
-        &source_asset_collector.drain(),
-        &config.sources,
-        asset_cache,
-        asset_client,
-        dist_dir,
-        pool,
-    ).wrap_err_with(|| format!("Failed to resolve source assets for '{}'", tmpl_name))?;
+    let full_html = {
+        let mut cache = ctx.asset_cache.lock().await;
+        source_asset::resolve_source_assets(
+            &full_html,
+            &ctx.source_asset_collector.drain(),
+            &config.sources,
+            &mut cache,
+            &ctx.asset_client,
+            dist_dir,
+            &ctx.rate_limiter,
+        ).await
+        .wrap_err_with(|| format!("Failed to resolve source assets for '{}'", tmpl_name))?
+    };
 
     // 4b. Image optimization: convert/compress/resize + rewrite <img> → <picture>.
     let full_html = assets::optimize_and_rewrite_images(
         &full_html,
         &config.assets.images,
-        image_cache,
+        &ctx.image_cache,
         dist_dir,
         page.frontmatter.hero_image.as_deref(),
     ).wrap_err_with(|| format!("Failed to optimize images for '{}'", tmpl_name))?;
     let full_html = assets::rewrite_css_background_images(
         &full_html,
         &config.assets.images,
-        image_cache,
+        &ctx.image_cache,
         dist_dir,
     ).wrap_err_with(|| format!("Failed to optimize CSS background images for '{}'", tmpl_name))?;
 
-    let full_html = plugin_registry.post_render_html(
+    let full_html = ctx.plugin_registry.post_render_html(
         full_html,
         &url_path,
         dist_dir,
@@ -501,13 +535,16 @@ fn render_static_page(
 
     // 4c. Critical CSS inlining (after plugins, before minify).
     let full_html = if config.build.critical_css.enabled {
-        critical_css::inline_critical_css(
+        let mut css_cache = ctx.css_cache.lock().await;
+        let result = critical_css::inline_critical_css(
             &full_html,
             &config.build.critical_css,
             dist_dir,
-            css_cache,
-            if manifest.is_empty() { None } else { Some(manifest.as_ref()) },
-        )
+            &mut css_cache,
+            if ctx.manifest.is_empty() { None } else { Some(ctx.manifest.as_ref()) },
+        );
+        drop(css_cache);
+        result
     } else {
         full_html
     };
@@ -558,7 +595,7 @@ fn render_static_page(
         full_html
     };
 
-    // 4d. Inject analytics snippet if configured.
+    // 4i. Inject analytics snippet if configured.
     let full_html = if let Some(ref analytics) = config.analytics {
         analytics::inject_analytics(&full_html, &analytics.tracking_id)
     } else {
@@ -568,11 +605,11 @@ fn render_static_page(
     let full_path = dist_dir.join(&output_path);
 
     if let Some(parent) = full_path.parent() {
-        std::fs::create_dir_all(parent)
+        tokio::fs::create_dir_all(parent).await
             .wrap_err_with(|| format!("Failed to create output dir {}", parent.display()))?;
     }
 
-    std::fs::write(&full_path, &full_html)
+    tokio::fs::write(&full_path, &full_html).await
         .wrap_err_with(|| format!("Failed to write {}", full_path.display()))?;
 
     tracing::debug!("  Static: {} → {} ({} bytes)", tmpl_name, output_path.display(), full_html.len());
@@ -584,16 +621,16 @@ fn render_static_page(
             let localized_frags = localize_fragments(
                 &frags,
                 &config.assets,
-                asset_cache,
-                asset_client,
+                &ctx.asset_cache,
+                &ctx.asset_client,
                 dist_dir,
                 &source_asset_urls,
-                pool,
-            )?;
+                &ctx.rate_limiter,
+            ).await?;
             let optimized_frags = optimize_fragment_images(
                 &localized_frags,
                 &config.assets.images,
-                image_cache,
+                &ctx.image_cache,
                 dist_dir,
             )?;
             let optimized_frags = if config.build.minify {
@@ -625,33 +662,24 @@ fn render_static_page(
 /// 1. Fetch collection from frontmatter query.
 /// 2. For each item: extract slug, resolve nested data, build context, render.
 /// 3. Write full pages and fragments.
-fn render_dynamic_page(
+async fn render_dynamic_page(
     page: &PageDef,
-    env: &minijinja::Environment<'_>,
-    fetcher: &mut DataFetcher,
-    global_data: &HashMap<String, serde_json::Value>,
-    config: &SiteConfig,
-    dist_dir: &Path,
-    build_time: &str,
-    output_paths: &mut HashSet<String>,
-    data_query_count: &mut u32,
-    asset_cache: &mut AssetCache,
-    asset_client: &reqwest::blocking::Client,
-    plugin_registry: &PluginRegistry,
-    image_cache: &ImageCache,
-    css_cache: &mut critical_css::StylesheetCache,
-    manifest: &std::sync::Arc<content_hash::AssetManifest>,
-    source_asset_collector: &SourceAssetCollector,
-    pool: &RateLimiterPool,
+    ctx: &BuildContext,
 ) -> Result<Vec<RenderedPage>> {
     let tmpl_name = page.template_path.to_string_lossy().to_string();
     let item_as = &page.frontmatter.item_as;
     let slug_field = &page.frontmatter.slug_field;
+    let config = &*ctx.config;
+    let dist_dir = &ctx.dist_dir;
 
     // 1. Fetch collection.
-    *data_query_count += 1;
-    let items = data::resolve_dynamic_page_data(&page.frontmatter, fetcher, Some(plugin_registry))
-        .wrap_err_with(|| format!("Failed to fetch collection for template '{}'", tmpl_name))?;
+    ctx.data_query_count.fetch_add(1, Ordering::Relaxed);
+    let items = {
+        let mut fetcher = ctx.fetcher.lock().await;
+        data::resolve_dynamic_page_data(&page.frontmatter, &mut fetcher, Some(&ctx.plugin_registry))
+            .await
+            .wrap_err_with(|| format!("Failed to fetch collection for template '{}'", tmpl_name))?
+    };
 
     if items.is_empty() {
         tracing::debug!("  Dynamic: {} → collection is empty, skipping.", tmpl_name);
@@ -663,9 +691,6 @@ fn render_dynamic_page(
         tmpl_name,
         items.len(),
     );
-
-    let tmpl = env.get_template(&tmpl_name)
-        .wrap_err_with(|| format!("Template '{}' not found in environment", tmpl_name))?;
 
     let mut rendered_pages = Vec::new();
     let mut seen_slugs: HashSet<String> = HashSet::new();
@@ -713,19 +738,23 @@ fn render_dynamic_page(
         }
 
         // Resolve nested data queries for this item.
-        *data_query_count += page.frontmatter.data.len() as u32;
-        let item_data = data::resolve_dynamic_page_data_for_item(
-            &page.frontmatter,
-            item,
-            fetcher,
-            Some(plugin_registry),
-        )
-        .wrap_err_with(|| {
-            format!(
-                "Failed to resolve data for item '{}' in template '{}'",
-                slug, tmpl_name,
+        ctx.data_query_count.fetch_add(page.frontmatter.data.len() as u32, Ordering::Relaxed);
+        let item_data = {
+            let mut fetcher = ctx.fetcher.lock().await;
+            data::resolve_dynamic_page_data_for_item(
+                &page.frontmatter,
+                item,
+                &mut fetcher,
+                Some(&ctx.plugin_registry),
             )
-        })?;
+            .await
+            .wrap_err_with(|| {
+                format!(
+                    "Failed to resolve data for item '{}' in template '{}'",
+                    slug, tmpl_name,
+                )
+            })?
+        };
 
         let output_path = if config.build.clean_urls {
             page.output_dir.join(&slug).join("index.html")
@@ -735,44 +764,55 @@ fn render_dynamic_page(
         let url_path = format!("/{}", output_path.to_string_lossy().replace('\\', "/"));
 
         // Check for output path collision with other templates.
-        register_output_path(&url_path, &tmpl_name, output_paths)?;
+        {
+            let mut output_paths = ctx.output_paths.lock().await;
+            register_output_path(&url_path, &tmpl_name, &mut output_paths)?;
+        }
 
         // Build context.
-        let meta = PageMeta::new(&url_path, &output_path, config, build_time);
+        let meta = PageMeta::new(&url_path, &output_path, config, &ctx.build_time);
 
-        let ctx = context::build_page_context(
+        let tpl_ctx = context::build_page_context(
             config,
-            global_data,
+            &ctx.global_data,
             &item_data,
             meta,
             Some((item_as, item)),
         );
 
-        // Resolve SEO template expressions for this item.
-        let resolved_seo = seo::resolve_seo_expressions(
-            &page.frontmatter.seo,
-            env,
-            &ctx,
-        );
+        // Resolve SEO/schema expressions and render template under the env lock.
+        let (resolved_seo, resolved_schema, rendered) = {
+            let env = ctx.env.lock().await;
 
-        // Resolve schema template expressions for this item.
-        let resolved_schema = json_ld::resolve_schema_expressions(
-            &page.frontmatter.schema,
-            env,
-            &ctx,
-        );
+            let resolved_seo = seo::resolve_seo_expressions(
+                &page.frontmatter.seo,
+                &env,
+                &tpl_ctx,
+            );
 
-        // Render.
-        let rendered = match tmpl.render(&ctx) {
-            Ok(html) => html,
-            Err(err) => {
-                let te = TemplateError::from_minijinja(&err, &tmpl_name, Some(&slug));
-                eprintln!("{}", te.format_console(&tmpl_name, Some(&slug)));
-                return Err(eyre::eyre!(
-                    "Failed to render template '{}' for item with slug '{}': {}",
-                    tmpl_name, slug, te.short_msg
-                ));
-            }
+            let resolved_schema = json_ld::resolve_schema_expressions(
+                &page.frontmatter.schema,
+                &env,
+                &tpl_ctx,
+            );
+
+            // Render.
+            let tmpl = env.get_template(&tmpl_name)
+                .wrap_err_with(|| format!("Template '{}' not found in environment", tmpl_name))?;
+
+            let rendered = match tmpl.render(&tpl_ctx) {
+                Ok(html) => html,
+                Err(err) => {
+                    let te = TemplateError::from_minijinja(&err, &tmpl_name, Some(&slug));
+                    eprintln!("{}", te.format_console(&tmpl_name, Some(&slug)));
+                    return Err(eyre::eyre!(
+                        "Failed to render template '{}' for item with slug '{}': {}",
+                        tmpl_name, slug, te.short_msg
+                    ));
+                }
+            };
+
+            (resolved_seo, resolved_schema, rendered)
         };
 
         // Extract fragment block names (before marker stripping) for view transitions.
@@ -784,37 +824,46 @@ fn render_dynamic_page(
 
         // Write full page (with assets localized, images optimized, plugins applied).
         let full_html = fragments::strip_fragment_markers(&rendered);
-        let source_asset_urls: HashSet<String> = source_asset_collector.urls().into_iter().collect();
-        let full_html = assets::localize_assets(
-            &full_html,
-            &config.assets,
-            asset_cache,
-            asset_client,
-            dist_dir,
-            &source_asset_urls,
-            pool,
-        ).wrap_err_with(|| {
-            format!("Failed to localize assets for '{}' slug '{}'", tmpl_name, slug)
-        })?;
+        let source_asset_urls: HashSet<String> = ctx.source_asset_collector.urls().into_iter().collect();
+
+        let full_html = {
+            let mut cache = ctx.asset_cache.lock().await;
+            assets::localize_assets(
+                &full_html,
+                &config.assets,
+                &mut cache,
+                &ctx.asset_client,
+                dist_dir,
+                &source_asset_urls,
+                &ctx.rate_limiter,
+            ).await
+            .wrap_err_with(|| {
+                format!("Failed to localize assets for '{}' slug '{}'", tmpl_name, slug)
+            })?
+        };
 
         // Resolve authenticated source assets.
-        let full_html = source_asset::resolve_source_assets(
-            &full_html,
-            &source_asset_collector.drain(),
-            &config.sources,
-            asset_cache,
-            asset_client,
-            dist_dir,
-            pool,
-        ).wrap_err_with(|| {
-            format!("Failed to resolve source assets for '{}' slug '{}'", tmpl_name, slug)
-        })?;
+        let full_html = {
+            let mut cache = ctx.asset_cache.lock().await;
+            source_asset::resolve_source_assets(
+                &full_html,
+                &ctx.source_asset_collector.drain(),
+                &config.sources,
+                &mut cache,
+                &ctx.asset_client,
+                dist_dir,
+                &ctx.rate_limiter,
+            ).await
+            .wrap_err_with(|| {
+                format!("Failed to resolve source assets for '{}' slug '{}'", tmpl_name, slug)
+            })?
+        };
 
         // Image optimization: convert/compress/resize + rewrite <img> → <picture>.
         let full_html = assets::optimize_and_rewrite_images(
             &full_html,
             &config.assets.images,
-            image_cache,
+            &ctx.image_cache,
             dist_dir,
             page.frontmatter.hero_image.as_deref(),
         ).wrap_err_with(|| {
@@ -823,13 +872,13 @@ fn render_dynamic_page(
         let full_html = assets::rewrite_css_background_images(
             &full_html,
             &config.assets.images,
-            image_cache,
+            &ctx.image_cache,
             dist_dir,
         ).wrap_err_with(|| {
             format!("Failed to optimize CSS background images for '{}' slug '{}'", tmpl_name, slug)
         })?;
 
-        let full_html = plugin_registry.post_render_html(
+        let full_html = ctx.plugin_registry.post_render_html(
             full_html,
             &url_path,
             dist_dir,
@@ -839,13 +888,16 @@ fn render_dynamic_page(
 
         // Critical CSS inlining (after plugins, before minify).
         let full_html = if config.build.critical_css.enabled {
-            critical_css::inline_critical_css(
+            let mut css_cache = ctx.css_cache.lock().await;
+            let result = critical_css::inline_critical_css(
                 &full_html,
                 &config.build.critical_css,
                 dist_dir,
-                css_cache,
-                if manifest.is_empty() { None } else { Some(manifest.as_ref()) },
-            )
+                &mut css_cache,
+                if ctx.manifest.is_empty() { None } else { Some(ctx.manifest.as_ref()) },
+            );
+            drop(css_cache);
+            result
         } else {
             full_html
         };
@@ -906,11 +958,11 @@ fn render_dynamic_page(
         let full_path = dist_dir.join(&output_path);
 
         if let Some(parent) = full_path.parent() {
-            std::fs::create_dir_all(parent)
+            tokio::fs::create_dir_all(parent).await
                 .wrap_err_with(|| format!("Failed to create output dir {}", parent.display()))?;
         }
 
-        std::fs::write(&full_path, &full_html)
+        tokio::fs::write(&full_path, &full_html).await
             .wrap_err_with(|| format!("Failed to write {}", full_path.display()))?;
 
         // Write fragments (also localize assets + optimize images in fragments).
@@ -920,16 +972,16 @@ fn render_dynamic_page(
                 let localized_frags = localize_fragments(
                     &frags,
                     &config.assets,
-                    asset_cache,
-                    asset_client,
+                    &ctx.asset_cache,
+                    &ctx.asset_client,
                     dist_dir,
                     &source_asset_urls,
-                    pool,
-                )?;
+                    &ctx.rate_limiter,
+                ).await?;
                 let optimized_frags = optimize_fragment_images(
                     &localized_frags,
                     &config.assets.images,
-                    image_cache,
+                    &ctx.image_cache,
                     dist_dir,
                 )?;
                 let optimized_frags = if config.build.minify {
@@ -969,26 +1021,29 @@ fn render_dynamic_page(
 ///
 /// Since the full page has already been through localization (and all assets
 /// are cached), this should be fast — no new downloads.
-fn localize_fragments(
+async fn localize_fragments(
     frags: &[fragments::Fragment],
     assets_config: &crate::config::AssetsConfig,
-    asset_cache: &mut AssetCache,
-    asset_client: &reqwest::blocking::Client,
+    asset_cache: &Arc<AsyncMutex<AssetCache>>,
+    asset_client: &reqwest::Client,
     dist_dir: &Path,
     skip_urls: &HashSet<String>,
     pool: &RateLimiterPool,
 ) -> Result<Vec<fragments::Fragment>> {
     let mut result = Vec::with_capacity(frags.len());
     for frag in frags {
-        let localized_html = assets::localize_assets(
-            &frag.html,
-            assets_config,
-            asset_cache,
-            asset_client,
-            dist_dir,
-            skip_urls,
-            pool,
-        )?;
+        let localized_html = {
+            let mut cache = asset_cache.lock().await;
+            assets::localize_assets(
+                &frag.html,
+                assets_config,
+                &mut cache,
+                asset_client,
+                dist_dir,
+                skip_urls,
+                pool,
+            ).await?
+        };
         result.push(fragments::Fragment {
             block_name: frag.block_name.clone(),
             html: localized_html,
@@ -1112,14 +1167,14 @@ minify = false
         );
     }
 
-    #[test]
-    fn test_build_minimal_site() {
+    #[tokio::test]
+    async fn test_build_minimal_site() {
         let tmp = TempDir::new().unwrap();
         let root = tmp.path();
 
         setup_minimal_project(root);
 
-        build(root, true, false).unwrap();
+        build(root, true, false).await.unwrap();
 
         // Check dist/ exists and has the output.
         assert!(root.join("dist/index.html").exists());
@@ -1142,8 +1197,8 @@ minify = false
         assert!(sitemap.contains("https://test.com/index.html"));
     }
 
-    #[test]
-    fn test_build_static_pages_with_data() {
+    #[tokio::test]
+    async fn test_build_static_pages_with_data() {
         let tmp = TempDir::new().unwrap();
         let root = tmp.path();
 
@@ -1187,15 +1242,15 @@ data:
             "- label: Home\n  url: /\n- label: About\n  url: /about\n",
         );
 
-        build(root, true, false).unwrap();
+        build(root, true, false).await.unwrap();
 
         let html = fs::read_to_string(root.join("dist/index.html")).unwrap();
         assert!(html.contains(r#"<a href="/">Home</a>"#));
         assert!(html.contains(r#"<a href="/about">About</a>"#));
     }
 
-    #[test]
-    fn test_build_dynamic_pages() {
+    #[tokio::test]
+    async fn test_build_dynamic_pages() {
         let tmp = TempDir::new().unwrap();
         let root = tmp.path();
 
@@ -1240,7 +1295,7 @@ item_as: post
             ]"#,
         );
 
-        build(root, true, false).unwrap();
+        build(root, true, false).await.unwrap();
 
         // Check generated pages.
         assert!(root.join("dist/posts/hello-world.html").exists());
@@ -1262,8 +1317,8 @@ item_as: post
         assert!(sitemap.contains("/posts/second-post.html"));
     }
 
-    #[test]
-    fn test_build_dynamic_empty_collection() {
+    #[tokio::test]
+    async fn test_build_dynamic_empty_collection() {
         let tmp = TempDir::new().unwrap();
         let root = tmp.path();
 
@@ -1295,15 +1350,15 @@ collection:
 
         write(root, "_data/items.json", "[]");
 
-        build(root, true, false).unwrap();
+        build(root, true, false).await.unwrap();
 
         // No pages should be generated for empty collection.
         let sitemap = fs::read_to_string(root.join("dist/sitemap.xml")).unwrap();
         assert!(!sitemap.contains("<url>"));
     }
 
-    #[test]
-    fn test_build_static_assets_copied() {
+    #[tokio::test]
+    async fn test_build_static_assets_copied() {
         let tmp = TempDir::new().unwrap();
         let root = tmp.path();
 
@@ -1311,7 +1366,7 @@ collection:
         write(root, "static/css/style.css", "body { color: red; }");
         write(root, "static/favicon.ico", "icon");
 
-        build(root, true, false).unwrap();
+        build(root, true, false).await.unwrap();
 
         assert!(root.join("dist/css/style.css").exists());
         assert!(root.join("dist/favicon.ico").exists());
@@ -1320,8 +1375,8 @@ collection:
         assert_eq!(css, "body { color: red; }");
     }
 
-    #[test]
-    fn test_build_no_fragments_when_disabled() {
+    #[tokio::test]
+    async fn test_build_no_fragments_when_disabled() {
         let tmp = TempDir::new().unwrap();
         let root = tmp.path();
 
@@ -1351,7 +1406,7 @@ fragments = false
 {% block content %}<h1>Home</h1>{% endblock %}"#,
         );
 
-        build(root, true, false).unwrap();
+        build(root, true, false).await.unwrap();
 
         assert!(root.join("dist/index.html").exists());
         assert!(!root.join("dist/_fragments").exists());
@@ -1361,8 +1416,8 @@ fragments = false
         assert!(!html.contains("<!--FRAG:"));
     }
 
-    #[test]
-    fn test_build_cleans_previous_output() {
+    #[tokio::test]
+    async fn test_build_cleans_previous_output() {
         let tmp = TempDir::new().unwrap();
         let root = tmp.path();
 
@@ -1371,7 +1426,7 @@ fragments = false
         // Create stale file in dist/.
         write(root, "dist/stale.html", "old content");
 
-        build(root, true, false).unwrap();
+        build(root, true, false).await.unwrap();
 
         // Stale file should be gone.
         assert!(!root.join("dist/stale.html").exists());
@@ -1379,8 +1434,8 @@ fragments = false
         assert!(root.join("dist/index.html").exists());
     }
 
-    #[test]
-    fn test_build_multiple_static_pages() {
+    #[tokio::test]
+    async fn test_build_multiple_static_pages() {
         let tmp = TempDir::new().unwrap();
         let root = tmp.path();
 
@@ -1414,7 +1469,7 @@ fragments = false
             r#"{% extends "_base.html" %}{% block content %}Guide{% endblock %}"#,
         );
 
-        build(root, true, false).unwrap();
+        build(root, true, false).await.unwrap();
 
         assert!(root.join("dist/index.html").exists());
         assert!(root.join("dist/about.html").exists());
@@ -1426,8 +1481,8 @@ fragments = false
         assert!(sitemap.contains("/docs/guide.html"));
     }
 
-    #[test]
-    fn test_build_dynamic_numeric_slug() {
+    #[tokio::test]
+    async fn test_build_dynamic_numeric_slug() {
         let tmp = TempDir::new().unwrap();
         let root = tmp.path();
 
@@ -1464,14 +1519,14 @@ slug_field: id
             r#"[{"id": 1, "title": "First"}, {"id": 2, "title": "Second"}]"#,
         );
 
-        build(root, true, false).unwrap();
+        build(root, true, false).await.unwrap();
 
         assert!(root.join("dist/1.html").exists());
         assert!(root.join("dist/2.html").exists());
     }
 
-    #[test]
-    fn test_build_page_context_available() {
+    #[tokio::test]
+    async fn test_build_page_context_available() {
         let tmp = TempDir::new().unwrap();
         let root = tmp.path();
 
@@ -1497,15 +1552,15 @@ fragments = false
 {% block content %}URL:{{ page.current_url }} PATH:{{ page.current_path }}{% endblock %}"#,
         );
 
-        build(root, true, false).unwrap();
+        build(root, true, false).await.unwrap();
 
         let html = fs::read_to_string(root.join("dist/about.html")).unwrap();
         assert!(html.contains("URL:/about.html"));
         assert!(html.contains("PATH:about.html"));
     }
 
-    #[test]
-    fn test_build_dynamic_duplicate_slugs_error() {
+    #[tokio::test]
+    async fn test_build_dynamic_duplicate_slugs_error() {
         let tmp = TempDir::new().unwrap();
         let root = tmp.path();
 
@@ -1545,15 +1600,15 @@ slug_field: slug
             ]"#,
         );
 
-        let result = build(root, true, false);
+        let result = build(root, true, false).await;
         assert!(result.is_err());
         let err = format!("{:#}", result.unwrap_err());
         assert!(err.contains("Duplicate slug"));
         assert!(err.contains("same-slug"));
     }
 
-    #[test]
-    fn test_build_dynamic_slug_special_chars_sanitized() {
+    #[tokio::test]
+    async fn test_build_dynamic_slug_special_chars_sanitized() {
         let tmp = TempDir::new().unwrap();
         let root = tmp.path();
 
@@ -1590,14 +1645,14 @@ slug_field: slug
             r#"[{"slug": "Hello World / Special!", "title": "Test"}]"#,
         );
 
-        build(root, true, false).unwrap();
+        build(root, true, false).await.unwrap();
 
         // The slug should be sanitized to something safe.
         assert!(root.join("dist/hello-world-special.html").exists());
     }
 
-    #[test]
-    fn test_build_missing_layout_error() {
+    #[tokio::test]
+    async fn test_build_missing_layout_error() {
         let tmp = TempDir::new().unwrap();
         let root = tmp.path();
 
@@ -1622,15 +1677,15 @@ fragments = false
 {% block content %}<h1>Home</h1>{% endblock %}"#,
         );
 
-        let result = build(root, true, false);
+        let result = build(root, true, false).await;
         assert!(result.is_err());
         let err = format!("{:#}", result.unwrap_err());
         // Should mention the template and the missing layout.
         assert!(err.contains("index.html") || err.contains("_missing_layout.html"));
     }
 
-    #[test]
-    fn test_build_undefined_variable_error() {
+    #[tokio::test]
+    async fn test_build_undefined_variable_error() {
         let tmp = TempDir::new().unwrap();
         let root = tmp.path();
 
@@ -1649,14 +1704,14 @@ fragments = false
 
         write(root, "templates/index.html", "<h1>{{ undefined_var }}</h1>");
 
-        let result = build(root, true, false);
+        let result = build(root, true, false).await;
         assert!(result.is_err());
         let err = format!("{:#}", result.unwrap_err());
         assert!(err.contains("undefined") || err.contains("unknown variable"));
     }
 
-    #[test]
-    fn test_build_empty_templates_dir() {
+    #[tokio::test]
+    async fn test_build_empty_templates_dir() {
         let tmp = TempDir::new().unwrap();
         let root = tmp.path();
 
@@ -1677,19 +1732,19 @@ fragments = false
         std::fs::create_dir_all(root.join("templates")).unwrap();
 
         // Should succeed, producing empty dist with just static assets.
-        build(root, true, false).unwrap();
+        build(root, true, false).await.unwrap();
 
         assert!(root.join("dist").is_dir());
         let sitemap = fs::read_to_string(root.join("dist/sitemap.xml")).unwrap();
         assert!(!sitemap.contains("<url>"));
     }
 
-    #[test]
-    fn test_build_missing_site_toml() {
+    #[tokio::test]
+    async fn test_build_missing_site_toml() {
         let tmp = TempDir::new().unwrap();
         let root = tmp.path();
 
-        let result = build(root, true, false);
+        let result = build(root, true, false).await;
         assert!(result.is_err());
         let err = format!("{:#}", result.unwrap_err());
         assert!(err.contains("site.toml"));
@@ -1698,17 +1753,17 @@ fragments = false
 
     // --- Sitemap config tests ---
 
-    #[test]
-    fn test_sitemap_enabled_by_default() {
+    #[tokio::test]
+    async fn test_sitemap_enabled_by_default() {
         let tmp = TempDir::new().unwrap();
         let root = tmp.path();
         setup_minimal_project(root);
-        build(root, false, false).unwrap();
+        build(root, false, false).await.unwrap();
         assert!(root.join("dist/sitemap.xml").exists());
     }
 
-    #[test]
-    fn test_sitemap_disabled() {
+    #[tokio::test]
+    async fn test_sitemap_disabled() {
         let tmp = TempDir::new().unwrap();
         let root = tmp.path();
 
@@ -1730,12 +1785,12 @@ enabled = false
         write(root, "templates/_base.html", "<html>{% block content %}{% endblock %}</html>");
         write(root, "templates/index.html", "{% extends \"_base.html\" %}{% block content %}hi{% endblock %}");
 
-        build(root, false, false).unwrap();
+        build(root, false, false).await.unwrap();
         assert!(!root.join("dist/sitemap.xml").exists());
     }
 
-    #[test]
-    fn test_sitemap_clean_urls() {
+    #[tokio::test]
+    async fn test_sitemap_clean_urls() {
         let tmp = TempDir::new().unwrap();
         let root = tmp.path();
 
@@ -1759,7 +1814,7 @@ clean_urls = true
         write(root, "templates/index.html", "{% extends \"_base.html\" %}{% block content %}hi{% endblock %}");
         write(root, "templates/about.html", "{% extends \"_base.html\" %}{% block content %}about{% endblock %}");
 
-        build(root, false, false).unwrap();
+        build(root, false, false).await.unwrap();
 
         let sitemap = fs::read_to_string(root.join("dist/sitemap.xml")).unwrap();
         assert!(sitemap.contains("https://test.com/"));
@@ -1769,17 +1824,17 @@ clean_urls = true
 
     // --- Robots config tests ---
 
-    #[test]
-    fn test_robots_disabled_by_default() {
+    #[tokio::test]
+    async fn test_robots_disabled_by_default() {
         let tmp = TempDir::new().unwrap();
         let root = tmp.path();
         setup_minimal_project(root);
-        build(root, false, false).unwrap();
+        build(root, false, false).await.unwrap();
         assert!(!root.join("dist/robots.txt").exists());
     }
 
-    #[test]
-    fn test_robots_generates_default() {
+    #[tokio::test]
+    async fn test_robots_generates_default() {
         let tmp = TempDir::new().unwrap();
         let root = tmp.path();
 
@@ -1801,15 +1856,15 @@ enabled = true
         write(root, "templates/_base.html", "<html>{% block content %}{% endblock %}</html>");
         write(root, "templates/index.html", "{% extends \"_base.html\" %}{% block content %}hi{% endblock %}");
 
-        build(root, false, false).unwrap();
+        build(root, false, false).await.unwrap();
 
         let robots = fs::read_to_string(root.join("dist/robots.txt")).unwrap();
         assert!(robots.contains("User-agent: *"));
         assert!(robots.contains("Allow: /"));
     }
 
-    #[test]
-    fn test_robots_copies_custom_from_static() {
+    #[tokio::test]
+    async fn test_robots_copies_custom_from_static() {
         let tmp = TempDir::new().unwrap();
         let root = tmp.path();
 
@@ -1832,15 +1887,15 @@ enabled = true
         write(root, "templates/index.html", "{% extends \"_base.html\" %}{% block content %}hi{% endblock %}");
         write(root, "static/robots.txt", "User-agent: *\nDisallow: /secret/\n");
 
-        build(root, false, false).unwrap();
+        build(root, false, false).await.unwrap();
 
         let robots = fs::read_to_string(root.join("dist/robots.txt")).unwrap();
         assert!(robots.contains("Disallow: /secret/"));
         assert!(!robots.contains("Allow: /"));
     }
 
-    #[test]
-    fn test_robots_generated_from_rules() {
+    #[tokio::test]
+    async fn test_robots_generated_from_rules() {
         let tmp = TempDir::new().unwrap();
         let root = tmp.path();
 
@@ -1868,7 +1923,7 @@ disallow = ["/admin/"]
         write(root, "templates/_base.html", "<html>{% block content %}{% endblock %}</html>");
         write(root, "templates/index.html", "{% extends \"_base.html\" %}{% block content %}hi{% endblock %}");
 
-        build(root, false, false).unwrap();
+        build(root, false, false).await.unwrap();
 
         let robots = fs::read_to_string(root.join("dist/robots.txt")).unwrap();
         assert!(robots.contains("User-agent: *"));
@@ -1876,8 +1931,8 @@ disallow = ["/admin/"]
         assert!(robots.contains("Disallow: /admin/"));
     }
 
-    #[test]
-    fn test_robots_static_wins_over_rules() {
+    #[tokio::test]
+    async fn test_robots_static_wins_over_rules() {
         let tmp = TempDir::new().unwrap();
         let root = tmp.path();
 
@@ -1904,7 +1959,7 @@ disallow = ["/from-config/"]
         write(root, "templates/index.html", "{% extends \"_base.html\" %}{% block content %}hi{% endblock %}");
         write(root, "static/robots.txt", "User-agent: *\nDisallow: /from-static/\n");
 
-        build(root, false, false).unwrap();
+        build(root, false, false).await.unwrap();
 
         let robots = fs::read_to_string(root.join("dist/robots.txt")).unwrap();
         // static file wins
@@ -1912,8 +1967,8 @@ disallow = ["/from-config/"]
         assert!(!robots.contains("Disallow: /from-config/"));
     }
 
-    #[test]
-    fn test_robots_not_copied_from_static_when_disabled() {
+    #[tokio::test]
+    async fn test_robots_not_copied_from_static_when_disabled() {
         let tmp = TempDir::new().unwrap();
         let root = tmp.path();
 
@@ -1933,14 +1988,14 @@ minify = false
         write(root, "templates/index.html", "{% extends \"_base.html\" %}{% block content %}hi{% endblock %}");
         write(root, "static/robots.txt", "User-agent: *\nDisallow: /\n");
 
-        build(root, false, false).unwrap();
+        build(root, false, false).await.unwrap();
 
         // robots disabled by default — file should not appear in dist even if in static/
         assert!(!root.join("dist/robots.txt").exists());
     }
 
-    #[test]
-    fn test_build_with_critical_css() {
+    #[tokio::test]
+    async fn test_build_with_critical_css() {
         let tmp = TempDir::new().unwrap();
         let root = tmp.path();
 
@@ -1985,7 +2040,7 @@ enabled = true
 "#,
         );
 
-        build(root, true, false).unwrap();
+        build(root, true, false).await.unwrap();
 
         let html = fs::read_to_string(root.join("dist/index.html")).unwrap();
 
@@ -2001,8 +2056,8 @@ enabled = true
         assert!(html.contains("<noscript>"));
     }
 
-    #[test]
-    fn test_build_critical_css_disabled_by_default() {
+    #[tokio::test]
+    async fn test_build_critical_css_disabled_by_default() {
         let tmp = TempDir::new().unwrap();
         let root = tmp.path();
 
@@ -2036,7 +2091,7 @@ minify = false
 
         write(root, "static/css/style.css", ".hero { color: red; }");
 
-        build(root, true, false).unwrap();
+        build(root, true, false).await.unwrap();
 
         let html = fs::read_to_string(root.join("dist/index.html")).unwrap();
 
@@ -2048,15 +2103,15 @@ minify = false
 
     // --- is_published tests ---
 
-    #[test]
-    fn test_is_published_default() {
+    #[tokio::test]
+    async fn test_is_published_default() {
         let fm = crate::frontmatter::Frontmatter::default();
         let today = chrono::NaiveDate::from_ymd_opt(2026, 3, 18).unwrap();
         assert!(is_published(&fm, today));
     }
 
-    #[test]
-    fn test_is_published_draft() {
+    #[tokio::test]
+    async fn test_is_published_draft() {
         let fm = crate::frontmatter::Frontmatter {
             draft: true,
             ..Default::default()
@@ -2065,8 +2120,8 @@ minify = false
         assert!(!is_published(&fm, today));
     }
 
-    #[test]
-    fn test_is_published_future_date() {
+    #[tokio::test]
+    async fn test_is_published_future_date() {
         let fm = crate::frontmatter::Frontmatter {
             publish_date: Some(chrono::NaiveDate::from_ymd_opt(2026, 4, 1).unwrap()),
             ..Default::default()
@@ -2075,8 +2130,8 @@ minify = false
         assert!(!is_published(&fm, today));
     }
 
-    #[test]
-    fn test_is_published_past_date() {
+    #[tokio::test]
+    async fn test_is_published_past_date() {
         let fm = crate::frontmatter::Frontmatter {
             publish_date: Some(chrono::NaiveDate::from_ymd_opt(2026, 1, 1).unwrap()),
             ..Default::default()
@@ -2085,8 +2140,8 @@ minify = false
         assert!(is_published(&fm, today));
     }
 
-    #[test]
-    fn test_is_published_today() {
+    #[tokio::test]
+    async fn test_is_published_today() {
         let fm = crate::frontmatter::Frontmatter {
             publish_date: Some(chrono::NaiveDate::from_ymd_opt(2026, 3, 18).unwrap()),
             ..Default::default()
@@ -2095,8 +2150,8 @@ minify = false
         assert!(is_published(&fm, today));
     }
 
-    #[test]
-    fn test_is_published_draft_and_future() {
+    #[tokio::test]
+    async fn test_is_published_draft_and_future() {
         let fm = crate::frontmatter::Frontmatter {
             draft: true,
             publish_date: Some(chrono::NaiveDate::from_ymd_opt(2026, 4, 1).unwrap()),
