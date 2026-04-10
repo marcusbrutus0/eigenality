@@ -305,13 +305,93 @@ struct DevRenderContext<'a> {
     rate_limiter: &'a RateLimiterPool,
 }
 
+/// Input for the shared dev post-render pipeline.
+struct DevFinalizeInput<'a> {
+    /// Raw rendered output (still has fragment markers).
+    rendered: &'a str,
+    output_path: &'a std::path::Path,
+    url_path: &'a str,
+    page: &'a PageDef,
+    /// Status banner label. Pass `""` for dynamic pages (renders as a no-op).
+    draft_label: &'a str,
+}
+
+/// Shared post-render pipeline for dev builds.
+///
+/// Strips markers, localizes assets, runs plugins, injects reload script and
+/// status banner, writes the page to disk, and writes any fragment files.
+async fn finalize_page_html_dev(
+    input: DevFinalizeInput<'_>,
+    ctx: &mut DevRenderContext<'_>,
+) -> Result<()> {
+    use crate::build::fragments;
+
+    let full_html = fragments::strip_fragment_markers(input.rendered);
+    let no_skip = HashSet::new();
+    let full_html = assets::localize_assets(
+        &full_html,
+        &ctx.config.assets,
+        ctx.asset_cache,
+        ctx.asset_client,
+        ctx.dist_dir,
+        &no_skip,
+        ctx.rate_limiter,
+    ).await
+    .wrap_err_with(|| format!("Failed to localize assets for '{}'", input.url_path))?;
+    let full_html = ctx.plugin_registry.post_render_html(full_html, input.url_path, ctx.dist_dir)?;
+    let full_html = inject::inject_reload_script(&full_html);
+    let full_html = inject::inject_status_banner(&full_html, input.draft_label);
+
+    let full_path = ctx.dist_dir.join(input.output_path);
+    if let Some(parent) = full_path.parent() {
+        tokio::fs::create_dir_all(parent).await?;
+    }
+    tokio::fs::write(&full_path, &full_html).await?;
+
+    // Write fragments (also localize assets).
+    if ctx.config.build.fragments {
+        let frags = fragments::extract_fragments(input.rendered);
+        let frags: Vec<_> = match &input.page.frontmatter.fragment_blocks {
+            Some(blocks) => frags.into_iter().filter(|f| blocks.contains(&f.block_name)).collect(),
+            None => frags,
+        };
+        if !frags.is_empty() {
+            let mut localized_frags = Vec::with_capacity(frags.len());
+            for frag in &frags {
+                let localized_html = assets::localize_assets(
+                    &frag.html,
+                    &ctx.config.assets,
+                    ctx.asset_cache,
+                    ctx.asset_client,
+                    ctx.dist_dir,
+                    &no_skip,
+                    ctx.rate_limiter,
+                ).await?;
+                localized_frags.push(fragments::Fragment {
+                    block_name: frag.block_name.clone(),
+                    html: localized_html,
+                });
+            }
+            fragments::write_fragments(
+                ctx.dist_dir,
+                input.output_path,
+                &localized_frags,
+                &ctx.config.build.content_block,
+                &ctx.config.build.fragment_dir,
+                &ctx.config.build.oob_blocks,
+            )?;
+        }
+    }
+
+    Ok(())
+}
+
 /// Render a static page with live-reload script injection.
 async fn render_static_page_dev(
     page: &PageDef,
     ctx: &mut DevRenderContext<'_>,
 ) -> Result<RenderedPage> {
     use crate::build::context::{self, PageMeta};
-    use crate::build::fragments;
 
     let tmpl_name = page.template_path.to_string_lossy().to_string();
 
@@ -334,7 +414,6 @@ async fn render_static_page_dev(
         .unwrap_or(false);
 
     let meta = PageMeta::new(&url_path, &output_path, ctx.config, ctx.build_time);
-
     let tpl_ctx = context::build_page_context(ctx.config, ctx.global_data, &page_data, meta, None);
 
     let tmpl = ctx.env
@@ -347,10 +426,7 @@ async fn render_static_page_dev(
             let te = TemplateError::from_minijinja(&err, &tmpl_name, None);
             let console_msg = te.format_console(&tmpl_name, None);
             let error_html = te.to_error_html(&tmpl_name, None);
-
-            // Write the error page to the output location and to _error.html sentinel.
             write_dev_error_pages(ctx.dist_dir, &output_path, &error_html);
-
             eprintln!("{}", console_msg);
             return Err(eyre::eyre!(
                 "Failed to render template '{}': {}",
@@ -359,63 +435,14 @@ async fn render_static_page_dev(
         }
     };
 
-    // Strip markers, localize assets, run plugins, and inject reload script.
-    let full_html = fragments::strip_fragment_markers(&rendered);
-    let no_skip = HashSet::new();
-    let full_html = assets::localize_assets(
-        &full_html,
-        &ctx.config.assets,
-        ctx.asset_cache,
-        ctx.asset_client,
-        ctx.dist_dir,
-        &no_skip,
-        ctx.rate_limiter,
-    ).await
-    .wrap_err_with(|| format!("Failed to localize assets for '{}'", tmpl_name))?;
-    let full_html = ctx.plugin_registry.post_render_html(
-        full_html,
-        &url_path,
-        ctx.dist_dir,
-    )?;
-    let full_html = inject::inject_reload_script(&full_html);
     let draft_label = build_draft_label(&page.frontmatter);
-    let full_html = inject::inject_status_banner(&full_html, &draft_label);
-
-    let full_path = ctx.dist_dir.join(&output_path);
-    if let Some(parent) = full_path.parent() {
-        tokio::fs::create_dir_all(parent).await?;
-    }
-    tokio::fs::write(&full_path, &full_html).await?;
-
-    // Write fragments (also localize assets).
-    if ctx.config.build.fragments {
-        let frags = fragments::extract_fragments(&rendered);
-        let frags: Vec<_> = match &page.frontmatter.fragment_blocks {
-            Some(blocks) => frags
-                .into_iter()
-                .filter(|f| blocks.contains(&f.block_name))
-                .collect(),
-            None => frags,
-        };
-        if !frags.is_empty() {
-            let localized_frags = localize_fragments_dev(
-                &frags,
-                &ctx.config.assets,
-                ctx.asset_cache,
-                ctx.asset_client,
-                ctx.dist_dir,
-                ctx.rate_limiter,
-            ).await?;
-            fragments::write_fragments(
-                ctx.dist_dir,
-                &output_path,
-                &localized_frags,
-                &ctx.config.build.content_block,
-                &ctx.config.build.fragment_dir,
-                &ctx.config.build.oob_blocks,
-            )?;
-        }
-    }
+    finalize_page_html_dev(DevFinalizeInput {
+        rendered: &rendered,
+        output_path: &output_path,
+        url_path: &url_path,
+        page,
+        draft_label: &draft_label,
+    }, ctx).await?;
 
     Ok(RenderedPage {
         url_path,
@@ -452,7 +479,6 @@ async fn render_dynamic_page_dev(
     ctx: &mut DevRenderContext<'_>,
 ) -> Result<Vec<RenderedPage>> {
     use crate::build::context::{self, PageMeta};
-    use crate::build::fragments;
     use eyre::bail;
 
     let tmpl_name = page.template_path.to_string_lossy().to_string();
@@ -536,63 +562,13 @@ async fn render_dynamic_page_dev(
             }
         };
 
-        // Strip markers, localize assets, run plugins, and inject reload script.
-        let full_html = fragments::strip_fragment_markers(&rendered);
-        let no_skip = HashSet::new();
-        let full_html = assets::localize_assets(
-            &full_html,
-            &ctx.config.assets,
-            ctx.asset_cache,
-            ctx.asset_client,
-            ctx.dist_dir,
-            &no_skip,
-            ctx.rate_limiter,
-        ).await
-        .wrap_err_with(|| {
-            format!("Failed to localize assets for '{}' slug '{}'", tmpl_name, slug)
-        })?;
-        let full_html = ctx.plugin_registry.post_render_html(
-            full_html,
-            &url_path,
-            ctx.dist_dir,
-        )?;
-        let full_html = inject::inject_reload_script(&full_html);
-
-        let full_path = ctx.dist_dir.join(&output_path);
-        if let Some(parent) = full_path.parent() {
-            tokio::fs::create_dir_all(parent).await?;
-        }
-        tokio::fs::write(&full_path, &full_html).await?;
-
-        // Write fragments (also localize assets).
-        if ctx.config.build.fragments {
-            let frags = fragments::extract_fragments(&rendered);
-            let frags: Vec<_> = match &page.frontmatter.fragment_blocks {
-                Some(blocks) => frags
-                    .into_iter()
-                    .filter(|f| blocks.contains(&f.block_name))
-                    .collect(),
-                None => frags,
-            };
-            if !frags.is_empty() {
-                let localized_frags = localize_fragments_dev(
-                    &frags,
-                    &ctx.config.assets,
-                    ctx.asset_cache,
-                    ctx.asset_client,
-                    ctx.dist_dir,
-                    ctx.rate_limiter,
-                ).await?;
-                fragments::write_fragments(
-                    ctx.dist_dir,
-                    &output_path,
-                    &localized_frags,
-                    &ctx.config.build.content_block,
-                    &ctx.config.build.fragment_dir,
-                    &ctx.config.build.oob_blocks,
-                )?;
-            }
-        }
+        finalize_page_html_dev(DevFinalizeInput {
+            rendered: &rendered,
+            output_path: &output_path,
+            url_path: &url_path,
+            page,
+            draft_label: "",
+        }, ctx).await?;
 
         rendered_pages.push(RenderedPage {
             url_path,
@@ -605,31 +581,3 @@ async fn render_dynamic_page_dev(
     Ok(rendered_pages)
 }
 
-/// Localize assets in fragment HTML for dev builds.
-async fn localize_fragments_dev(
-    frags: &[crate::build::fragments::Fragment],
-    assets_config: &crate::config::AssetsConfig,
-    asset_cache: &mut AssetCache,
-    asset_client: &reqwest::Client,
-    dist_dir: &Path,
-    rate_limiter: &RateLimiterPool,
-) -> Result<Vec<crate::build::fragments::Fragment>> {
-    let no_skip = HashSet::new();
-    let mut result = Vec::with_capacity(frags.len());
-    for frag in frags {
-        let localized_html = assets::localize_assets(
-            &frag.html,
-            assets_config,
-            asset_cache,
-            asset_client,
-            dist_dir,
-            &no_skip,
-            rate_limiter,
-        ).await?;
-        result.push(crate::build::fragments::Fragment {
-            block_name: frag.block_name.clone(),
-            html: localized_html,
-        });
-    }
-    Ok(result)
-}
