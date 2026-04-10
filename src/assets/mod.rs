@@ -21,3 +21,4 @@ mod rewrite;
 pub use html_rewrite::optimize_and_rewrite_images;
 pub use html_rewrite::rewrite_css_background_images;
 pub use rewrite::localize_assets;
+pub use rewrite::{check_asset_cache, download_missing_assets, store_and_rewrite_assets};

@@ -24,7 +24,6 @@ static ENV_VAR_RE: LazyLock<Regex> =
 static REMAINING_INTERP_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"\{\{.*?\}\}").unwrap());
 
-use crate::build::rate_limit::RateLimiterPool;
 use crate::frontmatter::{DataQuery, Frontmatter};
 use crate::plugins::registry::PluginRegistry;
 

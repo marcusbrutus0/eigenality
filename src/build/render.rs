@@ -17,6 +17,8 @@ use crate::assets::cache::AssetCache;
 use crate::assets::images::ImageCache;
 use crate::config::SiteConfig;
 use crate::data::{self, DataFetcher};
+use crate::assets::{check_asset_cache, download_missing_assets, store_and_rewrite_assets};
+use crate::build::source_asset::{check_source_asset_cache, download_source_assets, store_source_assets_and_rewrite};
 use crate::discovery::{self, PageDef, PageType};
 use crate::plugins::registry::{self, PluginRegistry};
 use crate::template;
@@ -422,28 +424,40 @@ async fn finalize_page_html(input: FinalizeInput<'_>, ctx: &BuildContext) -> Res
 
     let full_html = fragments::strip_fragment_markers(input.rendered);
 
-    // Localize remote assets and resolve authenticated source assets under one lock.
+    // Localize remote assets and resolve authenticated source assets.
+    // Three-phase split: check (lock) → download (no lock) → store+rewrite (lock).
+    let dist_assets_dir = dist_dir.join("assets");
+
+    let (asset_to_download, asset_already_cached) = {
+        let cache = ctx.asset_cache.lock().await;
+        check_asset_cache(&cache, &full_html, &config.assets, &input.source_asset_urls)
+    };
+    let (src_to_download, src_already_cached) = {
+        let cache = ctx.asset_cache.lock().await;
+        check_source_asset_cache(&cache, &input.source_requests)
+    };
+
+    // Phase 2: download without holding the lock.
+    let asset_results = download_missing_assets(&ctx.asset_client, asset_to_download, &ctx.rate_limiter).await;
+    let src_results = download_source_assets(&ctx.asset_client, &config.sources, src_to_download, &ctx.rate_limiter).await;
+
+    // Phase 3: store and rewrite — reacquire lock.
     let full_html = {
         let mut cache = ctx.asset_cache.lock().await;
-        let html = assets::localize_assets(
+        let html = store_and_rewrite_assets(
             &full_html,
-            &config.assets,
             &mut cache,
-            &ctx.asset_client,
-            dist_dir,
-            &input.source_asset_urls,
-            &ctx.rate_limiter,
+            asset_results,
+            asset_already_cached,
+            &dist_assets_dir,
         ).await
         .wrap_err_with(|| format!("Failed to localize assets for {}", input.label))?;
-
-        source_asset::resolve_source_assets(
+        store_source_assets_and_rewrite(
             &html,
-            &input.source_requests,
-            &config.sources,
             &mut cache,
-            &ctx.asset_client,
-            dist_dir,
-            &ctx.rate_limiter,
+            src_results,
+            src_already_cached,
+            &dist_assets_dir,
         ).await
         .wrap_err_with(|| format!("Failed to resolve source assets for {}", input.label))?
     };
@@ -597,14 +611,15 @@ async fn render_static_page(
     let tmpl_name = page.template_path.to_string_lossy().to_string();
     let config = &*ctx.config;
 
-    // 1. Resolve data queries.
+    // 1. Resolve data queries — releases fetcher mutex before each HTTP request.
     ctx.data_query_count.fetch_add(page.frontmatter.data.len() as u32, Ordering::Relaxed);
-    let page_data = {
-        let mut fetcher = ctx.fetcher.lock().await;
-        data::resolve_page_data(&page.frontmatter, &mut fetcher, Some(&ctx.plugin_registry))
-            .await
-            .wrap_err_with(|| format!("Failed to resolve data for template '{}'", tmpl_name))?
-    };
+    let page_data = data::resolve_page_data_unlocked(
+        &page.frontmatter,
+        &ctx.fetcher,
+        Some(&ctx.plugin_registry),
+    )
+    .await
+    .wrap_err_with(|| format!("Failed to resolve data for template '{}'", tmpl_name))?;
 
     let stem = page.template_path.file_stem().unwrap_or_default();
     let output_path = if config.build.clean_urls && stem != "index" && stem != "404" {
@@ -698,14 +713,15 @@ async fn render_dynamic_page(
     let slug_field = &page.frontmatter.slug_field;
     let config = &*ctx.config;
 
-    // 1. Fetch collection.
+    // 1. Fetch collection — releases fetcher mutex before HTTP.
     ctx.data_query_count.fetch_add(1, Ordering::Relaxed);
-    let items = {
-        let mut fetcher = ctx.fetcher.lock().await;
-        data::resolve_dynamic_page_data(&page.frontmatter, &mut fetcher, Some(&ctx.plugin_registry))
-            .await
-            .wrap_err_with(|| format!("Failed to fetch collection for template '{}'", tmpl_name))?
-    };
+    let items = data::resolve_dynamic_page_data_unlocked(
+        &page.frontmatter,
+        &ctx.fetcher,
+        Some(&ctx.plugin_registry),
+    )
+    .await
+    .wrap_err_with(|| format!("Failed to fetch collection for template '{}'", tmpl_name))?;
 
     if items.is_empty() {
         tracing::debug!("  Dynamic: {} → collection is empty, skipping.", tmpl_name);
@@ -766,24 +782,21 @@ async fn render_dynamic_page(
             );
         }
 
-        // Resolve nested data queries for this item.
+        // Resolve nested data queries for this item — releases fetcher mutex before HTTP.
         ctx.data_query_count.fetch_add(page.frontmatter.data.len() as u32, Ordering::Relaxed);
-        let item_data = {
-            let mut fetcher = ctx.fetcher.lock().await;
-            data::resolve_dynamic_page_data_for_item(
-                &page.frontmatter,
-                item,
-                &mut fetcher,
-                Some(&ctx.plugin_registry),
+        let item_data = data::resolve_dynamic_page_data_for_item_unlocked(
+            &page.frontmatter,
+            item,
+            &ctx.fetcher,
+            Some(&ctx.plugin_registry),
+        )
+        .await
+        .wrap_err_with(|| {
+            format!(
+                "Failed to resolve data for item '{}' in template '{}'",
+                slug, tmpl_name,
             )
-            .await
-            .wrap_err_with(|| {
-                format!(
-                    "Failed to resolve data for item '{}' in template '{}'",
-                    slug, tmpl_name,
-                )
-            })?
-        };
+        })?;
 
         let output_path = if config.build.clean_urls {
             page.output_dir.join(&slug).join("index.html")
@@ -888,18 +901,25 @@ async fn localize_fragments(
     skip_urls: &HashSet<String>,
     pool: &RateLimiterPool,
 ) -> Result<Vec<fragments::Fragment>> {
+    let dist_assets_dir = dist_dir.join("assets");
     let mut result = Vec::with_capacity(frags.len());
     for frag in frags {
+        // Check phase: identify which URLs still need downloading.
+        let (to_download, already_cached) = {
+            let cache = asset_cache.lock().await;
+            check_asset_cache(&cache, &frag.html, assets_config, skip_urls)
+        };
+        // Download phase: no lock held.
+        let download_results = download_missing_assets(asset_client, to_download, pool).await;
+        // Store + rewrite phase: reacquire lock.
         let localized_html = {
             let mut cache = asset_cache.lock().await;
-            assets::localize_assets(
+            store_and_rewrite_assets(
                 &frag.html,
-                assets_config,
                 &mut cache,
-                asset_client,
-                dist_dir,
-                skip_urls,
-                pool,
+                download_results,
+                already_cached,
+                &dist_assets_dir,
             ).await?
         };
         result.push(fragments::Fragment {
