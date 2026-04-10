@@ -56,4 +56,6 @@ runs:
       if: ${{ inputs.build == 'true' }}
       shell: bash
       working-directory: ${{ inputs.source }}
-      run: eigen build ${{ inputs.args }}
+      env:
+        EIGEN_ARGS: ${{ inputs.args }}
+      run: eigen build $EIGEN_ARGS
