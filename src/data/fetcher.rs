@@ -14,6 +14,59 @@ use crate::plugins::registry::PluginRegistry;
 
 use super::transforms::apply_transforms;
 
+/// Result of `DataFetcher::check_source_cache`.
+///
+/// Either the value is already in the in-memory cache (Hit), or the caller
+/// must execute an HTTP request with the prepared URL and headers (Miss).
+#[derive(Debug)]
+pub enum SourceCacheCheck {
+    /// In-memory cache hit — value is ready.
+    Hit(Value),
+    /// Cache miss — caller should call `execute_source_request` then `store_source_result`.
+    Miss {
+        cache_key: String,
+        full_url: String,
+        /// Source headers plus any conditional HTTP headers (If-None-Match etc.).
+        headers: reqwest::header::HeaderMap,
+    },
+}
+
+/// Result of `DataFetcher::store_source_result`.
+pub enum StoreResult {
+    /// Value parsed and stored successfully.
+    Value(Value),
+    /// 304 received but disk-cached body was corrupt; retry with these fresh source headers.
+    RetryNeeded { fresh_headers: reqwest::header::HeaderMap },
+}
+
+/// Execute an HTTP request for a data source, with no mutex held.
+///
+/// `client` and `rate_limiter` are cloned from `DataFetcher` during the check
+/// phase (both `Arc`-backed, cheap to clone) and passed here after the lock is
+/// released.
+pub async fn execute_source_request(
+    client: &reqwest::Client,
+    rate_limiter: &Arc<RateLimiterPool>,
+    method: &HttpMethod,
+    full_url: &str,
+    headers: reqwest::header::HeaderMap,
+    body: Option<&serde_json::Value>,
+) -> Result<reqwest::Response> {
+    rate_limiter.wait(full_url).await;
+    let response = match method {
+        HttpMethod::Get => client.get(full_url).headers(headers).send().await,
+        HttpMethod::Post => {
+            let mut req = client.post(full_url).headers(headers);
+            if let Some(b) = body {
+                req = req.json(b);
+            }
+            req.send().await
+        }
+    }
+    .wrap_err_with(|| format!("HTTP request failed for {}", full_url))?;
+    Ok(response)
+}
+
 /// Fetches and caches data from local files and remote HTTP sources.
 pub struct DataFetcher {
     /// Source definitions from `site.toml`.
@@ -110,8 +163,126 @@ impl DataFetcher {
         Ok(result)
     }
 
+    /// Phase 1: check in-memory cache and gather conditional-request headers.
+    ///
+    /// Returns `Hit(value)` if the value is already cached, or `Miss { … }` with
+    /// the full URL and headers needed for `execute_source_request`.
+    ///
+    /// The caller should also clone `self.client` and `Arc::clone(&self.rate_limiter)`
+    /// while holding the lock, then release the lock before calling
+    /// `execute_source_request`.
+    pub fn check_source_cache(
+        &self,
+        source_name: &str,
+        path: &str,
+        method: &HttpMethod,
+        body: Option<&serde_json::Value>,
+    ) -> Result<SourceCacheCheck> {
+        let source = self.sources.get(source_name).ok_or_else(|| {
+            eyre::eyre!(
+                "Source '{}' not found in site.toml. Available: {}",
+                source_name,
+                self.sources.keys().cloned().collect::<Vec<_>>().join(", ")
+            )
+        })?;
+
+        let full_url = format!(
+            "{}{}",
+            source.url.trim_end_matches('/'),
+            if path.starts_with('/') {
+                path.to_string()
+            } else {
+                format!("/{}", path)
+            }
+        );
+
+        let cache_key = match method {
+            HttpMethod::Get => format!("GET:{}", full_url),
+            HttpMethod::Post => {
+                let body_hash = match body {
+                    Some(b) => {
+                        let body_str = serde_json::to_string(b).unwrap_or_default();
+                        crate::data::cache::cache_key_hash(&body_str)
+                    }
+                    None => String::new(),
+                };
+                format!("POST:{}:{}", full_url, body_hash)
+            }
+        };
+
+        if let Some(cached) = self.url_cache.get(&cache_key) {
+            return Ok(SourceCacheCheck::Hit(cached.clone()));
+        }
+
+        let mut headers = Self::build_source_headers(source)?;
+
+        if let Some(meta) = self.data_cache.as_ref().and_then(|dc| dc.get(&cache_key)) {
+            if let Some(ref etag) = meta.etag {
+                if let Ok(hv) = reqwest::header::HeaderValue::from_str(etag) {
+                    headers.insert(reqwest::header::IF_NONE_MATCH, hv);
+                }
+            }
+            if let Some(ref lm) = meta.last_modified {
+                if let Ok(hv) = reqwest::header::HeaderValue::from_str(lm) {
+                    headers.insert(reqwest::header::IF_MODIFIED_SINCE, hv);
+                }
+            }
+            tracing::debug!("Conditional request for {} (etag: {:?})", full_url, meta.etag);
+        }
+
+        Ok(SourceCacheCheck::Miss { cache_key, full_url, headers })
+    }
+
+    /// Phase 3: parse the HTTP response and store in both caches.
+    ///
+    /// Handles the 200 success path (parse JSON, persist to disk cache, insert
+    /// into url_cache) and the 304 path (read from disk cache).  If the
+    /// disk-cached body for a 304 is corrupt, returns `StoreResult::RetryNeeded`
+    /// with fresh source headers so the caller can do another HTTP round-trip
+    /// without holding the lock.
+    pub async fn store_source_result(
+        &mut self,
+        source_name: &str,
+        cache_key: String,
+        full_url: &str,
+        response: reqwest::Response,
+    ) -> Result<StoreResult> {
+        let status = response.status();
+
+        if status == reqwest::StatusCode::NOT_MODIFIED {
+            if let Some(body_bytes) = self.data_cache.as_ref().and_then(|dc| dc.read(&cache_key)) {
+                match serde_json::from_slice::<Value>(&body_bytes) {
+                    Ok(value) => {
+                        tracing::debug!("Data cache hit (304): {}", cache_key);
+                        self.url_cache.insert(cache_key, value.clone());
+                        return Ok(StoreResult::Value(value));
+                    }
+                    Err(e) => {
+                        tracing::warn!(
+                            "304 but cached body failed to parse for {}: {}. Re-fetching.",
+                            full_url, e,
+                        );
+                        let source = self.sources.get(source_name).ok_or_else(|| {
+                            eyre::eyre!("Source '{}' disappeared during retry", source_name)
+                        })?;
+                        let fresh_headers = Self::build_source_headers(source)?;
+                        return Ok(StoreResult::RetryNeeded { fresh_headers });
+                    }
+                }
+            }
+            bail!("HTTP 304 from {} but no cached body available", full_url);
+        }
+
+        if !status.is_success() {
+            bail!("HTTP {} from {}", status, full_url);
+        }
+
+        let value = self.handle_success_response(response, cache_key, full_url).await?;
+        Ok(StoreResult::Value(value))
+    }
+
     /// Load a local file from `_data/`.
-    fn fetch_file(&mut self, file_path: &str) -> Result<Value> {
+    pub(crate) fn fetch_file(&mut self, file_path: &str) -> Result<Value> {
         if let Some(cached) = self.file_cache.get(file_path) {
             return Ok(cached.clone());
         }
@@ -926,5 +1097,190 @@ mod tests {
         assert_eq!(result2, serde_json::json!([{"id": 1}]));
 
         server.join().unwrap();
+    }
+
+    // --- check_source_cache / execute_source_request / store_source_result tests ---
+
+    /// `check_source_cache` returns Hit when the value is in the in-memory cache.
+    #[test]
+    fn check_source_cache_returns_hit_when_cached() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path();
+
+        let mut sources = HashMap::new();
+        sources.insert(
+            "api".to_string(),
+            SourceConfig {
+                url: "http://api.example.com".to_string(),
+                headers: HashMap::new(),
+                rate_limit: None,
+            },
+        );
+        let pool = Arc::new(RateLimiterPool::new(None, &HashMap::new()));
+        let mut fetcher = DataFetcher::new(&sources, root, None, pool);
+
+        // Pre-populate the in-memory url_cache.
+        let key = "GET:http://api.example.com/posts".to_string();
+        fetcher.url_cache.insert(key, json!([{"id": 1}]));
+
+        let result = fetcher
+            .check_source_cache("api", "/posts", &HttpMethod::Get, None)
+            .unwrap();
+
+        match result {
+            SourceCacheCheck::Hit(value) => assert_eq!(value, json!([{"id": 1}])),
+            SourceCacheCheck::Miss { .. } => panic!("expected Hit, got Miss"),
+        }
+    }
+
+    /// `check_source_cache` returns Miss for an unknown URL (no cache).
+    #[test]
+    fn check_source_cache_returns_miss_when_not_cached() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path();
+
+        let mut sources = HashMap::new();
+        sources.insert(
+            "api".to_string(),
+            SourceConfig {
+                url: "http://api.example.com".to_string(),
+                headers: HashMap::new(),
+                rate_limit: None,
+            },
+        );
+        let pool = Arc::new(RateLimiterPool::new(None, &HashMap::new()));
+        let fetcher = DataFetcher::new(&sources, root, None, pool);
+
+        let result = fetcher
+            .check_source_cache("api", "/items", &HttpMethod::Get, None)
+            .unwrap();
+
+        match result {
+            SourceCacheCheck::Miss { cache_key, full_url, .. } => {
+                assert_eq!(full_url, "http://api.example.com/items");
+                assert_eq!(cache_key, "GET:http://api.example.com/items");
+            }
+            SourceCacheCheck::Hit(_) => panic!("expected Miss, got Hit"),
+        }
+    }
+
+    /// `check_source_cache` errors when source name is unknown.
+    #[test]
+    fn check_source_cache_errors_on_unknown_source() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path();
+        let pool = Arc::new(RateLimiterPool::new(None, &HashMap::new()));
+        let fetcher = DataFetcher::new(&HashMap::new(), root, None, pool);
+
+        let result = fetcher.check_source_cache("missing", "/x", &HttpMethod::Get, None);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("missing"));
+    }
+
+    /// `execute_source_request` sends the correct auth header and returns the body.
+    #[tokio::test]
+    async fn execute_source_request_sends_auth_and_returns_body() {
+        use reqwest::header::{AUTHORIZATION, HeaderMap, HeaderValue};
+        use std::thread;
+
+        let server = tiny_http::Server::http("127.0.0.1:0").expect("bind");
+        let addr = server.server_addr().to_ip().expect("addr");
+        let url = format!("http://{}/data", addr);
+
+        thread::spawn(move || {
+            if let Ok(Some(req)) = server.recv_timeout(std::time::Duration::from_secs(5)) {
+                let auth_ok = req
+                    .headers()
+                    .iter()
+                    .any(|h| h.field.equiv("Authorization") && h.value.as_str() == "Bearer tok");
+                let body: &[u8] = if auth_ok { b"[1,2,3]" } else { b"nope" };
+                let status = if auth_ok { 200 } else { 401 };
+                let _ = req.respond(tiny_http::Response::new(
+                    tiny_http::StatusCode(status),
+                    vec![],
+                    std::io::Cursor::new(body),
+                    Some(body.len()),
+                    None,
+                ));
+            }
+        });
+
+        let pool = Arc::new(RateLimiterPool::new(None, &HashMap::new()));
+        let client = reqwest::Client::new();
+        let mut headers = HeaderMap::new();
+        headers.insert(AUTHORIZATION, HeaderValue::from_static("Bearer tok"));
+
+        let resp = execute_source_request(
+            &client, &pool, &HttpMethod::Get, &url, headers, None,
+        )
+        .await
+        .expect("request should succeed");
+
+        assert!(resp.status().is_success());
+        let bytes = resp.bytes().await.unwrap();
+        assert_eq!(&bytes[..], b"[1,2,3]");
+    }
+
+    /// `store_source_result` parses a 200 response and inserts into url_cache.
+    #[tokio::test]
+    async fn store_source_result_stores_200_response() {
+        use std::thread;
+
+        let server = tiny_http::Server::http("127.0.0.1:0").expect("bind");
+        let addr = server.server_addr().to_ip().expect("addr");
+        let url = format!("http://{}/data", addr);
+
+        thread::spawn(move || {
+            if let Ok(Some(req)) = server.recv_timeout(std::time::Duration::from_secs(5)) {
+                let body: &[u8] = b"[{\"id\":42}]";
+                let ct = tiny_http::Header::from_bytes(
+                    &b"Content-Type"[..],
+                    &b"application/json"[..],
+                ).expect("header");
+                let _ = req.respond(tiny_http::Response::new(
+                    tiny_http::StatusCode(200),
+                    vec![ct],
+                    std::io::Cursor::new(body),
+                    Some(body.len()),
+                    None,
+                ));
+            }
+        });
+
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path();
+        let mut sources = HashMap::new();
+        sources.insert(
+            "api".to_string(),
+            SourceConfig {
+                url: format!("http://{}", addr),
+                headers: HashMap::new(),
+                rate_limit: None,
+            },
+        );
+        let pool = Arc::new(RateLimiterPool::new(None, &HashMap::new()));
+        let mut fetcher = DataFetcher::new(&sources, root, None, pool.clone());
+
+        let client = reqwest::Client::new();
+        let resp = execute_source_request(
+            &client, &pool, &HttpMethod::Get, &url,
+            reqwest::header::HeaderMap::new(), None,
+        )
+        .await
+        .expect("request");
+
+        let cache_key = format!("GET:{}", url);
+        let result = fetcher
+            .store_source_result("api", cache_key.clone(), &url, resp)
+            .await
+            .expect("store");
+
+        match result {
+            StoreResult::Value(v) => assert_eq!(v, json!([{"id": 42}])),
+            StoreResult::RetryNeeded { .. } => panic!("unexpected retry"),
+        }
+
+        // Value should now be in the in-memory url_cache.
+        assert!(fetcher.url_cache.contains_key(&cache_key));
     }
 }
