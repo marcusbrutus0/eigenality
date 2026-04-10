@@ -77,12 +77,14 @@ pub struct DataFetcher {
     file_cache: HashMap<String, Value>,
     /// Path to the project's `_data/` directory.
     data_dir: PathBuf,
-    /// HTTP client (reused across requests).
-    client: reqwest::Client,
+    /// HTTP client (reused across requests). `pub(crate)` so `fetch_unlocked`
+    /// in `query.rs` can clone it during the check phase (before releasing the lock).
+    pub(crate) client: reqwest::Client,
     /// Optional disk cache for conditional HTTP requests.
     data_cache: Option<super::cache::DataCache>,
-    /// Per-host rate limiter pool shared across all requests.
-    rate_limiter: Arc<RateLimiterPool>,
+    /// Per-host rate limiter pool. `pub(crate)` so `fetch_unlocked` can clone
+    /// the `Arc` during the check phase (before releasing the lock).
+    pub(crate) rate_limiter: Arc<RateLimiterPool>,
 }
 
 impl DataFetcher {

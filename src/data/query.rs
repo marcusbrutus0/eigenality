@@ -11,7 +11,9 @@ use eyre::{bail, Result, WrapErr};
 use regex::Regex;
 use serde_json::Value;
 use std::collections::HashMap;
-use std::sync::LazyLock;
+use std::sync::{Arc, LazyLock};
+
+use tokio::sync::Mutex as AsyncMutex;
 
 static INTERPOLATION_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"\{\{\s*([A-Za-z_][A-Za-z0-9_.]*)\s*\}\}").unwrap());
@@ -22,10 +24,14 @@ static ENV_VAR_RE: LazyLock<Regex> =
 static REMAINING_INTERP_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"\{\{.*?\}\}").unwrap());
 
+use crate::build::rate_limit::RateLimiterPool;
 use crate::frontmatter::{DataQuery, Frontmatter};
 use crate::plugins::registry::PluginRegistry;
 
-use super::fetcher::DataFetcher;
+use super::fetcher::{
+    DataFetcher, SourceCacheCheck, StoreResult, execute_source_request,
+};
+use super::transforms::apply_transforms;
 
 /// Resolve all `data` queries in a static page's frontmatter.
 ///
@@ -385,6 +391,213 @@ fn verify_no_remaining_interpolation(query: &DataQuery, query_name: &str) -> Res
     }
 
     Ok(())
+}
+
+// ── Unlocked variants for concurrent page rendering ──────────────────────────
+//
+// These functions take `Arc<AsyncMutex<DataFetcher>>` instead of
+// `&mut DataFetcher`, releasing the mutex before every HTTP `.await` point.
+
+/// Resolve all `data` queries in a static page's frontmatter, releasing the
+/// fetcher mutex before each HTTP request.
+pub async fn resolve_page_data_unlocked(
+    frontmatter: &Frontmatter,
+    fetcher: &Arc<AsyncMutex<DataFetcher>>,
+    plugin_registry: Option<&PluginRegistry>,
+) -> Result<HashMap<String, Value>> {
+    let mut result = HashMap::new();
+    for (name, query) in &frontmatter.data {
+        let value = fetch_unlocked(fetcher, query, plugin_registry)
+            .await
+            .wrap_err_with(|| format!("Failed to resolve data query '{}'", name))?;
+        result.insert(name.clone(), value);
+    }
+    Ok(result)
+}
+
+/// Fetch the collection for a dynamic page, releasing the fetcher mutex
+/// before the HTTP request.
+pub async fn resolve_dynamic_page_data_unlocked(
+    frontmatter: &Frontmatter,
+    fetcher: &Arc<AsyncMutex<DataFetcher>>,
+    plugin_registry: Option<&PluginRegistry>,
+) -> Result<Vec<Value>> {
+    let collection_query = frontmatter
+        .collection
+        .as_ref()
+        .ok_or_else(|| eyre::eyre!("Dynamic page has no `collection` in frontmatter"))?;
+
+    let collection = fetch_unlocked(fetcher, collection_query, plugin_registry)
+        .await
+        .wrap_err("Failed to fetch collection")?;
+
+    match collection {
+        Value::Array(items) => Ok(items),
+        _ => Ok(Vec::new()),
+    }
+}
+
+/// Resolve per-item `data` queries for a single dynamic page item, releasing
+/// the fetcher mutex before each HTTP request.
+pub async fn resolve_dynamic_page_data_for_item_unlocked(
+    frontmatter: &Frontmatter,
+    item: &Value,
+    fetcher: &Arc<AsyncMutex<DataFetcher>>,
+    plugin_registry: Option<&PluginRegistry>,
+) -> Result<HashMap<String, Value>> {
+    let item_as = &frontmatter.item_as;
+    let mut result = HashMap::new();
+
+    for (name, query) in &frontmatter.data {
+        let interpolated = interpolate_query(query, item, item_as).wrap_err_with(|| {
+            format!("Failed to interpolate data query '{}' for current item", name)
+        })?;
+        verify_no_remaining_interpolation(&interpolated, name)?;
+
+        let value = fetch_unlocked(fetcher, &interpolated, plugin_registry)
+            .await
+            .wrap_err_with(|| format!("Failed to resolve data query '{}'", name))?;
+        result.insert(name.clone(), value);
+    }
+
+    Ok(result)
+}
+
+/// Fetch a single `DataQuery`, releasing the fetcher mutex before HTTP.
+///
+/// For file queries (synchronous FS reads), the lock is held for the
+/// duration — no `.await` is involved. For source queries, the pattern is:
+///
+/// 1. Acquire lock → check in-memory cache / build conditional headers → release.
+/// 2. HTTP request with no mutex held.
+/// 3. Acquire lock → store result → release.
+///
+/// If a 304 response has a corrupt disk-cached body, retries once (step 2→3).
+async fn fetch_unlocked(
+    fetcher: &Arc<AsyncMutex<DataFetcher>>,
+    query: &DataQuery,
+    plugin_registry: Option<&PluginRegistry>,
+) -> Result<Value> {
+    // Warn about GET + body (mirrors the check in DataFetcher::fetch).
+    if matches!(query.method, crate::frontmatter::HttpMethod::Get) && query.body.is_some() {
+        tracing::warn!(
+            "Data query has 'body' set but method is GET — body will be ignored. \
+             Did you mean to set method: post?"
+        );
+    }
+
+    // File queries: synchronous FS — hold lock for the brief read.
+    if let Some(ref file) = query.file {
+        let mut f = fetcher.lock().await;
+        let raw = f.fetch_file(file)?;
+        return apply_post_fetch(raw, query, plugin_registry);
+    }
+
+    // Source queries: three-phase lock split.
+    let source_name = query.source.as_deref().ok_or_else(|| {
+        eyre::eyre!(
+            "DataQuery has neither `file` nor `source` set. \
+             At least one must be provided."
+        )
+    })?;
+    let path = query.path.as_deref().unwrap_or("");
+
+    // Phase 1: check cache under lock; clone Arc handles for HTTP.
+    let (check, client, rate_limiter) = {
+        let f = fetcher.lock().await;
+        let check =
+            f.check_source_cache(source_name, path, &query.method, query.body.as_ref())?;
+        let client = f.client.clone();
+        let rate_limiter = Arc::clone(&f.rate_limiter);
+        (check, client, rate_limiter)
+    }; // lock released here
+
+    let (cache_key, full_url, mut headers) = match check {
+        SourceCacheCheck::Hit(value) => {
+            return apply_post_fetch(value, query, plugin_registry);
+        }
+        SourceCacheCheck::Miss { cache_key, full_url, headers } => {
+            (cache_key, full_url, headers)
+        }
+    };
+
+    // Phase 2: HTTP with no mutex held.
+    let mut response = execute_source_request(
+        &client,
+        &rate_limiter,
+        &query.method,
+        &full_url,
+        headers,
+        query.body.as_ref(),
+    )
+    .await?;
+
+    // Phase 3: store under lock, retrying if the disk cache is corrupt.
+    loop {
+        let store_result = {
+            let mut f = fetcher.lock().await;
+            f.store_source_result(source_name, cache_key.clone(), &full_url, response)
+                .await?
+        }; // lock released here
+
+        match store_result {
+            StoreResult::Value(value) => {
+                return apply_post_fetch(value, query, plugin_registry);
+            }
+            StoreResult::RetryNeeded { fresh_headers } => {
+                // Corrupt 304 disk cache — retry HTTP without the lock.
+                headers = fresh_headers;
+                response = execute_source_request(
+                    &client,
+                    &rate_limiter,
+                    &query.method,
+                    &full_url,
+                    headers,
+                    query.body.as_ref(),
+                )
+                .await?;
+            }
+        }
+    }
+}
+
+/// Apply root extraction, plugin transforms, and filter/sort/limit to a
+/// fetched value. Pure CPU — no I/O, no lock needed.
+fn apply_post_fetch(
+    raw: Value,
+    query: &DataQuery,
+    plugin_registry: Option<&PluginRegistry>,
+) -> Result<Value> {
+    let source_name = query.source.as_deref();
+    let query_path = query.path.as_deref();
+
+    let extracted = if let Some(ref root) = query.root {
+        // Walk the dot-separated root path into the value.
+        let mut current = &raw;
+        for segment in root.split('.') {
+            match current.get(segment) {
+                Some(inner) => current = inner,
+                None => bail!(
+                    "Root path '{}' not found in data. Failed at segment '{}'. \
+                     Available keys: {}",
+                    root,
+                    segment,
+                    available_fields(current),
+                ),
+            }
+        }
+        current.clone()
+    } else {
+        raw
+    };
+
+    let transformed = if let Some(registry) = plugin_registry {
+        registry.transform_data(extracted, source_name, query_path)?
+    } else {
+        extracted
+    };
+
+    Ok(apply_transforms(transformed, &query.filter, &query.sort, &query.limit))
 }
 
 #[cfg(test)]
@@ -1079,5 +1292,102 @@ mod tests {
         let s = value_to_string(&Value::Number(serde_json::Number::from(n)));
         let parsed: i64 = s.parse().unwrap();
         assert_eq!(parsed, n);
+    }
+
+    // --- resolve_page_data_unlocked tests ---
+
+    #[tokio::test]
+    async fn resolve_page_data_unlocked_file_query() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path();
+        write(root, "_data/nav.yaml", "- label: Home\n  url: /\n");
+
+        let pool = no_op_pool();
+        let fetcher = Arc::new(AsyncMutex::new(
+            DataFetcher::new(&HashMap::new(), root, None, pool),
+        ));
+
+        let fm = Frontmatter {
+            data: {
+                let mut m = HashMap::new();
+                m.insert(
+                    "nav".into(),
+                    DataQuery {
+                        file: Some("nav.yaml".into()),
+                        ..Default::default()
+                    },
+                );
+                m
+            },
+            ..Default::default()
+        };
+
+        let result = resolve_page_data_unlocked(&fm, &fetcher, None)
+            .await
+            .unwrap();
+        assert_eq!(result.len(), 1);
+        assert!(result["nav"].is_array());
+    }
+
+    #[tokio::test]
+    async fn resolve_dynamic_page_data_unlocked_file_query() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path();
+        write(root, "_data/posts.json", r#"[{"id": 1}, {"id": 2}]"#);
+
+        let pool = no_op_pool();
+        let fetcher = Arc::new(AsyncMutex::new(
+            DataFetcher::new(&HashMap::new(), root, None, pool),
+        ));
+
+        let fm = Frontmatter {
+            collection: Some(DataQuery {
+                file: Some("posts.json".into()),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+
+        let items = resolve_dynamic_page_data_unlocked(&fm, &fetcher, None)
+            .await
+            .unwrap();
+        assert_eq!(items.len(), 2);
+        assert_eq!(items[0]["id"], 1);
+    }
+
+    #[tokio::test]
+    async fn resolve_dynamic_page_data_for_item_unlocked_file_query() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path();
+        write(root, "_data/meta.json", r#"{"title": "static"}"#);
+
+        let pool = no_op_pool();
+        let fetcher = Arc::new(AsyncMutex::new(
+            DataFetcher::new(&HashMap::new(), root, None, pool),
+        ));
+
+        let fm = Frontmatter {
+            item_as: "post".into(),
+            data: {
+                let mut m = HashMap::new();
+                m.insert(
+                    "meta".into(),
+                    DataQuery {
+                        file: Some("meta.json".into()),
+                        ..Default::default()
+                    },
+                );
+                m
+            },
+            ..Default::default()
+        };
+
+        let item = json!({"id": 1});
+        let result =
+            resolve_dynamic_page_data_for_item_unlocked(&fm, &item, &fetcher, None)
+                .await
+                .unwrap();
+        assert_eq!(result.len(), 1);
+        assert_eq!(result["meta"]["title"], "static");
     }
 }
