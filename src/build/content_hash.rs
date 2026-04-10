@@ -555,6 +555,23 @@ mod tests {
         assert_eq!(m.len(), 2);
     }
 
+    #[test]
+    fn test_entries_sorted_deterministic() {
+        let mut m = AssetManifest::new();
+        m.insert("/z.css".into(), "/z.h1.css".into());
+        m.insert("/a.js".into(), "/a.h2.js".into());
+        m.insert("/m/style.css".into(), "/m/style.h3.css".into());
+
+        let r1 = m.entries_sorted();
+        let r2 = m.entries_sorted();
+        assert_eq!(r1, r2, "entries_sorted must be deterministic");
+        assert_eq!(r1.len(), 3);
+        // Alphabetical order: /a.js, /m/style.css, /z.css
+        assert_eq!(r1[0].0, "/a.js");
+        assert_eq!(r1[1].0, "/m/style.css");
+        assert_eq!(r1[2].0, "/z.css");
+    }
+
     // --- build_manifest ---
 
     /// Helper to write a file into a temp directory.
