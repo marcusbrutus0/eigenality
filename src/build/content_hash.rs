@@ -609,6 +609,40 @@ mod tests {
     }
 
     #[test]
+    fn test_underscore_files_excluded() {
+        // Platform convention files (e.g. _routes) with a _ prefix that are NOT
+        // in the named default_hash_exclude list must be skipped by the walk-time
+        // check added in fix(content_hash).
+        let tmp = tempfile::TempDir::new().unwrap();
+        let root = tmp.path();
+        let static_dir = root.join("static");
+        let dist_dir = root.join("dist");
+
+        // _routes is not in default_hash_exclude() — only the walk-time check covers it.
+        write_file(&static_dir, "_routes", "# routes");
+        write_file(&dist_dir, "_routes", "# routes");
+        // A normal asset should still be hashed.
+        write_file(&static_dir, "style.css", "body{}");
+        write_file(&dist_dir, "style.css", "body{}");
+
+        let config = hash_config();
+        let manifest = build_manifest(&dist_dir, &static_dir, &config).unwrap();
+
+        // _routes must not appear in the manifest.
+        assert!(
+            manifest.resolve("/_routes") == "/_routes",
+            "_routes must not be hashed (unchanged name means not in manifest)"
+        );
+        // Normal asset must be hashed.
+        assert!(
+            manifest.resolve("/style.css") != "/style.css",
+            "style.css must be hashed"
+        );
+        // The _routes file must still exist at its original path.
+        assert!(dist_dir.join("_routes").exists());
+    }
+
+    #[test]
     fn test_build_manifest_empty_dir() {
         let tmp = tempfile::TempDir::new().unwrap();
         let root = tmp.path();
