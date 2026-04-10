@@ -30,6 +30,8 @@ pub struct PageDef {
     pub output_dir: PathBuf,
     /// Parsed frontmatter from the template.
     pub frontmatter: Frontmatter,
+    /// Raw YAML frontmatter string, used for stable hashing in incremental builds.
+    pub raw_frontmatter: String,
     /// Template body with frontmatter stripped.
     pub template_body: String,
 }
@@ -108,7 +110,9 @@ pub fn discover_pages(project_root: &Path, config: &SiteConfig) -> Result<Vec<Pa
             .wrap_err_with(|| format!("Failed to read template {}", path.display()))?;
 
         let display_path = rel_path.display().to_string();
-        let (fm, body) = frontmatter::extract_frontmatter(&content, &display_path)?;
+        let (raw_yaml_opt, body) = frontmatter::split_frontmatter(&content);
+        let raw_frontmatter = raw_yaml_opt.unwrap_or("").to_string();
+        let fm = frontmatter::parse_frontmatter(raw_yaml_opt.unwrap_or(""), &display_path)?;
 
         // Validate: dynamic pages MUST have a collection.
         if let PageType::Dynamic { ref param_name } = page_type {
@@ -136,6 +140,7 @@ pub fn discover_pages(project_root: &Path, config: &SiteConfig) -> Result<Vec<Pa
             page_type,
             output_dir,
             frontmatter: fm,
+            raw_frontmatter,
             template_body: body.to_string(),
         });
     }
