@@ -188,6 +188,20 @@ pub fn build_manifest(
             continue;
         }
 
+        // Never hash platform convention files (e.g. _headers, _redirects).
+        // Renaming them breaks CDN platform detection silently.
+        // Note: _headers and _redirects are also in default_hash_exclude(); this check
+        // provides forward coverage for any future _-prefixed platform files.
+        if rel_path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .map(|n| n.starts_with('_'))
+            .unwrap_or(false)
+        {
+            tracing::debug!("Content hash: skipping platform file {}", rel_str);
+            continue;
+        }
+
         // The file in dist/ has the same relative path.
         let dist_path = dist_dir.join(rel_path);
         if !dist_path.exists() {
