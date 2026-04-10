@@ -1630,7 +1630,7 @@ not_found = true
 
     write(root, "templates/index.html", "<h1>Home</h1>");
 
-    eigen::build::build(root, false, false).await.unwrap();
+    eigen::build::build(root, false, false, false).await.unwrap();
 
     let path_404 = root.join("dist/404.html");
     assert!(path_404.exists(), "dist/404.html should be created by default");
@@ -1662,7 +1662,7 @@ not_found = false
 
     write(root, "templates/index.html", "<h1>Home</h1>");
 
-    eigen::build::build(root, false, false).await.unwrap();
+    eigen::build::build(root, false, false, false).await.unwrap();
 
     assert!(
         !root.join("dist/404.html").exists(),
@@ -1698,7 +1698,7 @@ not_found = true
     write(root, "templates/index.html", r#"{% extends "_base.html" %}
 {% block content %}<h1>Home</h1>{% endblock %}"#);
 
-    eigen::build::build(root, false, false).await.unwrap();
+    eigen::build::build(root, false, false, false).await.unwrap();
 
     let path_404 = root.join("dist/404.html");
     assert!(path_404.exists(), "dist/404.html should exist");
@@ -1741,7 +1741,7 @@ sitemap = true
     write(root, "templates/index.html", "<h1>Home</h1>");
     write(root, "templates/about.html", "<h1>About</h1>");
 
-    eigen::build::build(root, false, false).await.unwrap();
+    eigen::build::build(root, false, false, false).await.unwrap();
 
     let sitemap = fs::read_to_string(root.join("dist/sitemap.xml")).unwrap();
     // The default 404 page (written directly, not via template rendering) must
@@ -1781,7 +1781,7 @@ clean_urls = true
     write(root, "templates/404.html", r#"{% extends "_base.html" %}
 {% block content %}<h1>Custom 404</h1>{% endblock %}"#);
 
-    eigen::build::build(root, false, false).await.unwrap();
+    eigen::build::build(root, false, false, false).await.unwrap();
 
     // With clean_urls: index goes to index.html, about goes to about/index.html.
     assert!(root.join("dist/index.html").exists(), "index.html should stay as-is");
@@ -1817,7 +1817,7 @@ async fn test_full_build_example_site_includes_404() {
     let site_toml = site_toml.replace("[build]", "[build]\nminify = false");
     fs::write(root.join("site.toml"), site_toml).unwrap();
 
-    eigen::build::build(root, false, false).await.unwrap();
+    eigen::build::build(root, false, false, false).await.unwrap();
 
     let path_404 = root.join("dist/404.html");
     assert!(path_404.exists(), "dist/404.html should be built from example_site template");
@@ -2250,7 +2250,7 @@ status = 302
     write(root, "templates/_base.html", "<html>{% block content %}{% endblock %}</html>");
     write(root, "templates/index.html", "---\n---\n{% extends '_base.html' %}{% block content %}Home{% endblock %}");
 
-    eigen::build::build(root, false, false).await.unwrap();
+    eigen::build::build(root, false, false, false).await.unwrap();
 
     let path = root.join("dist/_redirects");
     assert!(path.exists(), "dist/_redirects should be generated");
@@ -2286,7 +2286,7 @@ minify = false
     write(root, "templates/_base.html", "<html>{% block content %}{% endblock %}</html>");
     write(root, "templates/index.html", "---\n---\n{% extends '_base.html' %}{% block content %}Home{% endblock %}");
 
-    eigen::build::build(root, false, false).await.unwrap();
+    eigen::build::build(root, false, false, false).await.unwrap();
 
     let path = root.join("dist/_redirects");
     assert!(path.exists(), "dist/_redirects should be copied from static/");
@@ -2319,7 +2319,7 @@ to = "/new"
     write(root, "templates/_base.html", "<html>{% block content %}{% endblock %}</html>");
     write(root, "templates/index.html", "---\n---\n{% extends '_base.html' %}{% block content %}Home{% endblock %}");
 
-    let result = eigen::build::build(root, false, false).await;
+    let result = eigen::build::build(root, false, false, false).await;
     assert!(result.is_err(), "Build should fail when both static/_redirects and config rules exist");
 }
 
