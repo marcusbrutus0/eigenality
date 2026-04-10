@@ -700,4 +700,67 @@ mod tests {
         let deleted = delete_orphan_outputs(&prev, &current, &dist).unwrap();
         assert_eq!(deleted, 0);
     }
+
+    #[test]
+    fn test_orphan_dynamic_slug_removed() {
+        // A dynamic template had two slugs in the previous build; the current
+        // build only rendered one. The removed slug's output file must be deleted.
+        let tmp = TempDir::new().unwrap();
+        let dist = tmp.path().join("dist");
+        fs::create_dir_all(dist.join("posts/old-post")).unwrap();
+        fs::create_dir_all(dist.join("posts/kept-post")).unwrap();
+        write(tmp.path(), "dist/posts/old-post/index.html", "old post");
+        write(tmp.path(), "dist/posts/kept-post/index.html", "kept post");
+
+        // Previous manifest: both slugs present.
+        let mut prev = BuildManifest::new_empty();
+        prev.pages.insert(
+            "/posts/old-post/index.html".to_string(),
+            PageRecord {
+                template_path: "posts.html".to_string(),
+                template_hash: "t".to_string(),
+                frontmatter_hash: "f".to_string(),
+                data_hashes: HashMap::new(),
+                output_files: vec!["posts/old-post/index.html".to_string()],
+                url_path: "/posts/old-post/index.html".to_string(),
+                is_index: true,
+                is_dynamic: true,
+            },
+        );
+        prev.pages.insert(
+            "/posts/kept-post/index.html".to_string(),
+            PageRecord {
+                template_path: "posts.html".to_string(),
+                template_hash: "t".to_string(),
+                frontmatter_hash: "f".to_string(),
+                data_hashes: HashMap::new(),
+                output_files: vec!["posts/kept-post/index.html".to_string()],
+                url_path: "/posts/kept-post/index.html".to_string(),
+                is_index: true,
+                is_dynamic: true,
+            },
+        );
+
+        // Current manifest: only kept-post was rendered this build.
+        let mut current = BuildManifest::new_empty();
+        current.pages.insert(
+            "/posts/kept-post/index.html".to_string(),
+            PageRecord {
+                template_path: "posts.html".to_string(),
+                template_hash: "t".to_string(),
+                frontmatter_hash: "f".to_string(),
+                data_hashes: HashMap::new(),
+                output_files: vec!["posts/kept-post/index.html".to_string()],
+                url_path: "/posts/kept-post/index.html".to_string(),
+                is_index: true,
+                is_dynamic: true,
+            },
+        );
+
+        let deleted = delete_orphan_outputs(&prev, &current, &dist).unwrap();
+        assert_eq!(deleted, 1);
+        assert!(!dist.join("posts/old-post/index.html").exists(), "removed slug output must be deleted");
+        assert!(dist.join("posts/kept-post/index.html").exists(), "active slug output must be kept");
+        assert!(!current.pages.contains_key("/posts/old-post/index.html"), "removed slug must not be in current manifest");
+    }
 }
