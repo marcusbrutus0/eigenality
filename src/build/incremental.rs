@@ -302,6 +302,36 @@ pub fn page_changed(
     false
 }
 
+/// Delete output files from `dist/` for pages that existed in the previous
+/// manifest but are absent from the current one (i.e. the template was deleted
+/// or renamed between builds).
+///
+/// Only runs during incremental builds (when `prev_manifest` is `Some`).
+/// Returns the number of files deleted.
+pub fn delete_orphan_outputs(
+    prev_manifest: &BuildManifest,
+    current_manifest: &BuildManifest,
+    dist_dir: &Path,
+) -> Result<usize> {
+    let mut deleted = 0;
+    for (url_path, prev_record) in &prev_manifest.pages {
+        if current_manifest.pages.contains_key(url_path) {
+            continue;
+        }
+        // This page is no longer being built — delete its output files.
+        for rel_file in &prev_record.output_files {
+            let abs_path = dist_dir.join(rel_file);
+            if abs_path.exists() {
+                std::fs::remove_file(&abs_path)
+                    .wrap_err_with(|| format!("Failed to delete orphan output {}", abs_path.display()))?;
+                deleted += 1;
+                tracing::debug!("Deleted orphan output: {}", abs_path.display());
+            }
+        }
+    }
+    Ok(deleted)
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -587,5 +617,87 @@ mod tests {
         fs::create_dir_all(&dir).unwrap();
         fs::write(dir.join("build_manifest.json"), "not json!!").unwrap();
         assert!(load_manifest(tmp.path()).is_none());
+    }
+
+    // --- delete_orphan_outputs ---
+
+    fn make_page_record(output_files: Vec<String>) -> PageRecord {
+        PageRecord {
+            template_path: "test.html".to_string(),
+            template_hash: "t".to_string(),
+            frontmatter_hash: "f".to_string(),
+            data_hashes: HashMap::new(),
+            output_files,
+            url_path: "/test.html".to_string(),
+            is_index: false,
+            is_dynamic: false,
+        }
+    }
+
+    #[test]
+    fn test_delete_orphan_outputs_removes_missing_page_files() {
+        let tmp = TempDir::new().unwrap();
+        let dist = tmp.path().join("dist");
+        fs::create_dir_all(&dist).unwrap();
+
+        // Create an output file for the orphaned page.
+        write(tmp.path(), "dist/old-page.html", "old content");
+
+        let mut prev = BuildManifest::new_empty();
+        prev.pages.insert(
+            "/old-page.html".to_string(),
+            make_page_record(vec!["old-page.html".to_string()]),
+        );
+
+        // Current manifest does NOT include old-page.html.
+        let current = BuildManifest::new_empty();
+
+        let deleted = delete_orphan_outputs(&prev, &current, &dist).unwrap();
+        assert_eq!(deleted, 1);
+        assert!(!dist.join("old-page.html").exists());
+    }
+
+    #[test]
+    fn test_delete_orphan_outputs_keeps_active_pages() {
+        let tmp = TempDir::new().unwrap();
+        let dist = tmp.path().join("dist");
+        fs::create_dir_all(&dist).unwrap();
+
+        write(tmp.path(), "dist/active.html", "active content");
+
+        let mut prev = BuildManifest::new_empty();
+        prev.pages.insert(
+            "/active.html".to_string(),
+            make_page_record(vec!["active.html".to_string()]),
+        );
+
+        // Current manifest also has active.html — not an orphan.
+        let mut current = BuildManifest::new_empty();
+        current.pages.insert(
+            "/active.html".to_string(),
+            make_page_record(vec!["active.html".to_string()]),
+        );
+
+        let deleted = delete_orphan_outputs(&prev, &current, &dist).unwrap();
+        assert_eq!(deleted, 0);
+        assert!(dist.join("active.html").exists());
+    }
+
+    #[test]
+    fn test_delete_orphan_outputs_missing_file_is_noop() {
+        let tmp = TempDir::new().unwrap();
+        let dist = tmp.path().join("dist");
+        fs::create_dir_all(&dist).unwrap();
+
+        // Orphan page's file doesn't exist on disk — should not error.
+        let mut prev = BuildManifest::new_empty();
+        prev.pages.insert(
+            "/gone.html".to_string(),
+            make_page_record(vec!["gone.html".to_string()]),
+        );
+
+        let current = BuildManifest::new_empty();
+        let deleted = delete_orphan_outputs(&prev, &current, &dist).unwrap();
+        assert_eq!(deleted, 0);
     }
 }

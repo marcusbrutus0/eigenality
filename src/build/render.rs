@@ -439,6 +439,16 @@ pub async fn build(project_root: &Path, dev: bool, fresh: bool, full: bool) -> R
     // Persist the build manifest so the next run can skip unchanged pages.
     if !dev {
         let manifest_guard = ctx.current_manifest.lock().await;
+
+        // Delete outputs for pages removed between incremental builds.
+        if let Some(prev) = &ctx.prev_manifest {
+            let deleted = incremental::delete_orphan_outputs(prev, &manifest_guard, &dist_dir)
+                .wrap_err("Failed to delete orphan outputs")?;
+            if deleted > 0 {
+                tracing::info!("Deleted {} orphan output file(s).", deleted);
+            }
+        }
+
         incremental::save_manifest(project_root, &manifest_guard)
             .wrap_err("Failed to save build manifest")?;
     }
