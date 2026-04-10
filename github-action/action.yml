@@ -1,0 +1,59 @@
+name: 'Setup Eigen'
+description: 'Install eigen static site generator and optionally run eigen build'
+branding:
+  icon: 'box'
+  color: 'orange'
+
+inputs:
+  version:
+    description: 'Eigen version to install (e.g. "0.13.0"). Use "latest" for newest stable release.'
+    required: false
+    default: 'latest'
+  build:
+    description: 'Run eigen build after install'
+    required: false
+    default: 'true'
+  source:
+    description: 'Working directory for eigen build'
+    required: false
+    default: '.'
+  args:
+    description: 'Additional arguments passed to eigen build'
+    required: false
+    default: ''
+
+outputs:
+  version:
+    description: 'Installed eigen version'
+    value: ${{ steps.version.outputs.version }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Install eigen
+      shell: bash
+      env:
+        EIGEN_VERSION: ${{ inputs.version }}
+      run: |
+        if [ "$EIGEN_VERSION" = "latest" ]; then
+          url="https://github.com/wavefunk/eigen/releases/latest/download/eigen-installer.sh"
+        else
+          url="https://github.com/wavefunk/eigen/releases/download/v${EIGEN_VERSION}/eigen-installer.sh"
+        fi
+        echo "Downloading eigen installer from: $url"
+        curl --proto '=https' --tlsv1.2 -fsSL "$url" | sh
+        echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+
+    - name: Get installed version
+      id: version
+      shell: bash
+      run: |
+        version="$("$HOME/.cargo/bin/eigen" --version | awk '{print $2}')"
+        echo "version=$version" >> "$GITHUB_OUTPUT"
+        echo "Installed eigen $version"
+
+    - name: Build
+      if: inputs.build == 'true'
+      shell: bash
+      working-directory: ${{ inputs.source }}
+      run: eigen build ${{ inputs.args }}
