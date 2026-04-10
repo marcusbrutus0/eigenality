@@ -263,6 +263,7 @@ mod tests {
             feed: std::collections::HashMap::new(),
             audit: None,
             security_headers: Default::default(),
+            redirects: Vec::new(),
         };
 
         let mut env = Environment::new();

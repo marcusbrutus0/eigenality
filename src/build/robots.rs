@@ -117,6 +117,7 @@ mod tests {
             feed: HashMap::new(),
             audit: None,
             security_headers: Default::default(),
+            redirects: Vec::new(),
         }
     }
 

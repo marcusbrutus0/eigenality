@@ -35,6 +35,9 @@ pub struct SiteConfig {
     /// Security headers file generation configuration.
     #[serde(default)]
     pub security_headers: SecurityHeadersConfig,
+    /// Redirect rules to write to `dist/_redirects`.
+    #[serde(default)]
+    pub redirects: Vec<RedirectRule>,
 }
 
 /// Metadata about the site itself.
@@ -206,6 +209,26 @@ pub struct RobotsRule {
     /// Paths to disallow.
     #[serde(default)]
     pub disallow: Vec<String>,
+}
+
+/// A single redirect rule, written as one line in `dist/_redirects`.
+///
+/// Specified as `[[redirects]]` entries in `site.toml`.
+#[derive(Debug, Clone, Deserialize)]
+pub struct RedirectRule {
+    /// Source path pattern. Must start with `/` or be an absolute URL.
+    /// Supports named placeholders (`:param`) and splats (`*`, `:splat`).
+    pub from: String,
+    /// Destination path or URL.
+    /// Must start with `/` or `http://` or `https://`.
+    pub to: String,
+    /// HTTP status code. Allowed: 301, 302, 307, 308. Default: 301.
+    #[serde(default = "default_redirect_status")]
+    pub status: u16,
+}
+
+fn default_redirect_status() -> u16 {
+    301
 }
 
 /// Security headers file generation configuration.
@@ -845,6 +868,7 @@ fn validate_config(config: &SiteConfig) -> Result<()> {
     validate_robots_config(config)?;
     validate_audit_config(config)?;
     validate_security_headers_config(config)?;
+    validate_redirect_rules(config)?;
     Ok(())
 }
 
@@ -978,6 +1002,97 @@ fn validate_security_headers_config(config: &SiteConfig) -> Result<()> {
             tracing::warn!(
                 "[security_headers.hsts] HSTS is configured but site.base_url \
                  does not start with 'https://'. HSTS has no effect on non-HTTPS origins."
+            );
+        }
+    }
+
+    Ok(())
+}
+
+/// Validate redirect rules.
+fn validate_redirect_rules(config: &SiteConfig) -> Result<()> {
+    let rules = &config.redirects;
+
+    if rules.len() > 2000 {
+        tracing::warn!(
+            "redirects: {} rules exceed the Cloudflare Pages limit of 2,000. \
+             Rules beyond the limit will be silently ignored by the platform.",
+            rules.len(),
+        );
+    }
+
+    for (i, rule) in rules.iter().enumerate() {
+        if rule.from.is_empty() {
+            bail!("redirects[{}]: `from` must not be empty.", i);
+        }
+        if rule.to.is_empty() {
+            bail!("redirects[{}]: `to` must not be empty.", i);
+        }
+        if rule.from.starts_with('#') {
+            bail!(
+                "redirects[{}]: `from` starts with '#', which platforms interpret as a comment. \
+                 Use a path starting with '/'.",
+                i,
+            );
+        }
+        if !rule.from.starts_with('/')
+            && !rule.from.starts_with("http://")
+            && !rule.from.starts_with("https://")
+        {
+            bail!(
+                "redirects[{}]: `from` = '{}' must start with '/' or be an absolute URL \
+                 (http:// or https://).",
+                i,
+                rule.from,
+            );
+        }
+        if !rule.to.starts_with('/')
+            && !rule.to.starts_with("http://")
+            && !rule.to.starts_with("https://")
+        {
+            bail!(
+                "redirects[{}]: `to` = '{}' must start with '/' or be an absolute URL \
+                 (http:// or https://).",
+                i,
+                rule.to,
+            );
+        }
+        match rule.status {
+            301 | 302 | 307 | 308 => {}
+            200 => {
+                bail!(
+                    "redirects[{}]: status 200 (rewrite) is not supported. \
+                     Allowed redirect codes are 301, 302, 307, and 308.",
+                    i,
+                );
+            }
+            other => {
+                bail!(
+                    "redirects[{}]: status {} is not a valid redirect code. \
+                     Allowed codes are 301, 302, 307, and 308.",
+                    i,
+                    other,
+                );
+            }
+        }
+        if rule.from == rule.to {
+            tracing::warn!(
+                "redirects[{}]: `from` and `to` are both '{}'. \
+                 This redirect points to itself and will cause a browser redirect loop.",
+                i,
+                rule.from,
+            );
+        }
+    }
+
+    // Check for duplicate `from` values (first match wins, duplicates are dead rules).
+    let mut seen = std::collections::HashSet::new();
+    for rule in rules {
+        if !seen.insert(rule.from.as_str()) {
+            tracing::warn!(
+                "redirects: duplicate `from` = '{}'. The first matching rule wins; \
+                 later rules with the same `from` are dead.",
+                rule.from,
             );
         }
     }
@@ -2096,5 +2211,154 @@ base_url = "https://example.com"
         config.site.base_url = "http://example.com".to_string();
         // Warning emitted but not an error.
         assert!(validate_security_headers_config(&config).is_ok());
+    }
+
+    // --- validate_redirect_rules ---
+
+    fn config_with_redirects(rules: Vec<RedirectRule>) -> SiteConfig {
+        let mut config: SiteConfig = toml::from_str(
+            r#"
+[site]
+name = "Test"
+base_url = "https://example.com"
+"#,
+        )
+        .unwrap();
+        config.redirects = rules;
+        config
+    }
+
+    fn valid_rule(from: &str, to: &str) -> RedirectRule {
+        RedirectRule {
+            from: from.to_string(),
+            to: to.to_string(),
+            status: 301,
+        }
+    }
+
+    #[test]
+    fn test_redirect_empty_vec() {
+        let config = config_with_redirects(vec![]);
+        assert!(validate_redirect_rules(&config).is_ok());
+    }
+
+    #[test]
+    fn test_redirect_empty_from_error() {
+        let config = config_with_redirects(vec![RedirectRule {
+            from: "".to_string(),
+            to: "/new".to_string(),
+            status: 301,
+        }]);
+        assert!(validate_redirect_rules(&config).is_err());
+    }
+
+    #[test]
+    fn test_redirect_empty_to_error() {
+        let config = config_with_redirects(vec![RedirectRule {
+            from: "/old".to_string(),
+            to: "".to_string(),
+            status: 301,
+        }]);
+        assert!(validate_redirect_rules(&config).is_err());
+    }
+
+    #[test]
+    fn test_redirect_from_starts_with_hash_error() {
+        let config = config_with_redirects(vec![RedirectRule {
+            from: "# /path".to_string(),
+            to: "/new".to_string(),
+            status: 301,
+        }]);
+        assert!(validate_redirect_rules(&config).is_err());
+    }
+
+    #[test]
+    fn test_redirect_invalid_from_no_slash() {
+        let config = config_with_redirects(vec![RedirectRule {
+            from: "noslash".to_string(),
+            to: "/new".to_string(),
+            status: 301,
+        }]);
+        assert!(validate_redirect_rules(&config).is_err());
+    }
+
+    #[test]
+    fn test_redirect_invalid_to_no_slash() {
+        let config = config_with_redirects(vec![RedirectRule {
+            from: "/old".to_string(),
+            to: "noslash".to_string(),
+            status: 301,
+        }]);
+        assert!(validate_redirect_rules(&config).is_err());
+    }
+
+    #[test]
+    fn test_redirect_status_200_error() {
+        let config = config_with_redirects(vec![RedirectRule {
+            from: "/old".to_string(),
+            to: "/new".to_string(),
+            status: 200,
+        }]);
+        let err = validate_redirect_rules(&config).unwrap_err();
+        assert!(err.to_string().contains("rewrite"));
+    }
+
+    #[test]
+    fn test_redirect_invalid_status_error() {
+        let config = config_with_redirects(vec![RedirectRule {
+            from: "/old".to_string(),
+            to: "/new".to_string(),
+            status: 418,
+        }]);
+        assert!(validate_redirect_rules(&config).is_err());
+    }
+
+    #[test]
+    fn test_redirect_duplicate_from_warn() {
+        let config = config_with_redirects(vec![
+            valid_rule("/old", "/new1"),
+            valid_rule("/old", "/new2"),
+        ]);
+        // Duplicate is a warning, not an error.
+        assert!(validate_redirect_rules(&config).is_ok());
+    }
+
+    #[test]
+    fn test_redirect_same_from_to_warn() {
+        let config = config_with_redirects(vec![RedirectRule {
+            from: "/same".to_string(),
+            to: "/same".to_string(),
+            status: 301,
+        }]);
+        // Self-redirect is a warning, not an error.
+        assert!(validate_redirect_rules(&config).is_ok());
+    }
+
+    #[test]
+    fn test_redirect_count_warn() {
+        let rules: Vec<RedirectRule> = (0..2001)
+            .map(|i| valid_rule(&format!("/old-{i}"), &format!("/new-{i}")))
+            .collect();
+        let config = config_with_redirects(rules);
+        // Count warning, not an error.
+        assert!(validate_redirect_rules(&config).is_ok());
+    }
+
+    #[test]
+    fn test_redirect_valid_external_from() {
+        let config = config_with_redirects(vec![valid_rule(
+            "https://old.com/*",
+            "/new",
+        )]);
+        assert!(validate_redirect_rules(&config).is_ok());
+    }
+
+    #[test]
+    fn test_redirect_valid_external_to() {
+        let config = config_with_redirects(vec![valid_rule(
+            "/old",
+            "https://new.com",
+        )]);
+        assert!(validate_redirect_rules(&config).is_ok());
     }
 }
