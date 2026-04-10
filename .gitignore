@@ -16,3 +16,4 @@
 .dolt/
 *.db
 /.claude/summaries/
+/.beads/.beads-credential-key

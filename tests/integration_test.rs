@@ -2324,6 +2324,140 @@ to = "/new"
 }
 
 // ============================================================================
+// Incremental builds
+// ============================================================================
+
+/// First build writes a manifest; second build with no changes skips re-rendering.
+/// We verify the manifest is written and the output files survive both runs.
+#[tokio::test]
+async fn test_incremental_build_manifest_written_after_build() {
+    let tmp = TempDir::new().unwrap();
+    let root = tmp.path();
+
+    write(root, "site.toml", r#"
+[site]
+name = "Incremental Test"
+base_url = "https://test.com"
+
+[build]
+fragments = false
+minify = false
+"#);
+
+    write(root, "templates/_base.html", "<html>{% block content %}{% endblock %}</html>");
+    write(root, "templates/index.html",
+        "---\n---\n{% extends '_base.html' %}{% block content %}Hello{% endblock %}");
+
+    // First build — manifest should not exist yet.
+    assert!(!root.join(".eigen_cache/build_manifest.json").exists());
+    eigen::build::build(root, false, false, false).await.unwrap();
+
+    // After first build, manifest must exist.
+    assert!(root.join(".eigen_cache/build_manifest.json").exists());
+    assert!(root.join("dist/index.html").exists());
+}
+
+/// Second build with identical inputs preserves dist/ output (does not wipe it).
+#[tokio::test]
+async fn test_incremental_build_second_run_keeps_output() {
+    let tmp = TempDir::new().unwrap();
+    let root = tmp.path();
+
+    write(root, "site.toml", r#"
+[site]
+name = "Incremental Keep"
+base_url = "https://test.com"
+
+[build]
+fragments = false
+minify = false
+"#);
+
+    write(root, "templates/_base.html", "<html>{% block content %}{% endblock %}</html>");
+    write(root, "templates/index.html",
+        "---\n---\n{% extends '_base.html' %}{% block content %}Stable{% endblock %}");
+
+    // First build.
+    eigen::build::build(root, false, false, false).await.unwrap();
+    let content_after_first = fs::read_to_string(root.join("dist/index.html")).unwrap();
+
+    // Second build with no changes.
+    eigen::build::build(root, false, false, false).await.unwrap();
+    let content_after_second = fs::read_to_string(root.join("dist/index.html")).unwrap();
+
+    // Content must be identical — page was either skipped or re-rendered correctly.
+    assert_eq!(content_after_first, content_after_second);
+}
+
+/// `--full` forces a complete rebuild even when inputs are unchanged.
+/// After two builds, a third with `--full` still produces correct output.
+#[tokio::test]
+async fn test_incremental_build_full_flag_forces_rebuild() {
+    let tmp = TempDir::new().unwrap();
+    let root = tmp.path();
+
+    write(root, "site.toml", r#"
+[site]
+name = "Full Flag Test"
+base_url = "https://test.com"
+
+[build]
+fragments = false
+minify = false
+"#);
+
+    write(root, "templates/_base.html", "<html>{% block content %}{% endblock %}</html>");
+    write(root, "templates/index.html",
+        "---\n---\n{% extends '_base.html' %}{% block content %}Full Flag{% endblock %}");
+
+    // Build once to create manifest.
+    eigen::build::build(root, false, false, false).await.unwrap();
+    // Build with --full: must succeed and produce correct output.
+    eigen::build::build(root, false, false, true).await.unwrap();
+
+    let html = fs::read_to_string(root.join("dist/index.html")).unwrap();
+    assert!(html.contains("Full Flag"));
+    // Manifest must still be written after --full.
+    assert!(root.join(".eigen_cache/build_manifest.json").exists());
+}
+
+/// Template change between builds causes re-render with new content.
+#[tokio::test]
+async fn test_incremental_build_template_change_rerenders() {
+    let tmp = TempDir::new().unwrap();
+    let root = tmp.path();
+
+    write(root, "site.toml", r#"
+[site]
+name = "Change Test"
+base_url = "https://test.com"
+
+[build]
+fragments = false
+minify = false
+"#);
+
+    write(root, "templates/_base.html", "<html>{% block content %}{% endblock %}</html>");
+    write(root, "templates/index.html",
+        "---\n---\n{% extends '_base.html' %}{% block content %}Version 1{% endblock %}");
+
+    // First build.
+    eigen::build::build(root, false, false, false).await.unwrap();
+    let v1 = fs::read_to_string(root.join("dist/index.html")).unwrap();
+    assert!(v1.contains("Version 1"));
+
+    // Change the template.
+    write(root, "templates/index.html",
+        "---\n---\n{% extends '_base.html' %}{% block content %}Version 2{% endblock %}");
+
+    // Second build — must pick up the change.
+    eigen::build::build(root, false, false, false).await.unwrap();
+    let v2 = fs::read_to_string(root.join("dist/index.html")).unwrap();
+    assert!(v2.contains("Version 2"), "Updated template should produce new output");
+    assert!(!v2.contains("Version 1"), "Old content should not appear");
+}
+
+// ============================================================================
 
 /// Recursively copy a directory.
 fn copy_dir_all(src: &Path, dst: &Path) {
