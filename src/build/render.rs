@@ -388,20 +388,214 @@ fn register_output_path(
     Ok(())
 }
 
+/// Input for the shared post-render pipeline.
+///
+/// Carries all page-specific data that `finalize_page_html` needs. Config and
+/// infrastructure come from `BuildContext`.
+struct FinalizeInput<'a> {
+    /// Raw rendered output (still has fragment markers).
+    rendered: &'a str,
+    output_path: &'a std::path::Path,
+    url_path: &'a str,
+    /// Pre-formatted error label, e.g. `"template 'foo'"` or `"template 'foo' slug 'bar'"`.
+    label: &'a str,
+    page: &'a PageDef,
+    resolved_seo: crate::frontmatter::SeoMeta,
+    resolved_schema: crate::frontmatter::SchemaConfig,
+    /// Source asset requests drained from `ctx.source_asset_collector` by the caller.
+    source_requests: Vec<source_asset::SourceAssetRequest>,
+    /// URL set derived from `source_requests`; passed to `localize_assets` and
+    /// `localize_fragments` so those calls can skip already-fetched URLs.
+    source_asset_urls: HashSet<String>,
+    /// Fragment block names, pre-computed by the caller before marker stripping.
+    /// Empty when `view_transitions` is disabled.
+    block_names: Vec<String>,
+}
+
+/// Shared post-render pipeline for prod builds.
+///
+/// Strips markers, localizes assets, optimizes images, injects SEO/CSS/hints,
+/// writes the page to disk, and writes any fragment files.
+async fn finalize_page_html(input: FinalizeInput<'_>, ctx: &BuildContext) -> Result<()> {
+    let config = &*ctx.config;
+    let dist_dir = &ctx.dist_dir;
+
+    let full_html = fragments::strip_fragment_markers(input.rendered);
+
+    // Localize remote assets and resolve authenticated source assets under one lock.
+    let full_html = {
+        let mut cache = ctx.asset_cache.lock().await;
+        let html = assets::localize_assets(
+            &full_html,
+            &config.assets,
+            &mut cache,
+            &ctx.asset_client,
+            dist_dir,
+            &input.source_asset_urls,
+            &ctx.rate_limiter,
+        ).await
+        .wrap_err_with(|| format!("Failed to localize assets for {}", input.label))?;
+
+        source_asset::resolve_source_assets(
+            &html,
+            &input.source_requests,
+            &config.sources,
+            &mut cache,
+            &ctx.asset_client,
+            dist_dir,
+            &ctx.rate_limiter,
+        ).await
+        .wrap_err_with(|| format!("Failed to resolve source assets for {}", input.label))?
+    };
+
+    // Image optimization: convert/compress/resize + rewrite <img> → <picture>.
+    let full_html = assets::optimize_and_rewrite_images(
+        &full_html,
+        &config.assets.images,
+        &ctx.image_cache,
+        dist_dir,
+        input.page.frontmatter.hero_image.as_deref(),
+    ).wrap_err_with(|| format!("Failed to optimize images for {}", input.label))?;
+    let full_html = assets::rewrite_css_background_images(
+        &full_html,
+        &config.assets.images,
+        &ctx.image_cache,
+        dist_dir,
+    ).wrap_err_with(|| format!("Failed to optimize CSS background images for {}", input.label))?;
+
+    let full_html = ctx.plugin_registry.post_render_html(
+        full_html,
+        input.url_path,
+        dist_dir,
+    ).wrap_err_with(|| format!("Plugin post_render_html failed for {}", input.label))?;
+
+    // Critical CSS inlining (after plugins, before minify).
+    let full_html = if config.build.critical_css.enabled {
+        let mut css_cache = ctx.css_cache.lock().await;
+        let result = critical_css::inline_critical_css(
+            &full_html,
+            &config.build.critical_css,
+            dist_dir,
+            &mut css_cache,
+            if ctx.manifest.is_empty() { None } else { Some(ctx.manifest.as_ref()) },
+        );
+        drop(css_cache);
+        result
+    } else {
+        full_html
+    };
+
+    // Preload/prefetch hints (after critical CSS, before minify).
+    let full_html = if config.build.hints.enabled {
+        hints::inject_resource_hints(
+            &full_html,
+            &config.build.hints,
+            dist_dir,
+            input.page.frontmatter.hero_image.as_deref(),
+            input.url_path,
+            &config.build.fragment_dir,
+            config.build.fragments,
+        )
+    } else {
+        full_html
+    };
+
+    // SEO meta tag injection (after hints, before minify).
+    let full_html = seo::inject_seo_tags(
+        &full_html,
+        &input.resolved_seo,
+        &config.site,
+        input.url_path,
+    );
+
+    // JSON-LD structured data injection (after SEO, before minify).
+    let full_html = json_ld::inject_json_ld(
+        &full_html,
+        &input.resolved_schema,
+        &input.resolved_seo,
+        &config.site,
+        input.url_path,
+    );
+
+    // View transitions injection (after JSON-LD, before minify).
+    let full_html = if config.build.view_transitions.enabled {
+        view_transitions::inject_view_transitions(&full_html, &input.block_names)
+    } else {
+        full_html
+    };
+
+    // Minify HTML (last transformation before writing).
+    let full_html = if config.build.minify {
+        minify::minify_html(&full_html)
+    } else {
+        full_html
+    };
+
+    // Inject analytics snippet if configured.
+    let full_html = if let Some(ref analytics) = config.analytics {
+        analytics::inject_analytics(&full_html, &analytics.tracking_id)
+    } else {
+        full_html
+    };
+
+    let full_path = dist_dir.join(input.output_path);
+    if let Some(parent) = full_path.parent() {
+        tokio::fs::create_dir_all(parent).await
+            .wrap_err_with(|| format!("Failed to create output dir {}", parent.display()))?;
+    }
+    tokio::fs::write(&full_path, &full_html).await
+        .wrap_err_with(|| format!("Failed to write {}", full_path.display()))?;
+
+    // Extract and write fragments (also localize assets + optimize images in fragments).
+    if config.build.fragments {
+        let frags = extract_page_fragments(input.rendered, input.page, &config.build.content_block);
+        if !frags.is_empty() {
+            let localized_frags = localize_fragments(
+                &frags,
+                &config.assets,
+                &ctx.asset_cache,
+                &ctx.asset_client,
+                dist_dir,
+                &input.source_asset_urls,
+                &ctx.rate_limiter,
+            ).await?;
+            let optimized_frags = optimize_fragment_images(
+                &localized_frags,
+                &config.assets.images,
+                &ctx.image_cache,
+                dist_dir,
+            )?;
+            let optimized_frags = if config.build.minify {
+                minify_fragments(&optimized_frags)
+            } else {
+                optimized_frags
+            };
+            fragments::write_fragments(
+                dist_dir,
+                input.output_path,
+                &optimized_frags,
+                &config.build.content_block,
+                &config.build.fragment_dir,
+                &config.build.oob_blocks,
+            )?;
+        }
+    }
+
+    Ok(())
+}
+
 /// Render a single static page.
 ///
 /// 1. Resolve data queries from frontmatter.
 /// 2. Build template context.
 /// 3. Render template → full HTML string.
-/// 4. Write to dist/{output_path}.
-/// 5. Extract and write fragments if enabled.
+/// 4. Post-render pipeline: write to disk, fragments, optimizations.
 async fn render_static_page(
     page: &PageDef,
     ctx: &BuildContext,
 ) -> Result<RenderedPage> {
     let tmpl_name = page.template_path.to_string_lossy().to_string();
     let config = &*ctx.config;
-    let dist_dir = &ctx.dist_dir;
 
     // 1. Resolve data queries.
     ctx.data_query_count.fetch_add(page.frontmatter.data.len() as u32, Ordering::Relaxed);
@@ -434,24 +628,15 @@ async fn render_static_page(
         .unwrap_or(false);
 
     let meta = PageMeta::new(&url_path, &output_path, config, &ctx.build_time);
-
     let tpl_ctx = context::build_page_context(config, &ctx.global_data, &page_data, meta, None);
 
-    let resolved_seo = seo::resolve_seo_expressions(
-        &page.frontmatter.seo,
-        &ctx.env,
-        &tpl_ctx,
-    );
-
-    let resolved_schema = json_ld::resolve_schema_expressions(
-        &page.frontmatter.schema,
-        &ctx.env,
-        &tpl_ctx,
-    );
+    let resolved_seo = seo::resolve_seo_expressions(&page.frontmatter.seo, &ctx.env, &tpl_ctx);
+    let resolved_schema = json_ld::resolve_schema_expressions(&page.frontmatter.schema, &ctx.env, &tpl_ctx);
 
     let tmpl = ctx.env.get_template(&tmpl_name)
         .wrap_err_with(|| format!("Template '{}' not found in environment", tmpl_name))?;
 
+    // 3. Render.
     let rendered = match tmpl.render(&tpl_ctx) {
         Ok(html) => html,
         Err(err) => {
@@ -464,186 +649,32 @@ async fn render_static_page(
         }
     };
 
-    // Extract fragment block names (before marker stripping) for view transitions.
+    // Extract block names before stripping markers (needed for view transitions).
     let block_names = if config.build.view_transitions.enabled {
         fragments::extract_block_names(&rendered)
     } else {
         Vec::new()
     };
 
-    let full_html = fragments::strip_fragment_markers(&rendered);
+    // Drain source asset requests immediately so concurrent pages don't steal them.
+    let source_requests = ctx.source_asset_collector.drain();
+    let source_asset_urls: HashSet<String> = source_requests.iter().map(|r| r.url.clone()).collect();
 
-    // Drain source asset requests accumulated during this page's render.
-    // Done immediately after render so concurrent pages don't steal each other's requests.
-    let page_source_requests = ctx.source_asset_collector.drain();
-    let source_asset_urls: HashSet<String> = if page_source_requests.is_empty() {
-        HashSet::new()
-    } else {
-        page_source_requests.iter().map(|r| r.url.clone()).collect()
-    };
+    tracing::debug!("  Static: {} → {}", tmpl_name, output_path.display());
 
-    // Localize remote assets and resolve authenticated source assets under one lock.
-    let full_html = {
-        let mut cache = ctx.asset_cache.lock().await;
-        let html = assets::localize_assets(
-            &full_html,
-            &config.assets,
-            &mut cache,
-            &ctx.asset_client,
-            dist_dir,
-            &source_asset_urls,
-            &ctx.rate_limiter,
-        ).await
-        .wrap_err_with(|| format!("Failed to localize assets for '{}'", tmpl_name))?;
-
-        source_asset::resolve_source_assets(
-            &html,
-            &page_source_requests,
-            &config.sources,
-            &mut cache,
-            &ctx.asset_client,
-            dist_dir,
-            &ctx.rate_limiter,
-        ).await
-        .wrap_err_with(|| format!("Failed to resolve source assets for '{}'", tmpl_name))?
-    };
-
-    // 4b. Image optimization: convert/compress/resize + rewrite <img> → <picture>.
-    let full_html = assets::optimize_and_rewrite_images(
-        &full_html,
-        &config.assets.images,
-        &ctx.image_cache,
-        dist_dir,
-        page.frontmatter.hero_image.as_deref(),
-    ).wrap_err_with(|| format!("Failed to optimize images for '{}'", tmpl_name))?;
-    let full_html = assets::rewrite_css_background_images(
-        &full_html,
-        &config.assets.images,
-        &ctx.image_cache,
-        dist_dir,
-    ).wrap_err_with(|| format!("Failed to optimize CSS background images for '{}'", tmpl_name))?;
-
-    let full_html = ctx.plugin_registry.post_render_html(
-        full_html,
-        &url_path,
-        dist_dir,
-    ).wrap_err_with(|| format!("Plugin post_render_html failed for '{}'", tmpl_name))?;
-
-    // 4c. Critical CSS inlining (after plugins, before minify).
-    let full_html = if config.build.critical_css.enabled {
-        let mut css_cache = ctx.css_cache.lock().await;
-        let result = critical_css::inline_critical_css(
-            &full_html,
-            &config.build.critical_css,
-            dist_dir,
-            &mut css_cache,
-            if ctx.manifest.is_empty() { None } else { Some(ctx.manifest.as_ref()) },
-        );
-        drop(css_cache);
-        result
-    } else {
-        full_html
-    };
-
-    // 4d. Preload/prefetch hints (after critical CSS, before minify).
-    let full_html = if config.build.hints.enabled {
-        hints::inject_resource_hints(
-            &full_html,
-            &config.build.hints,
-            dist_dir,
-            page.frontmatter.hero_image.as_deref(),
-            &url_path,
-            &config.build.fragment_dir,
-            config.build.fragments,
-        )
-    } else {
-        full_html
-    };
-
-    // 4e. SEO meta tag injection (after hints, before minify).
-    let full_html = seo::inject_seo_tags(
-        &full_html,
-        &resolved_seo,
-        &config.site,
-        &url_path,
-    );
-
-    // 4f. JSON-LD structured data injection (after SEO, before minify).
-    let full_html = json_ld::inject_json_ld(
-        &full_html,
-        &resolved_schema,
-        &resolved_seo,
-        &config.site,
-        &url_path,
-    );
-
-    // 4g. View transitions injection (after JSON-LD, before minify).
-    let full_html = if config.build.view_transitions.enabled {
-        view_transitions::inject_view_transitions(&full_html, &block_names)
-    } else {
-        full_html
-    };
-
-    // 4h. Minify HTML (last transformation before writing).
-    let full_html = if config.build.minify {
-        minify::minify_html(&full_html)
-    } else {
-        full_html
-    };
-
-    // 4i. Inject analytics snippet if configured.
-    let full_html = if let Some(ref analytics) = config.analytics {
-        analytics::inject_analytics(&full_html, &analytics.tracking_id)
-    } else {
-        full_html
-    };
-
-    let full_path = dist_dir.join(&output_path);
-
-    if let Some(parent) = full_path.parent() {
-        tokio::fs::create_dir_all(parent).await
-            .wrap_err_with(|| format!("Failed to create output dir {}", parent.display()))?;
-    }
-
-    tokio::fs::write(&full_path, &full_html).await
-        .wrap_err_with(|| format!("Failed to write {}", full_path.display()))?;
-
-    tracing::debug!("  Static: {} → {} ({} bytes)", tmpl_name, output_path.display(), full_html.len());
-
-    // 5. Extract and write fragments (also localize assets + optimize images in fragments).
-    if config.build.fragments {
-        let frags = extract_page_fragments(&rendered, page, &config.build.content_block);
-        if !frags.is_empty() {
-            let localized_frags = localize_fragments(
-                &frags,
-                &config.assets,
-                &ctx.asset_cache,
-                &ctx.asset_client,
-                dist_dir,
-                &source_asset_urls,
-                &ctx.rate_limiter,
-            ).await?;
-            let optimized_frags = optimize_fragment_images(
-                &localized_frags,
-                &config.assets.images,
-                &ctx.image_cache,
-                dist_dir,
-            )?;
-            let optimized_frags = if config.build.minify {
-                minify_fragments(&optimized_frags)
-            } else {
-                optimized_frags
-            };
-            fragments::write_fragments(
-                dist_dir,
-                &output_path,
-                &optimized_frags,
-                &config.build.content_block,
-                &config.build.fragment_dir,
-                &config.build.oob_blocks,
-            )?;
-        }
-    }
+    // 4. Post-render pipeline.
+    finalize_page_html(FinalizeInput {
+        rendered: &rendered,
+        output_path: &output_path,
+        url_path: &url_path,
+        label: &format!("template '{}'", tmpl_name),
+        page,
+        resolved_seo,
+        resolved_schema,
+        source_requests,
+        source_asset_urls,
+        block_names,
+    }, ctx).await?;
 
     Ok(RenderedPage {
         url_path,
@@ -666,7 +697,6 @@ async fn render_dynamic_page(
     let item_as = &page.frontmatter.item_as;
     let slug_field = &page.frontmatter.slug_field;
     let config = &*ctx.config;
-    let dist_dir = &ctx.dist_dir;
 
     // 1. Fetch collection.
     ctx.data_query_count.fetch_add(1, Ordering::Relaxed);
@@ -803,191 +833,30 @@ async fn render_dynamic_page(
             }
         };
 
-        // Extract fragment block names (before marker stripping) for view transitions.
+        // Extract block names before stripping markers (needed for view transitions).
         let block_names = if config.build.view_transitions.enabled {
             fragments::extract_block_names(&rendered)
         } else {
             Vec::new()
         };
 
-        let full_html = fragments::strip_fragment_markers(&rendered);
+        // Drain source asset requests immediately so concurrent pages don't steal them.
+        let source_requests = ctx.source_asset_collector.drain();
+        let source_asset_urls: HashSet<String> = source_requests.iter().map(|r| r.url.clone()).collect();
 
-        let page_source_requests = ctx.source_asset_collector.drain();
-        let source_asset_urls: HashSet<String> = if page_source_requests.is_empty() {
-            HashSet::new()
-        } else {
-            page_source_requests.iter().map(|r| r.url.clone()).collect()
-        };
-
-        let full_html = {
-            let mut cache = ctx.asset_cache.lock().await;
-            let html = assets::localize_assets(
-                &full_html,
-                &config.assets,
-                &mut cache,
-                &ctx.asset_client,
-                dist_dir,
-                &source_asset_urls,
-                &ctx.rate_limiter,
-            ).await
-            .wrap_err_with(|| {
-                format!("Failed to localize assets for '{}' slug '{}'", tmpl_name, slug)
-            })?;
-
-            source_asset::resolve_source_assets(
-                &html,
-                &page_source_requests,
-                &config.sources,
-                &mut cache,
-                &ctx.asset_client,
-                dist_dir,
-                &ctx.rate_limiter,
-            ).await
-            .wrap_err_with(|| {
-                format!("Failed to resolve source assets for '{}' slug '{}'", tmpl_name, slug)
-            })?
-        };
-
-        // Image optimization: convert/compress/resize + rewrite <img> → <picture>.
-        let full_html = assets::optimize_and_rewrite_images(
-            &full_html,
-            &config.assets.images,
-            &ctx.image_cache,
-            dist_dir,
-            page.frontmatter.hero_image.as_deref(),
-        ).wrap_err_with(|| {
-            format!("Failed to optimize images for '{}' slug '{}'", tmpl_name, slug)
-        })?;
-        let full_html = assets::rewrite_css_background_images(
-            &full_html,
-            &config.assets.images,
-            &ctx.image_cache,
-            dist_dir,
-        ).wrap_err_with(|| {
-            format!("Failed to optimize CSS background images for '{}' slug '{}'", tmpl_name, slug)
-        })?;
-
-        let full_html = ctx.plugin_registry.post_render_html(
-            full_html,
-            &url_path,
-            dist_dir,
-        ).wrap_err_with(|| {
-            format!("Plugin post_render_html failed for '{}' slug '{}'", tmpl_name, slug)
-        })?;
-
-        // Critical CSS inlining (after plugins, before minify).
-        let full_html = if config.build.critical_css.enabled {
-            let mut css_cache = ctx.css_cache.lock().await;
-            let result = critical_css::inline_critical_css(
-                &full_html,
-                &config.build.critical_css,
-                dist_dir,
-                &mut css_cache,
-                if ctx.manifest.is_empty() { None } else { Some(ctx.manifest.as_ref()) },
-            );
-            drop(css_cache);
-            result
-        } else {
-            full_html
-        };
-
-        // Preload/prefetch hints (after critical CSS, before minify).
-        let full_html = if config.build.hints.enabled {
-            hints::inject_resource_hints(
-                &full_html,
-                &config.build.hints,
-                dist_dir,
-                page.frontmatter.hero_image.as_deref(),
-                &url_path,
-                &config.build.fragment_dir,
-                config.build.fragments,
-            )
-        } else {
-            full_html
-        };
-
-        // SEO meta tag injection (after hints, before minify).
-        let full_html = seo::inject_seo_tags(
-            &full_html,
-            &resolved_seo,
-            &config.site,
-            &url_path,
-        );
-
-        // JSON-LD structured data injection (after SEO, before minify).
-        let full_html = json_ld::inject_json_ld(
-            &full_html,
-            &resolved_schema,
-            &resolved_seo,
-            &config.site,
-            &url_path,
-        );
-
-        // View transitions injection (after JSON-LD, before minify).
-        let full_html = if config.build.view_transitions.enabled {
-            view_transitions::inject_view_transitions(&full_html, &block_names)
-        } else {
-            full_html
-        };
-
-        // Minify HTML (last transformation before writing).
-        let full_html = if config.build.minify {
-            minify::minify_html(&full_html)
-        } else {
-            full_html
-        };
-
-        // Inject analytics snippet if configured.
-        let full_html = if let Some(ref analytics) = config.analytics {
-            analytics::inject_analytics(&full_html, &analytics.tracking_id)
-        } else {
-            full_html
-        };
-
-        let full_path = dist_dir.join(&output_path);
-
-        if let Some(parent) = full_path.parent() {
-            tokio::fs::create_dir_all(parent).await
-                .wrap_err_with(|| format!("Failed to create output dir {}", parent.display()))?;
-        }
-
-        tokio::fs::write(&full_path, &full_html).await
-            .wrap_err_with(|| format!("Failed to write {}", full_path.display()))?;
-
-        // Write fragments (also localize assets + optimize images in fragments).
-        if config.build.fragments {
-            let frags = extract_page_fragments(&rendered, page, &config.build.content_block);
-            if !frags.is_empty() {
-                let localized_frags = localize_fragments(
-                    &frags,
-                    &config.assets,
-                    &ctx.asset_cache,
-                    &ctx.asset_client,
-                    dist_dir,
-                    &source_asset_urls,
-                    &ctx.rate_limiter,
-                ).await?;
-                let optimized_frags = optimize_fragment_images(
-                    &localized_frags,
-                    &config.assets.images,
-                    &ctx.image_cache,
-                    dist_dir,
-                )?;
-                let optimized_frags = if config.build.minify {
-                    minify_fragments(&optimized_frags)
-                } else {
-                    optimized_frags
-                };
-                fragments::write_fragments(
-                    dist_dir,
-                    &output_path,
-                    &optimized_frags,
-                    &config.build.content_block,
-                    &config.build.fragment_dir,
-                    &config.build.oob_blocks,
-                )?;
-            }
-        }
+        // Post-render pipeline.
+        finalize_page_html(FinalizeInput {
+            rendered: &rendered,
+            output_path: &output_path,
+            url_path: &url_path,
+            label: &format!("template '{}' slug '{}'", tmpl_name, slug),
+            page,
+            resolved_seo,
+            resolved_schema,
+            source_requests,
+            source_asset_urls,
+            block_names,
+        }, ctx).await?;
 
         rendered_pages.push(RenderedPage {
             url_path,
