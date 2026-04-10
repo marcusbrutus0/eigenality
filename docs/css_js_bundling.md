@@ -77,6 +77,16 @@ Runs as Phase 2.5 in the build pipeline:
 - **Content Hashing**: Runs after bundling (Phase 3). Hashes the bundle files.
 - **Dev Server**: Bundling is disabled during dev.
 
+## CSS Frameworks (Tailwind, etc.)
+
+Tree-shaking correctly handles CSS selectors with escaped characters, such as
+Tailwind's responsive breakpoint classes (`md\:flex-row`, `lg\:grid-cols-3`),
+arbitrary value selectors (`w-\[200px\]`), and fraction utilities (`w-1\/2`).
+
+Both backslash-character escapes (`\:`) and hex escapes (`\3a `) are preserved
+during pseudo-class stripping, so selectors inside `@media` blocks are matched
+against the DOM correctly.
+
 ## What Is Skipped
 - External URLs (http/https)
 - `<link>` with `media` attribute

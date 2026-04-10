@@ -636,6 +636,55 @@ mod tests {
     }
 
     #[test]
+    fn test_tree_shake_tailwind_responsive_classes() {
+        let tmp = TempDir::new().unwrap();
+        let dist = tmp.path();
+        write_file(
+            dist,
+            "page.html",
+            r#"<html><body>
+                <div class="flex flex-col md:flex-row md:block hidden">Content</div>
+            </body></html>"#,
+        );
+
+        // Realistic Tailwind CSS with responsive breakpoint utilities.
+        let css = r#"
+            .flex { display: flex; }
+            .flex-col { flex-direction: column; }
+            .hidden { display: none; }
+            @media (min-width: 768px) {
+                .md\:flex-row { flex-direction: row; }
+                .md\:block { display: block; }
+                .md\:hidden { display: none; }
+            }
+        "#;
+        let html_files = vec![dist.join("page.html")];
+        let result = tree_shake_css(css, &html_files, false).unwrap();
+
+        // Mobile-first base classes must be kept.
+        assert!(result.contains(".flex"), "base .flex class was removed");
+        assert!(result.contains(".flex-col"), "base .flex-col class was removed");
+        assert!(result.contains(".hidden"), "base .hidden class was removed");
+
+        // Desktop responsive classes inside @media must also be kept.
+        assert!(result.contains("@media"), "entire @media block was removed");
+        assert!(
+            result.contains(r"md\:flex-row"),
+            "md:flex-row responsive class was removed: {result}"
+        );
+        assert!(
+            result.contains(r"md\:block"),
+            "md:block responsive class was removed: {result}"
+        );
+
+        // .md\:hidden should be removed (not used in HTML).
+        assert!(
+            !result.contains("md:hidden") && !result.contains(r"md\:hidden"),
+            "md:hidden should have been removed (not in HTML): {result}"
+        );
+    }
+
+    #[test]
     fn test_tree_shake_empty_result() {
         let tmp = TempDir::new().unwrap();
         let dist = tmp.path();

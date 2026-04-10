@@ -73,7 +73,35 @@ pub fn strip_pseudo_for_matching(selector: &str) -> Option<String> {
     let mut i = 0;
 
     while i < len {
-        if bytes[i] == b':' && (i + 1 >= len || bytes[i + 1] != b':') {
+        if bytes[i] == b'\\' && i + 1 < len {
+            // CSS escape sequence — preserve both the backslash and the
+            // escaped content so that escaped colons (e.g. `.md\:flex-row`
+            // from Tailwind) are not misidentified as pseudo-class starts.
+            result.push('\\');
+            i += 1;
+            if bytes[i].is_ascii_hexdigit() {
+                // Hex escape: `\3a ` — consume up to 6 hex digits plus
+                // an optional trailing whitespace.
+                let hex_start = i;
+                while i < len
+                    && i - hex_start < 6
+                    && bytes[i].is_ascii_hexdigit()
+                {
+                    result.push(bytes[i] as char);
+                    i += 1;
+                }
+                // A single trailing whitespace is part of the escape sequence
+                // (CSS spec: space, tab, LF, CR, FF).
+                if i < len && bytes[i].is_ascii_whitespace() {
+                    result.push(bytes[i] as char);
+                    i += 1;
+                }
+            } else {
+                // Single-character escape: `\:`, `\/`, etc.
+                result.push(bytes[i] as char);
+                i += 1;
+            }
+        } else if bytes[i] == b':' && (i + 1 >= len || bytes[i + 1] != b':') {
             // Single colon -- this is a pseudo-class. Extract the name.
             let start = i;
             i += 1; // skip ':'
@@ -117,14 +145,15 @@ pub fn strip_pseudo_for_matching(selector: &str) -> Option<String> {
         }
     }
 
-    // Collapse any leftover whitespace.
-    let result = result.split_whitespace().collect::<Vec<_>>().join(" ");
-    let result = result.trim().to_string();
-
-    if result.is_empty() {
-        None
+    // Collapse any leftover whitespace (only allocate when needed).
+    let trimmed = result.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    if trimmed.contains("  ") {
+        Some(trimmed.split_whitespace().collect::<Vec<_>>().join(" "))
     } else {
-        Some(result)
+        Some(trimmed.to_string())
     }
 }
 
@@ -566,6 +595,53 @@ mod tests {
         assert_eq!(
             strip_pseudo_for_matching("input::placeholder"),
             Some("input".to_string())
+        );
+    }
+
+    // --- CSS escape handling in strip_pseudo_for_matching ---
+
+    #[test]
+    fn test_strip_pseudo_escaped_colon_backslash() {
+        // Tailwind responsive: `.md\:flex-row` — colon is escaped, not a pseudo.
+        assert_eq!(
+            strip_pseudo_for_matching(r".md\:flex-row"),
+            Some(r".md\:flex-row".to_string())
+        );
+    }
+
+    #[test]
+    fn test_strip_pseudo_escaped_colon_hex() {
+        // Hex escape form: `.md\3a flex-row` (lightningcss may emit this).
+        assert_eq!(
+            strip_pseudo_for_matching(r".md\3a flex-row"),
+            Some(r".md\3a flex-row".to_string())
+        );
+    }
+
+    #[test]
+    fn test_strip_pseudo_escaped_colon_with_real_pseudo() {
+        // Escaped colon in class name + a real pseudo-class.
+        assert_eq!(
+            strip_pseudo_for_matching(r".md\:flex-row:hover"),
+            Some(r".md\:flex-row".to_string())
+        );
+    }
+
+    #[test]
+    fn test_strip_pseudo_multiple_escaped_colons() {
+        // Tailwind arbitrary: `sm\:md\:block`.
+        assert_eq!(
+            strip_pseudo_for_matching(r".sm\:md\:block"),
+            Some(r".sm\:md\:block".to_string())
+        );
+    }
+
+    #[test]
+    fn test_strip_pseudo_escaped_slash() {
+        // Tailwind fraction: `.w-1\/2`.
+        assert_eq!(
+            strip_pseudo_for_matching(r".w-1\/2"),
+            Some(r".w-1\/2".to_string())
         );
     }
 
