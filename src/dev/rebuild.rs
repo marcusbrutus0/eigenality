@@ -216,6 +216,19 @@ impl DevBuildState {
         // Store frontmatter for change detection.
         let mut new_frontmatter: HashMap<PathBuf, String> = HashMap::new();
 
+        let mut render_ctx = DevRenderContext {
+            env: &env,
+            fetcher: &mut self.fetcher,
+            global_data: &global_data,
+            config,
+            dist_dir: &dist_dir,
+            build_time: &build_time,
+            asset_cache: &mut self.asset_cache,
+            asset_client: &self.asset_client,
+            plugin_registry: &self.plugin_registry,
+            rate_limiter: &rate_limiter,
+        };
+
         for page in &pages {
             // Store raw frontmatter body for change detection.
             new_frontmatter.insert(
@@ -225,39 +238,17 @@ impl DevBuildState {
 
             match &page.page_type {
                 PageType::Static => {
-                    let result = render_static_page_dev(
-                        page,
-                        &env,
-                        &mut self.fetcher,
-                        &global_data,
-                        config,
-                        &dist_dir,
-                        &build_time,
-                        &mut self.asset_cache,
-                        &self.asset_client,
-                        &self.plugin_registry,
-                        &rate_limiter,
-                    ).await?;
+                    let result = render_static_page_dev(page, &mut render_ctx).await?;
                     rendered_pages.push(result);
                 }
                 PageType::Dynamic { param_name: _ } => {
-                    let results = render_dynamic_page_dev(
-                        page,
-                        &env,
-                        &mut self.fetcher,
-                        &global_data,
-                        config,
-                        &dist_dir,
-                        &build_time,
-                        &mut self.asset_cache,
-                        &self.asset_client,
-                        &self.plugin_registry,
-                        &rate_limiter,
-                    ).await?;
+                    let results = render_dynamic_page_dev(page, &mut render_ctx).await?;
                     rendered_pages.extend(results);
                 }
             }
         }
+
+        drop(render_ctx);
 
         // Generate sitemap.
         if config.sitemap.enabled {
@@ -298,19 +289,26 @@ impl DevBuildState {
     }
 }
 
+/// Shared context for dev render functions.
+/// Holds borrowed references to loop-invariant state assembled in `full_build`.
+/// No `Arc`/`Mutex` needed — dev rebuilds are sequential.
+struct DevRenderContext<'a> {
+    env: &'a minijinja::Environment<'a>,
+    fetcher: &'a mut DataFetcher,
+    global_data: &'a HashMap<String, serde_json::Value>,
+    config: &'a SiteConfig,
+    dist_dir: &'a Path,
+    build_time: &'a str,
+    asset_cache: &'a mut AssetCache,
+    asset_client: &'a reqwest::Client,
+    plugin_registry: &'a PluginRegistry,
+    rate_limiter: &'a RateLimiterPool,
+}
+
 /// Render a static page with live-reload script injection.
 async fn render_static_page_dev(
     page: &PageDef,
-    env: &minijinja::Environment<'_>,
-    fetcher: &mut DataFetcher,
-    global_data: &HashMap<String, serde_json::Value>,
-    config: &SiteConfig,
-    dist_dir: &Path,
-    build_time: &str,
-    asset_cache: &mut AssetCache,
-    asset_client: &reqwest::Client,
-    plugin_registry: &PluginRegistry,
-    rate_limiter: &RateLimiterPool,
+    ctx: &mut DevRenderContext<'_>,
 ) -> Result<RenderedPage> {
     use crate::build::context::{self, PageMeta};
     use crate::build::fragments;
@@ -318,11 +316,11 @@ async fn render_static_page_dev(
     let tmpl_name = page.template_path.to_string_lossy().to_string();
 
     // Resolve data queries.
-    let page_data = data::resolve_page_data(&page.frontmatter, fetcher, Some(plugin_registry))
+    let page_data = data::resolve_page_data(&page.frontmatter, ctx.fetcher, Some(ctx.plugin_registry))
         .await
         .wrap_err_with(|| format!("Failed to resolve data for {}", tmpl_name))?;
 
-    let output_path = if config.build.clean_urls && page.template_path.file_stem().unwrap_or_default() != "index" {
+    let output_path = if ctx.config.build.clean_urls && page.template_path.file_stem().unwrap_or_default() != "index" {
         page.output_dir.join(page.template_path.file_stem().unwrap_or_default()).join("index.html")
     } else {
         page.output_dir.join(page.template_path.file_name().unwrap_or_default())
@@ -335,15 +333,15 @@ async fn render_static_page_dev(
         .map(|f| f == "index.html")
         .unwrap_or(false);
 
-    let meta = PageMeta::new(&url_path, &output_path, config, build_time);
+    let meta = PageMeta::new(&url_path, &output_path, ctx.config, ctx.build_time);
 
-    let ctx = context::build_page_context(config, global_data, &page_data, meta, None);
+    let tpl_ctx = context::build_page_context(ctx.config, ctx.global_data, &page_data, meta, None);
 
-    let tmpl = env
+    let tmpl = ctx.env
         .get_template(&tmpl_name)
         .wrap_err_with(|| format!("Template '{}' not found", tmpl_name))?;
 
-    let rendered = match tmpl.render(&ctx) {
+    let rendered = match tmpl.render(&tpl_ctx) {
         Ok(html) => html,
         Err(err) => {
             let te = TemplateError::from_minijinja(&err, &tmpl_name, None);
@@ -351,7 +349,7 @@ async fn render_static_page_dev(
             let error_html = te.to_error_html(&tmpl_name, None);
 
             // Write the error page to the output location and to _error.html sentinel.
-            write_dev_error_pages(dist_dir, &output_path, &error_html);
+            write_dev_error_pages(ctx.dist_dir, &output_path, &error_html);
 
             eprintln!("{}", console_msg);
             return Err(eyre::eyre!(
@@ -366,31 +364,31 @@ async fn render_static_page_dev(
     let no_skip = HashSet::new();
     let full_html = assets::localize_assets(
         &full_html,
-        &config.assets,
-        asset_cache,
-        asset_client,
-        dist_dir,
+        &ctx.config.assets,
+        ctx.asset_cache,
+        ctx.asset_client,
+        ctx.dist_dir,
         &no_skip,
-        rate_limiter,
+        ctx.rate_limiter,
     ).await
     .wrap_err_with(|| format!("Failed to localize assets for '{}'", tmpl_name))?;
-    let full_html = plugin_registry.post_render_html(
+    let full_html = ctx.plugin_registry.post_render_html(
         full_html,
         &url_path,
-        dist_dir,
+        ctx.dist_dir,
     )?;
     let full_html = inject::inject_reload_script(&full_html);
     let draft_label = build_draft_label(&page.frontmatter);
     let full_html = inject::inject_status_banner(&full_html, &draft_label);
 
-    let full_path = dist_dir.join(&output_path);
+    let full_path = ctx.dist_dir.join(&output_path);
     if let Some(parent) = full_path.parent() {
         tokio::fs::create_dir_all(parent).await?;
     }
     tokio::fs::write(&full_path, &full_html).await?;
 
     // Write fragments (also localize assets).
-    if config.build.fragments {
+    if ctx.config.build.fragments {
         let frags = fragments::extract_fragments(&rendered);
         let frags: Vec<_> = match &page.frontmatter.fragment_blocks {
             Some(blocks) => frags
@@ -402,19 +400,19 @@ async fn render_static_page_dev(
         if !frags.is_empty() {
             let localized_frags = localize_fragments_dev(
                 &frags,
-                &config.assets,
-                asset_cache,
-                asset_client,
-                dist_dir,
-                rate_limiter,
+                &ctx.config.assets,
+                ctx.asset_cache,
+                ctx.asset_client,
+                ctx.dist_dir,
+                ctx.rate_limiter,
             ).await?;
             fragments::write_fragments(
-                dist_dir,
+                ctx.dist_dir,
                 &output_path,
                 &localized_frags,
-                &config.build.content_block,
-                &config.build.fragment_dir,
-                &config.build.oob_blocks,
+                &ctx.config.build.content_block,
+                &ctx.config.build.fragment_dir,
+                &ctx.config.build.oob_blocks,
             )?;
         }
     }
@@ -451,16 +449,7 @@ fn write_dev_error_pages(dist_dir: &Path, output_path: &Path, error_html: &str) 
 /// Render all pages for a dynamic template with live-reload script injection.
 async fn render_dynamic_page_dev(
     page: &PageDef,
-    env: &minijinja::Environment<'_>,
-    fetcher: &mut DataFetcher,
-    global_data: &HashMap<String, serde_json::Value>,
-    config: &SiteConfig,
-    dist_dir: &Path,
-    build_time: &str,
-    asset_cache: &mut AssetCache,
-    asset_client: &reqwest::Client,
-    plugin_registry: &PluginRegistry,
-    rate_limiter: &RateLimiterPool,
+    ctx: &mut DevRenderContext<'_>,
 ) -> Result<Vec<RenderedPage>> {
     use crate::build::context::{self, PageMeta};
     use crate::build::fragments;
@@ -471,7 +460,7 @@ async fn render_dynamic_page_dev(
     let slug_field = &page.frontmatter.slug_field;
 
     // Fetch collection.
-    let items = data::resolve_dynamic_page_data(&page.frontmatter, fetcher, Some(plugin_registry))
+    let items = data::resolve_dynamic_page_data(&page.frontmatter, ctx.fetcher, Some(ctx.plugin_registry))
         .await
         .wrap_err_with(|| format!("Failed to fetch collection for {}", tmpl_name))?;
 
@@ -479,7 +468,7 @@ async fn render_dynamic_page_dev(
         return Ok(Vec::new());
     }
 
-    let tmpl = env
+    let tmpl = ctx.env
         .get_template(&tmpl_name)
         .wrap_err_with(|| format!("Template '{}' not found", tmpl_name))?;
 
@@ -510,10 +499,10 @@ async fn render_dynamic_page_dev(
 
         // Resolve nested data.
         let item_data =
-            data::resolve_dynamic_page_data_for_item(&page.frontmatter, item, fetcher, Some(plugin_registry))
+            data::resolve_dynamic_page_data_for_item(&page.frontmatter, item, ctx.fetcher, Some(ctx.plugin_registry))
                 .await?;
 
-        let output_path = if config.build.clean_urls {
+        let output_path = if ctx.config.build.clean_urls {
             page.output_dir.join(&slug).join("index.html")
         } else {
             page.output_dir.join(format!("{}.html", slug))
@@ -524,12 +513,12 @@ async fn render_dynamic_page_dev(
             bail!("Duplicate output path '{}' in '{}'", url_path, tmpl_name);
         }
 
-        let meta = PageMeta::new(&url_path, &output_path, config, build_time);
+        let meta = PageMeta::new(&url_path, &output_path, ctx.config, ctx.build_time);
 
-        let ctx =
-            context::build_page_context(config, global_data, &item_data, meta, Some((item_as, item)));
+        let tpl_ctx =
+            context::build_page_context(ctx.config, ctx.global_data, &item_data, meta, Some((item_as, item)));
 
-        let rendered = match tmpl.render(&ctx) {
+        let rendered = match tmpl.render(&tpl_ctx) {
             Ok(html) => html,
             Err(err) => {
                 let te = TemplateError::from_minijinja(&err, &tmpl_name, Some(&slug));
@@ -537,7 +526,7 @@ async fn render_dynamic_page_dev(
                 let error_html = te.to_error_html(&tmpl_name, Some(&slug));
 
                 // Write the error page to the output location and sentinel.
-                write_dev_error_pages(dist_dir, &output_path, &error_html);
+                write_dev_error_pages(ctx.dist_dir, &output_path, &error_html);
 
                 eprintln!("{}", console_msg);
                 return Err(eyre::eyre!(
@@ -552,31 +541,31 @@ async fn render_dynamic_page_dev(
         let no_skip = HashSet::new();
         let full_html = assets::localize_assets(
             &full_html,
-            &config.assets,
-            asset_cache,
-            asset_client,
-            dist_dir,
+            &ctx.config.assets,
+            ctx.asset_cache,
+            ctx.asset_client,
+            ctx.dist_dir,
             &no_skip,
-            rate_limiter,
+            ctx.rate_limiter,
         ).await
         .wrap_err_with(|| {
             format!("Failed to localize assets for '{}' slug '{}'", tmpl_name, slug)
         })?;
-        let full_html = plugin_registry.post_render_html(
+        let full_html = ctx.plugin_registry.post_render_html(
             full_html,
             &url_path,
-            dist_dir,
+            ctx.dist_dir,
         )?;
         let full_html = inject::inject_reload_script(&full_html);
 
-        let full_path = dist_dir.join(&output_path);
+        let full_path = ctx.dist_dir.join(&output_path);
         if let Some(parent) = full_path.parent() {
             tokio::fs::create_dir_all(parent).await?;
         }
         tokio::fs::write(&full_path, &full_html).await?;
 
         // Write fragments (also localize assets).
-        if config.build.fragments {
+        if ctx.config.build.fragments {
             let frags = fragments::extract_fragments(&rendered);
             let frags: Vec<_> = match &page.frontmatter.fragment_blocks {
                 Some(blocks) => frags
@@ -588,19 +577,19 @@ async fn render_dynamic_page_dev(
             if !frags.is_empty() {
                 let localized_frags = localize_fragments_dev(
                     &frags,
-                    &config.assets,
-                    asset_cache,
-                    asset_client,
-                    dist_dir,
-                    rate_limiter,
+                    &ctx.config.assets,
+                    ctx.asset_cache,
+                    ctx.asset_client,
+                    ctx.dist_dir,
+                    ctx.rate_limiter,
                 ).await?;
                 fragments::write_fragments(
-                    dist_dir,
+                    ctx.dist_dir,
                     &output_path,
                     &localized_frags,
-                    &config.build.content_block,
-                    &config.build.fragment_dir,
-                    &config.build.oob_blocks,
+                    &ctx.config.build.content_block,
+                    &ctx.config.build.fragment_dir,
+                    &ctx.config.build.oob_blocks,
                 )?;
             }
         }
