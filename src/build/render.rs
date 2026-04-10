@@ -712,8 +712,10 @@ async fn render_static_page(
 /// Render all pages for a dynamic template.
 ///
 /// 1. Fetch collection from frontmatter query.
-/// 2. For each item: extract slug, resolve nested data, build context, render.
-/// 3. Write full pages and fragments.
+/// 2. Phase 1 (sequential): resolve slugs, deduplicate, register output paths.
+/// 3. Phase 2 (concurrent): resolve item data + render all items via `buffer_unordered`.
+/// 4. Drain `SourceAssetCollector` once after all renders complete.
+/// 5. Sequentially finalize each rendered item (write files, process assets).
 async fn render_dynamic_page(
     page: &PageDef,
     ctx: &BuildContext,
@@ -744,15 +746,23 @@ async fn render_dynamic_page(
         items.len(),
     );
 
-    let tmpl = ctx.env.get_template(&tmpl_name)
-        .wrap_err_with(|| format!("Template '{}' not found in environment", tmpl_name))?;
+    let concurrency = std::thread::available_parallelism()
+        .map(|n| n.get() * 2)
+        .unwrap_or(8);
 
-    let mut rendered_pages = Vec::new();
+    // Phase 1: sequential pre-pass — slug resolution, dedup, output path registration.
+    struct PhaseOneItem {
+        item: serde_json::Value,
+        slug: String,
+        output_path: std::path::PathBuf,
+        url_path: String,
+    }
+
     let mut seen_slugs: HashSet<String> = HashSet::new();
+    let mut phase_one_items: Vec<PhaseOneItem> = Vec::with_capacity(items.len());
 
     for (idx, item) in items.iter().enumerate() {
-        // Extract slug.
-        let slug = match item.get(slug_field) {
+        let raw_slug = match item.get(slug_field) {
             Some(serde_json::Value::String(s)) => s.clone(),
             Some(serde_json::Value::Number(n)) => n.to_string(),
             Some(_) => {
@@ -771,8 +781,7 @@ async fn render_dynamic_page(
             }
         };
 
-        // Sanitize slug: replace problematic chars.
-        let slug = slug::slugify(&slug);
+        let slug = slug::slugify(&raw_slug);
         if slug.is_empty() {
             tracing::warn!(
                 "Item {} in '{}' has empty slug after sanitization, skipping.",
@@ -781,7 +790,6 @@ async fn render_dynamic_page(
             continue;
         }
 
-        // Check for duplicate slugs within this dynamic template.
         if !seen_slugs.insert(slug.clone()) {
             bail!(
                 "Duplicate slug '{}' in dynamic template '{}'. \
@@ -792,22 +800,6 @@ async fn render_dynamic_page(
             );
         }
 
-        // Resolve nested data queries for this item — releases fetcher mutex before HTTP.
-        ctx.data_query_count.fetch_add(page.frontmatter.data.len() as u32, Ordering::Relaxed);
-        let item_data = data::resolve_dynamic_page_data_for_item_unlocked(
-            &page.frontmatter,
-            item,
-            &ctx.fetcher,
-            Some(&ctx.plugin_registry),
-        )
-        .await
-        .wrap_err_with(|| {
-            format!(
-                "Failed to resolve data for item '{}' in template '{}'",
-                slug, tmpl_name,
-            )
-        })?;
-
         let output_path = if config.build.clean_urls {
             page.output_dir.join(&slug).join("index.html")
         } else {
@@ -815,74 +807,151 @@ async fn render_dynamic_page(
         };
         let url_path = format!("/{}", output_path.to_string_lossy().replace('\\', "/"));
 
-        // Check for output path collision with other templates.
         {
             let mut output_paths = ctx.output_paths.lock().await;
             register_output_path(&url_path, &tmpl_name, &mut output_paths)?;
         }
 
-        // Build context.
-        let meta = PageMeta::new(&url_path, &output_path, config, &ctx.build_time);
+        phase_one_items.push(PhaseOneItem {
+            item: item.clone(),
+            slug,
+            output_path,
+            url_path,
+        });
+    }
 
-        let tpl_ctx = context::build_page_context(
-            config,
-            &ctx.global_data,
-            &item_data,
-            meta,
-            Some((item_as, item)),
-        );
+    // Phase 2: concurrent data fetch + render.
+    struct PhaseTwoResult {
+        slug: String,
+        output_path: std::path::PathBuf,
+        url_path: String,
+        rendered: String,
+        block_names: Vec<String>,
+        resolved_seo: crate::frontmatter::SeoMeta,
+        resolved_schema: crate::frontmatter::SchemaConfig,
+    }
 
-        let resolved_seo = seo::resolve_seo_expressions(
-            &page.frontmatter.seo,
-            &ctx.env,
-            &tpl_ctx,
-        );
+    let data_query_increment = page.frontmatter.data.len() as u32;
+    // Rebind to references so they can be shared across async blocks.
+    let tmpl_name_ref = &tmpl_name;
+    let page_ref = page;
+    let ctx_ref = ctx;
 
-        let resolved_schema = json_ld::resolve_schema_expressions(
-            &page.frontmatter.schema,
-            &ctx.env,
-            &tpl_ctx,
-        );
+    let results: Vec<Result<PhaseTwoResult>> = stream::iter(phase_one_items)
+        .map(|p1| async move {
+            // Acquire template per-item: minijinja::Template is not Send.
+            let tmpl = ctx_ref.env.get_template(tmpl_name_ref).wrap_err_with(|| {
+                format!("Template '{}' not found in environment", tmpl_name_ref)
+            })?;
 
-        let rendered = match tmpl.render(&tpl_ctx) {
-            Ok(html) => html,
-            Err(err) => {
-                let te = TemplateError::from_minijinja(&err, &tmpl_name, Some(&slug));
-                eprintln!("{}", te.format_console(&tmpl_name, Some(&slug)));
-                return Err(eyre::eyre!(
-                    "Failed to render template '{}' for item with slug '{}': {}",
-                    tmpl_name, slug, te.short_msg
-                ));
-            }
-        };
+            ctx_ref
+                .data_query_count
+                .fetch_add(data_query_increment, Ordering::Relaxed);
 
-        // Extract block names before stripping markers (needed for view transitions).
-        let block_names = if config.build.view_transitions.enabled {
-            fragments::extract_block_names(&rendered)
-        } else {
-            Vec::new()
-        };
+            let item_data = data::resolve_dynamic_page_data_for_item_unlocked(
+                &page_ref.frontmatter,
+                &p1.item,
+                &ctx_ref.fetcher,
+                Some(&ctx_ref.plugin_registry),
+            )
+            .await
+            .wrap_err_with(|| {
+                format!(
+                    "Failed to resolve data for item '{}' in template '{}'",
+                    p1.slug, tmpl_name_ref,
+                )
+            })?;
 
-        // Drain source asset requests immediately so concurrent pages don't steal them.
-        let source_requests = ctx.source_asset_collector.drain();
-        let source_asset_urls: HashSet<String> = source_requests.iter().map(|r| r.url.clone()).collect();
+            let meta = PageMeta::new(&p1.url_path, &p1.output_path, &ctx_ref.config, &ctx_ref.build_time);
 
-        // Post-render pipeline.
-        finalize_page_html(FinalizeInput {
-            rendered: &rendered,
-            output_path: &output_path,
-            url_path: &url_path,
-            label: &format!("template '{}' slug '{}'", tmpl_name, slug),
-            page,
-            resolved_seo,
-            resolved_schema,
-            source_requests,
-            source_asset_urls,
-            block_names,
-        }, ctx).await?;
+            let tpl_ctx = context::build_page_context(
+                &ctx_ref.config,
+                &ctx_ref.global_data,
+                &item_data,
+                meta,
+                Some((item_as, &p1.item)),
+            );
+
+            let resolved_seo = seo::resolve_seo_expressions(
+                &page_ref.frontmatter.seo,
+                &ctx_ref.env,
+                &tpl_ctx,
+            );
+
+            let resolved_schema = json_ld::resolve_schema_expressions(
+                &page_ref.frontmatter.schema,
+                &ctx_ref.env,
+                &tpl_ctx,
+            );
+
+            let rendered = match tmpl.render(&tpl_ctx) {
+                Ok(html) => html,
+                Err(err) => {
+                    let te = TemplateError::from_minijinja(&err, tmpl_name_ref, Some(&p1.slug));
+                    eprintln!("{}", te.format_console(tmpl_name_ref, Some(&p1.slug)));
+                    return Err(eyre::eyre!(
+                        "Failed to render template '{}' for item with slug '{}': {}",
+                        tmpl_name_ref, p1.slug, te.short_msg
+                    ));
+                }
+            };
+
+            let block_names = if ctx_ref.config.build.view_transitions.enabled {
+                fragments::extract_block_names(&rendered)
+            } else {
+                Vec::new()
+            };
+
+            Ok(PhaseTwoResult {
+                slug: p1.slug,
+                output_path: p1.output_path,
+                url_path: p1.url_path,
+                rendered,
+                block_names,
+                resolved_seo,
+                resolved_schema,
+            })
+        })
+        .buffer_unordered(concurrency)
+        .collect()
+        .await;
+
+    // Check for errors from concurrent renders — collect all, return first.
+    let mut phase_two_items: Vec<PhaseTwoResult> = Vec::with_capacity(results.len());
+    for result in results {
+        match result {
+            Ok(p2) => phase_two_items.push(p2),
+            Err(e) => return Err(e),
+        }
+    }
+
+    // Drain source assets once after all renders complete.
+    let source_requests = ctx.source_asset_collector.drain();
+    let source_asset_urls: HashSet<String> =
+        source_requests.iter().map(|r| r.url.clone()).collect();
+
+    // Sequential finalize: write files, process assets.
+    let mut rendered_pages = Vec::with_capacity(phase_two_items.len());
+    for p2 in phase_two_items {
+        finalize_page_html(
+            FinalizeInput {
+                rendered: &p2.rendered,
+                output_path: &p2.output_path,
+                url_path: &p2.url_path,
+                label: &format!("template '{}' slug '{}'", tmpl_name, p2.slug),
+                page,
+                resolved_seo: p2.resolved_seo,
+                resolved_schema: p2.resolved_schema,
+                source_requests: source_requests.clone(),
+                source_asset_urls: source_asset_urls.clone(),
+                block_names: p2.block_names,
+            },
+            ctx,
+        )
+        .await?;
 
         rendered_pages.push(RenderedPage {
-            url_path,
+            url_path: p2.url_path,
             is_index: false,
             is_dynamic: true,
             template_path: Some(page.template_path.display().to_string()),
