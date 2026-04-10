@@ -15,6 +15,7 @@ pub mod json_ld;
 pub mod minify;
 pub mod not_found;
 pub mod output;
+pub mod redirects;
 pub mod render;
 pub mod robots;
 pub mod security_headers;

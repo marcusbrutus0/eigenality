@@ -37,6 +37,7 @@ use super::minify;
 use super::not_found;
 use super::output;
 use super::rate_limit::RateLimiterPool;
+use super::redirects;
 use super::robots;
 use super::security_headers;
 use super::seo;
@@ -282,6 +283,9 @@ pub async fn build(project_root: &Path, dev: bool, fresh: bool) -> Result<()> {
     if ctx.config.security_headers.enabled {
         security_headers::write(project_root, &dist_dir, &ctx.config)?;
     }
+
+    // Generate redirect rules file.
+    redirects::write(project_root, &dist_dir, &ctx.config)?;
 
     // Generate Atom feeds.
     if !ctx.config.feed.is_empty() {
