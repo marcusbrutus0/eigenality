@@ -27,6 +27,7 @@ use crate::template::errors::TemplateError;
 use super::analytics;
 use super::bundling;
 use super::content_hash;
+use super::incremental;
 use super::context::{self, PageMeta};
 use super::critical_css;
 use super::feed;
@@ -68,6 +69,7 @@ pub(crate) struct BuildContext {
     pub env: Arc<minijinja::Environment<'static>>,
     pub fetcher: Arc<AsyncMutex<DataFetcher>>,
     pub global_data: Arc<HashMap<String, serde_json::Value>>,
+    pub project_root: Arc<std::path::Path>,
     pub dist_dir: Arc<std::path::Path>,
     pub build_time: Arc<str>,
     pub output_paths: Arc<AsyncMutex<HashSet<String>>>,
@@ -80,12 +82,17 @@ pub(crate) struct BuildContext {
     pub manifest: Arc<content_hash::AssetManifest>,
     pub source_asset_collector: SourceAssetCollector,
     pub rate_limiter: Arc<RateLimiterPool>,
+    /// Previous build manifest for per-page Tier 2 invalidation checks.
+    /// `None` when doing a forced full rebuild (dev, --full, --fresh, Tier 1 changed).
+    pub prev_manifest: Option<Arc<incremental::BuildManifest>>,
+    /// Accumulates per-page records for the new manifest written on success.
+    pub current_manifest: Arc<AsyncMutex<incremental::BuildManifest>>,
 }
 
 /// Run the full build process.
 ///
 /// This is the main entry point for `eigen build`.
-pub async fn build(project_root: &Path, dev: bool, fresh: bool, _full: bool) -> Result<()> {
+pub async fn build(project_root: &Path, dev: bool, fresh: bool, full: bool) -> Result<()> {
     let config = crate::config::load_config(project_root)?;
     tracing::info!("Loading config... ✓ ({})", config.site.name);
 
@@ -128,14 +135,23 @@ pub async fn build(project_root: &Path, dev: bool, fresh: bool, _full: bool) -> 
         tracing::info!("Skipped {} draft/scheduled page(s).", skipped);
     }
 
-    // Set up output directory (clean=true for now; Commit 4 will add incremental logic).
+    // ── Incremental build: Tier 1 (global invalidation) ─────────────────────
+    //
+    // Strategy:
+    //  1. Copy static assets into dist/ without wiping it first.
+    //  2. Compute Tier 1 hashes (config, layouts, global data, asset manifest).
+    //  3. If any Tier 1 hash changed (or --full), wipe dist/ and re-copy.
+    //  4. Carry the previous manifest into page rendering for Tier 2 checks.
+    //
+    // Dev mode always does a full rebuild (no incremental checks).
+
+    // Stage A: create dist/ if missing, copy static assets.
     output::setup_output_dir(
         project_root,
         config.build.fragments,
         &config.build.fragment_dir,
-        true,
+        false, // don't wipe yet
     )?;
-    // Phase 1: Copy static assets (with content hashing if enabled).
     let manifest = output::copy_static_assets(project_root, &config.build.content_hash)?;
     let manifest = Arc::new(manifest);
 
@@ -146,6 +162,67 @@ pub async fn build(project_root: &Path, dev: bool, fresh: bool, _full: bool) -> 
         );
     }
     tracing::info!("Copying static assets... ✓");
+
+    // Stage B: compute Tier 1 hashes and decide full vs. incremental.
+    // Dev and --full always do a full rebuild; otherwise check against previous manifest.
+    let tier1 = if !dev && !full {
+        let config_hash = incremental::compute_config_hash(project_root)?;
+        let layout_hash = incremental::compute_layout_hash(project_root)?;
+        let global_data_hash = incremental::compute_global_data_hash(project_root)?;
+        let content_manifest_hash = incremental::compute_content_manifest_hash(&manifest);
+        Some((config_hash, layout_hash, global_data_hash, content_manifest_hash))
+    } else {
+        None
+    };
+
+    let (need_full, prev_manifest) = match &tier1 {
+        None => (true, incremental::BuildManifest::new_empty()),
+        Some((config_hash, layout_hash, global_data_hash, content_manifest_hash)) => {
+            let prev = incremental::load_manifest(project_root)
+                .unwrap_or_else(incremental::BuildManifest::new_empty);
+            let changed = incremental::tier1_changed(
+                &prev,
+                env!("CARGO_PKG_VERSION"),
+                config_hash,
+                layout_hash,
+                global_data_hash,
+                content_manifest_hash,
+            );
+            (changed, prev)
+        }
+    };
+
+    // Stage C: if full rebuild, wipe dist/ and re-copy static assets.
+    let manifest = if need_full {
+        output::setup_output_dir(
+            project_root,
+            config.build.fragments,
+            &config.build.fragment_dir,
+            true,
+        )?;
+        let m = output::copy_static_assets(project_root, &config.build.content_hash)?;
+        Arc::new(m)
+    } else {
+        manifest
+    };
+
+    // Seed the new manifest with current Tier 1 hashes (for the next run).
+    let current_manifest = {
+        let mut m = incremental::BuildManifest::new_empty();
+        if let Some((config_hash, layout_hash, global_data_hash, content_manifest_hash)) = tier1 {
+            m.config_hash = config_hash;
+            m.layout_hash = layout_hash;
+            m.global_data_hash = global_data_hash;
+            m.content_manifest_hash = content_manifest_hash;
+        } else if !dev {
+            // full=true path: recompute so the saved manifest stays current.
+            m.config_hash = incremental::compute_config_hash(project_root)?;
+            m.layout_hash = incremental::compute_layout_hash(project_root)?;
+            m.global_data_hash = incremental::compute_global_data_hash(project_root)?;
+            m.content_manifest_hash = incremental::compute_content_manifest_hash(&manifest);
+        }
+        Arc::new(tokio::sync::Mutex::new(m))
+    };
 
     // Source asset collector: shared between template env and render pipeline.
     let source_asset_collector = SourceAssetCollector::new();
@@ -215,12 +292,20 @@ pub async fn build(project_root: &Path, dev: bool, fresh: bool, _full: bool) -> 
 
     let dist_dir = project_root.join("dist");
 
+    // Per-page incremental: only pass prev_manifest when not doing a full rebuild.
+    let prev_manifest_ctx = if need_full {
+        None
+    } else {
+        Some(Arc::new(prev_manifest))
+    };
+
     // Build the shared context for concurrent rendering.
     let ctx = BuildContext {
         config: Arc::new(config),
         env: Arc::new(env),
         fetcher: Arc::new(AsyncMutex::new(fetcher)),
         global_data: Arc::new(global_data),
+        project_root: project_root.into(),
         dist_dir: dist_dir.clone().into(),
         build_time: build_time.clone().into(),
         output_paths: Arc::new(AsyncMutex::new(HashSet::new())),
@@ -233,6 +318,8 @@ pub async fn build(project_root: &Path, dev: bool, fresh: bool, _full: bool) -> 
         manifest: manifest.clone(),
         source_asset_collector,
         rate_limiter,
+        prev_manifest: prev_manifest_ctx,
+        current_manifest: current_manifest.clone(),
     };
 
     // Render pages concurrently.
@@ -348,6 +435,13 @@ pub async fn build(project_root: &Path, dev: bool, fresh: bool, _full: bool) -> 
         rendered_pages.len(),
         data_query_count,
     );
+
+    // Persist the build manifest so the next run can skip unchanged pages.
+    if !dev {
+        let manifest_guard = ctx.current_manifest.lock().await;
+        incremental::save_manifest(project_root, &manifest_guard)
+            .wrap_err("Failed to save build manifest")?;
+    }
 
     eprintln!(
         "Built {} page(s) in dist/.",
@@ -653,6 +747,47 @@ async fn render_static_page(
         .map(|f| f == "index.html")
         .unwrap_or(false);
 
+    // Tier 2 incremental: compute hashes and check if page is unchanged.
+    let output_files = vec![output_path.to_string_lossy().replace('\\', "/")];
+    let template_hash = {
+        let tmpl_path = ctx.project_root.join("templates").join(&tmpl_name);
+        let body = std::fs::read_to_string(&tmpl_path)
+            .unwrap_or_default();
+        incremental::sha256_str(&body)
+    };
+    let frontmatter_hash = incremental::sha256_str(&page.raw_frontmatter);
+    let data_hashes: HashMap<String, String> = page_data
+        .iter()
+        .map(|(k, v)| {
+            let serialized = serde_json::to_string(v).unwrap_or_default();
+            (k.clone(), incremental::sha256_str(&serialized))
+        })
+        .collect();
+
+    if let Some(prev) = &ctx.prev_manifest {
+        if !incremental::page_changed(
+            prev.pages.get(&url_path),
+            &template_hash,
+            &frontmatter_hash,
+            &data_hashes,
+            &output_files,
+            &ctx.dist_dir,
+        ) {
+            // Page is unchanged — carry its record forward and skip rendering.
+            if let Some(rec) = prev.pages.get(&url_path) {
+                let mut cur = ctx.current_manifest.lock().await;
+                cur.pages.insert(url_path.clone(), rec.clone());
+            }
+            tracing::debug!("  Static (skipped): {}", tmpl_name);
+            return Ok(RenderedPage {
+                url_path,
+                is_index,
+                is_dynamic: false,
+                template_path: Some(page.template_path.display().to_string()),
+            });
+        }
+    }
+
     let meta = PageMeta::new(&url_path, &output_path, config, &ctx.build_time);
     let tpl_ctx = context::build_page_context(config, &ctx.global_data, &page_data, meta, None);
 
@@ -701,6 +836,21 @@ async fn render_static_page(
         source_asset_urls,
         block_names,
     }, ctx).await?;
+
+    // Record this page in the current manifest.
+    {
+        let mut cur = ctx.current_manifest.lock().await;
+        cur.pages.insert(url_path.clone(), incremental::PageRecord {
+            template_path: tmpl_name.clone(),
+            template_hash,
+            frontmatter_hash,
+            data_hashes,
+            output_files,
+            url_path: url_path.clone(),
+            is_index,
+            is_dynamic: false,
+        });
+    }
 
     Ok(RenderedPage {
         url_path,
@@ -826,24 +976,37 @@ async fn render_dynamic_page(
         slug: String,
         output_path: std::path::PathBuf,
         url_path: String,
+        skipped: bool,
         rendered: String,
         block_names: Vec<String>,
         resolved_seo: crate::frontmatter::SeoMeta,
         resolved_schema: crate::frontmatter::SchemaConfig,
+        /// Hashes captured for the manifest record (skipped or rendered).
+        template_hash: String,
+        frontmatter_hash: String,
+        data_hashes: HashMap<String, String>,
+        output_files: Vec<String>,
     }
+
+    // Compute template and frontmatter hashes once for all items in this template.
+    let tmpl_template_hash = {
+        let tmpl_path = ctx.project_root.join("templates").join(&tmpl_name);
+        let body = std::fs::read_to_string(&tmpl_path).unwrap_or_default();
+        incremental::sha256_str(&body)
+    };
+    let tmpl_frontmatter_hash = incremental::sha256_str(&page.raw_frontmatter);
 
     let data_query_increment = page.frontmatter.data.len() as u32;
     // Rebind to references so they can be shared across async blocks.
     let tmpl_name_ref = &tmpl_name;
     let page_ref = page;
     let ctx_ref = ctx;
+    let tmpl_template_hash_ref = &tmpl_template_hash;
+    let tmpl_frontmatter_hash_ref = &tmpl_frontmatter_hash;
 
     let results: Vec<Result<PhaseTwoResult>> = stream::iter(phase_one_items)
         .map(|p1| async move {
-            // Acquire template per-item: minijinja::Template is not Send.
-            let tmpl = ctx_ref.env.get_template(tmpl_name_ref).wrap_err_with(|| {
-                format!("Template '{}' not found in environment", tmpl_name_ref)
-            })?;
+            let output_files = vec![p1.output_path.to_string_lossy().replace('\\', "/")];
 
             ctx_ref
                 .data_query_count
@@ -861,6 +1024,51 @@ async fn render_dynamic_page(
                     "Failed to resolve data for item '{}' in template '{}'",
                     p1.slug, tmpl_name_ref,
                 )
+            })?;
+
+            // Compute per-item data hashes (collection item + any extra queries).
+            let data_hashes: HashMap<String, String> = {
+                let item_serialized = serde_json::to_string(&p1.item).unwrap_or_default();
+                let mut h = HashMap::new();
+                h.insert("_item".to_string(), incremental::sha256_str(&item_serialized));
+                for (k, v) in &item_data {
+                    let s = serde_json::to_string(v).unwrap_or_default();
+                    h.insert(k.clone(), incremental::sha256_str(&s));
+                }
+                h
+            };
+
+            // Tier 2 skip check.
+            if let Some(prev) = &ctx_ref.prev_manifest {
+                if !incremental::page_changed(
+                    prev.pages.get(&p1.url_path),
+                    tmpl_template_hash_ref,
+                    tmpl_frontmatter_hash_ref,
+                    &data_hashes,
+                    &output_files,
+                    &ctx_ref.dist_dir,
+                ) {
+                    tracing::debug!("  Dynamic (skipped): {} slug '{}'", tmpl_name_ref, p1.slug);
+                    return Ok(PhaseTwoResult {
+                        slug: p1.slug,
+                        output_path: p1.output_path,
+                        url_path: p1.url_path,
+                        skipped: true,
+                        rendered: String::new(),
+                        block_names: Vec::new(),
+                        resolved_seo: crate::frontmatter::SeoMeta::default(),
+                        resolved_schema: crate::frontmatter::SchemaConfig::default(),
+                        template_hash: tmpl_template_hash_ref.clone(),
+                        frontmatter_hash: tmpl_frontmatter_hash_ref.clone(),
+                        data_hashes,
+                        output_files,
+                    });
+                }
+            }
+
+            // Acquire template per-item: minijinja::Template is not Send.
+            let tmpl = ctx_ref.env.get_template(tmpl_name_ref).wrap_err_with(|| {
+                format!("Template '{}' not found in environment", tmpl_name_ref)
             })?;
 
             let meta = PageMeta::new(&p1.url_path, &p1.output_path, &ctx_ref.config, &ctx_ref.build_time);
@@ -907,10 +1115,15 @@ async fn render_dynamic_page(
                 slug: p1.slug,
                 output_path: p1.output_path,
                 url_path: p1.url_path,
+                skipped: false,
                 rendered,
                 block_names,
                 resolved_seo,
                 resolved_schema,
+                template_hash: tmpl_template_hash_ref.clone(),
+                frontmatter_hash: tmpl_frontmatter_hash_ref.clone(),
+                data_hashes,
+                output_files,
             })
         })
         .buffer_unordered(concurrency)
@@ -933,7 +1146,28 @@ async fn render_dynamic_page(
 
     // Sequential finalize: write files, process assets.
     let mut rendered_pages = Vec::with_capacity(phase_two_items.len());
+    let mut rendered_slugs: Vec<String> = Vec::with_capacity(phase_two_items.len());
+
     for p2 in phase_two_items {
+        rendered_slugs.push(p2.slug.clone());
+
+        if p2.skipped {
+            // Carry the previous page record forward into the current manifest.
+            if let Some(prev) = &ctx.prev_manifest {
+                if let Some(rec) = prev.pages.get(&p2.url_path) {
+                    let mut cur = ctx.current_manifest.lock().await;
+                    cur.pages.insert(p2.url_path.clone(), rec.clone());
+                }
+            }
+            rendered_pages.push(RenderedPage {
+                url_path: p2.url_path,
+                is_index: false,
+                is_dynamic: true,
+                template_path: Some(page.template_path.display().to_string()),
+            });
+            continue;
+        }
+
         finalize_page_html(
             FinalizeInput {
                 rendered: &p2.rendered,
@@ -951,12 +1185,36 @@ async fn render_dynamic_page(
         )
         .await?;
 
+        // Record the rendered page in the current manifest.
+        {
+            let mut cur = ctx.current_manifest.lock().await;
+            cur.pages.insert(p2.url_path.clone(), incremental::PageRecord {
+                template_path: tmpl_name.clone(),
+                template_hash: p2.template_hash,
+                frontmatter_hash: p2.frontmatter_hash,
+                data_hashes: p2.data_hashes,
+                output_files: p2.output_files,
+                url_path: p2.url_path.clone(),
+                is_index: false,
+                is_dynamic: true,
+            });
+        }
+
         rendered_pages.push(RenderedPage {
             url_path: p2.url_path,
             is_index: false,
             is_dynamic: true,
             template_path: Some(page.template_path.display().to_string()),
         });
+    }
+
+    // Record slug list for this dynamic template.
+    {
+        let mut cur = ctx.current_manifest.lock().await;
+        cur.dynamic_templates.insert(
+            tmpl_name.clone(),
+            incremental::DynamicTemplateRecord { slugs: rendered_slugs },
+        );
     }
 
     tracing::debug!(

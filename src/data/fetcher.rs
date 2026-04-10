@@ -1223,6 +1223,47 @@ mod tests {
         assert_eq!(&bytes[..], b"[1,2,3]");
     }
 
+    /// `check_source_cache` includes `If-None-Match` when the disk cache has an etag.
+    #[test]
+    fn check_source_cache_populates_if_none_match_from_etag() {
+        use crate::data::cache::DataCache;
+
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path();
+
+        let mut data_cache = DataCache::open(root).unwrap();
+        let cache_key = "GET:http://api.example.com/items";
+        // Seed the disk cache with an etag so the conditional header fires.
+        data_cache
+            .store(cache_key, b"[{\"id\":1}]", Some("\"etag-abc\""), None)
+            .unwrap();
+
+        let mut sources = HashMap::new();
+        sources.insert(
+            "api".to_string(),
+            SourceConfig {
+                url: "http://api.example.com".to_string(),
+                headers: HashMap::new(),
+                rate_limit: None,
+            },
+        );
+        let pool = Arc::new(RateLimiterPool::new(None, &HashMap::new()));
+        let fetcher = DataFetcher::new(&sources, root, Some(data_cache), pool);
+
+        let result = fetcher
+            .check_source_cache("api", "/items", &HttpMethod::Get, None)
+            .unwrap();
+
+        match result {
+            SourceCacheCheck::Miss { headers, .. } => {
+                let inm = headers.get(reqwest::header::IF_NONE_MATCH);
+                assert!(inm.is_some(), "If-None-Match should be set from disk cache etag");
+                assert_eq!(inm.unwrap().to_str().unwrap(), "\"etag-abc\"");
+            }
+            SourceCacheCheck::Hit(_) => panic!("expected Miss (url_cache is empty)"),
+        }
+    }
+
     /// `store_source_result` parses a 200 response and inserts into url_cache.
     #[tokio::test]
     async fn store_source_result_stores_200_response() {
@@ -1284,5 +1325,136 @@ mod tests {
 
         // Value should now be in the in-memory url_cache.
         assert!(fetcher.url_cache.contains_key(&cache_key));
+    }
+
+    /// `store_source_result` with a 304 and a valid disk-cached body returns `StoreResult::Value`.
+    #[tokio::test]
+    async fn store_source_result_304_valid_disk_cache_returns_value() {
+        use crate::data::cache::DataCache;
+        use std::thread;
+
+        let server = tiny_http::Server::http("127.0.0.1:0").expect("bind");
+        let addr = server.server_addr().to_ip().expect("addr");
+        let url = format!("http://{}/data", addr);
+
+        thread::spawn(move || {
+            if let Ok(Some(req)) = server.recv_timeout(std::time::Duration::from_secs(5)) {
+                let _ = req.respond(tiny_http::Response::new(
+                    tiny_http::StatusCode(304),
+                    vec![],
+                    std::io::Cursor::new(b""),
+                    Some(0),
+                    None,
+                ));
+            }
+        });
+
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path();
+
+        let cache_key = format!("GET:{}", url);
+        let cached_body = b"[{\"id\":99}]";
+
+        let mut data_cache = DataCache::open(root).unwrap();
+        data_cache
+            .store(&cache_key, cached_body, Some("\"etag-v1\""), None)
+            .unwrap();
+
+        let mut sources = HashMap::new();
+        sources.insert(
+            "api".to_string(),
+            SourceConfig {
+                url: format!("http://{}", addr),
+                headers: HashMap::new(),
+                rate_limit: None,
+            },
+        );
+        let pool = Arc::new(RateLimiterPool::new(None, &HashMap::new()));
+        let mut fetcher = DataFetcher::new(&sources, root, Some(data_cache), pool.clone());
+
+        let client = reqwest::Client::new();
+        let resp = execute_source_request(
+            &client, &pool, &HttpMethod::Get, &url,
+            reqwest::header::HeaderMap::new(), None,
+        )
+        .await
+        .expect("request");
+
+        let result = fetcher
+            .store_source_result("api", cache_key.clone(), &url, resp)
+            .await
+            .expect("store");
+
+        match result {
+            StoreResult::Value(v) => assert_eq!(v, json!([{"id": 99}])),
+            StoreResult::RetryNeeded { .. } => panic!("unexpected retry"),
+        }
+
+        // Value should be promoted to the in-memory url_cache.
+        assert!(fetcher.url_cache.contains_key(&cache_key));
+    }
+
+    /// `store_source_result` with a 304 and a corrupt disk body returns `StoreResult::RetryNeeded`.
+    #[tokio::test]
+    async fn store_source_result_304_corrupt_disk_cache_returns_retry_needed() {
+        use crate::data::cache::DataCache;
+        use std::thread;
+
+        let server = tiny_http::Server::http("127.0.0.1:0").expect("bind");
+        let addr = server.server_addr().to_ip().expect("addr");
+        let url = format!("http://{}/data", addr);
+
+        thread::spawn(move || {
+            if let Ok(Some(req)) = server.recv_timeout(std::time::Duration::from_secs(5)) {
+                let _ = req.respond(tiny_http::Response::new(
+                    tiny_http::StatusCode(304),
+                    vec![],
+                    std::io::Cursor::new(b""),
+                    Some(0),
+                    None,
+                ));
+            }
+        });
+
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path();
+
+        let cache_key = format!("GET:{}", url);
+
+        // Seed the disk cache with invalid JSON.
+        let mut data_cache = DataCache::open(root).unwrap();
+        data_cache
+            .store(&cache_key, b"NOT VALID JSON {{{{", Some("\"etag-v1\""), None)
+            .unwrap();
+
+        let mut sources = HashMap::new();
+        sources.insert(
+            "api".to_string(),
+            SourceConfig {
+                url: format!("http://{}", addr),
+                headers: HashMap::new(),
+                rate_limit: None,
+            },
+        );
+        let pool = Arc::new(RateLimiterPool::new(None, &HashMap::new()));
+        let mut fetcher = DataFetcher::new(&sources, root, Some(data_cache), pool.clone());
+
+        let client = reqwest::Client::new();
+        let resp = execute_source_request(
+            &client, &pool, &HttpMethod::Get, &url,
+            reqwest::header::HeaderMap::new(), None,
+        )
+        .await
+        .expect("request");
+
+        let result = fetcher
+            .store_source_result("api", cache_key, &url, resp)
+            .await
+            .expect("store");
+
+        match result {
+            StoreResult::RetryNeeded { .. } => {} // expected
+            StoreResult::Value(_) => panic!("expected RetryNeeded for corrupt disk cache"),
+        }
     }
 }

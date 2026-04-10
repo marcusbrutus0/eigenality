@@ -1389,4 +1389,88 @@ mod tests {
         assert_eq!(result.len(), 1);
         assert_eq!(result["meta"]["title"], "static");
     }
+
+    /// Two concurrent `fetch_unlocked` callers racing on the same URL both succeed.
+    ///
+    /// This exercises the lock-split path: both tasks reach Phase 2 (HTTP) with
+    /// no mutex held, then each re-acquires the lock to store the result.
+    #[tokio::test]
+    async fn fetch_unlocked_concurrent_access_both_succeed() {
+        use crate::config::SourceConfig;
+        use crate::data::fetcher::DataFetcher;
+        use std::thread;
+
+        // Tiny HTTP server that handles two requests and returns JSON.
+        let server = tiny_http::Server::http("127.0.0.1:0").expect("bind");
+        let addr = server.server_addr().to_ip().expect("addr");
+        let url = format!("http://{}/items", addr);
+
+        thread::spawn(move || {
+            let body: &[u8] = b"[{\"id\":1}]";
+            let ct = tiny_http::Header::from_bytes(&b"Content-Type"[..], &b"application/json"[..])
+                .expect("header");
+            for _ in 0..2 {
+                if let Ok(Some(req)) = server.recv_timeout(std::time::Duration::from_secs(5)) {
+                    let _ = req.respond(tiny_http::Response::new(
+                        tiny_http::StatusCode(200),
+                        vec![ct.clone()],
+                        std::io::Cursor::new(body),
+                        Some(body.len()),
+                        None,
+                    ));
+                }
+            }
+        });
+
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path();
+
+        let mut sources = HashMap::new();
+        sources.insert(
+            "api".to_string(),
+            SourceConfig {
+                url: format!("http://{}", addr),
+                headers: HashMap::new(),
+                rate_limit: None,
+            },
+        );
+        let pool = no_op_pool();
+        let fetcher = Arc::new(AsyncMutex::new(DataFetcher::new(&sources, root, None, pool)));
+
+        let fm = Frontmatter {
+            data: {
+                let mut m = HashMap::new();
+                m.insert(
+                    "items".into(),
+                    DataQuery {
+                        source: Some("api".into()),
+                        path: Some("/items".into()),
+                        ..Default::default()
+                    },
+                );
+                m
+            },
+            ..Default::default()
+        };
+
+        let fetcher_a = Arc::clone(&fetcher);
+        let fetcher_b = Arc::clone(&fetcher);
+        let fm_a = fm.clone();
+        let fm_b = fm.clone();
+
+        let (r1, r2) = tokio::join!(
+            tokio::spawn(async move {
+                resolve_page_data_unlocked(&fm_a, &fetcher_a, None).await
+            }),
+            tokio::spawn(async move {
+                resolve_page_data_unlocked(&fm_b, &fetcher_b, None).await
+            }),
+        );
+
+        let data1 = r1.expect("task 1 panicked").expect("task 1 error");
+        let data2 = r2.expect("task 2 panicked").expect("task 2 error");
+
+        assert_eq!(data1["items"], json!([{"id": 1}]));
+        assert_eq!(data2["items"], json!([{"id": 1}]));
+    }
 }
