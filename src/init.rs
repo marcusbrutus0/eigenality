@@ -279,7 +279,7 @@ mod tests {
         init_project(&name).unwrap();
 
         // The scaffolded site should be buildable.
-        let result = crate::build::build(&project_name, true, false).await;
+        let result = crate::build::build(&project_name, true, false, false).await;
         assert!(result.is_ok(), "Scaffolded site failed to build: {:#}", result.unwrap_err());
 
         // Check output files exist.

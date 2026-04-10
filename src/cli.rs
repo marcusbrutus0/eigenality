@@ -27,6 +27,10 @@ pub enum Command {
         /// Bypass the data source cache and re-fetch all remote data
         #[arg(long)]
         fresh: bool,
+
+        /// Force a full rebuild, ignoring the incremental manifest
+        #[arg(long)]
+        full: bool,
     },
     /// Initialize a new Eigen project
     Init {

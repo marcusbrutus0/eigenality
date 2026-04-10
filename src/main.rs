@@ -26,14 +26,14 @@ async fn main() -> Result<()> {
     setup_logging(cli.verbose, cli.quiet);
 
     match cli.command {
-        Command::Build { project, fresh } => {
+        Command::Build { project, fresh, full } => {
             let project = std::fs::canonicalize(&project)?;
             let start = Instant::now();
             tracing::info!("Building site at {}...", project.display());
             if fresh {
                 tracing::info!("Fresh mode: bypassing data cache.");
             }
-            build::build(&project, false, fresh).await?;
+            build::build(&project, false, fresh, full).await?;
             let elapsed = start.elapsed();
             eprintln!("Built site in {:.1?}", elapsed);
             Ok(())
@@ -62,7 +62,7 @@ async fn main() -> Result<()> {
 
             if !no_build {
                 tracing::info!("Building site...");
-                build::build(&project, false, false).await?;
+                build::build(&project, false, false, false).await?;
             }
 
             let config = config::load_config(&project)?;
