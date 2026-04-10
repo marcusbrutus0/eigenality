@@ -38,6 +38,7 @@ use super::not_found;
 use super::output;
 use super::rate_limit::RateLimiterPool;
 use super::robots;
+use super::security_headers;
 use super::seo;
 use super::sitemap;
 use super::source_asset::{self, SourceAssetCollector};
@@ -275,6 +276,11 @@ pub async fn build(project_root: &Path, dev: bool, fresh: bool) -> Result<()> {
     // Generate robots.txt.
     if ctx.config.robots.enabled {
         robots::write(project_root, &dist_dir, &ctx.config)?;
+    }
+
+    // Generate security headers file.
+    if ctx.config.security_headers.enabled {
+        security_headers::write(project_root, &dist_dir, &ctx.config)?;
     }
 
     // Generate Atom feeds.
