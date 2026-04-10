@@ -32,6 +32,9 @@ pub struct SiteConfig {
     /// When present, checks are run after rendering.
     #[serde(default)]
     pub audit: Option<AuditConfig>,
+    /// Security headers file generation configuration.
+    #[serde(default)]
+    pub security_headers: SecurityHeadersConfig,
 }
 
 /// Metadata about the site itself.
@@ -203,6 +206,63 @@ pub struct RobotsRule {
     /// Paths to disallow.
     #[serde(default)]
     pub disallow: Vec<String>,
+}
+
+/// Security headers file generation configuration.
+///
+/// Located under `[security_headers]` in site.toml.
+///
+/// Priority when `enabled = true`:
+/// 1. `static/_headers` — copied as-is if present
+/// 2. Generated from this config
+#[derive(Debug, Clone, Deserialize)]
+pub struct SecurityHeadersConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default = "default_x_frame_options")]
+    pub x_frame_options: String,
+    #[serde(default = "default_referrer_policy")]
+    pub referrer_policy: String,
+    #[serde(default = "default_permissions_policy")]
+    pub permissions_policy: String,
+    pub csp: Option<String>,
+    pub hsts: Option<HstsConfig>,
+    #[serde(default)]
+    pub custom: HashMap<String, String>,
+}
+
+impl Default for SecurityHeadersConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            x_frame_options: default_x_frame_options(),
+            referrer_policy: default_referrer_policy(),
+            permissions_policy: default_permissions_policy(),
+            csp: None,
+            hsts: None,
+            custom: HashMap::new(),
+        }
+    }
+}
+
+/// HSTS (Strict-Transport-Security) configuration.
+#[derive(Debug, Clone, Deserialize)]
+pub struct HstsConfig {
+    pub max_age: u64,
+    #[serde(default)]
+    pub include_subdomains: bool,
+    #[serde(default)]
+    pub preload: bool,
+}
+
+fn default_x_frame_options() -> String {
+    "DENY".to_string()
+}
+fn default_referrer_policy() -> String {
+    "strict-origin-when-cross-origin".to_string()
+}
+fn default_permissions_policy() -> String {
+    "camera=(), microphone=(), geolocation=()".to_string()
 }
 
 /// Google Analytics configuration.
@@ -784,6 +844,7 @@ fn validate_config(config: &SiteConfig) -> Result<()> {
     validate_feed_configs(config)?;
     validate_robots_config(config)?;
     validate_audit_config(config)?;
+    validate_security_headers_config(config)?;
     Ok(())
 }
 
@@ -873,6 +934,50 @@ fn validate_robots_config(config: &SiteConfig) -> Result<()> {
                  Sitemap URLs must start with http:// or https://.",
                 i,
                 url,
+            );
+        }
+    }
+
+    Ok(())
+}
+
+/// Validate security headers configuration.
+fn validate_security_headers_config(config: &SiteConfig) -> Result<()> {
+    let sh = &config.security_headers;
+
+    if let Some(ref csp) = sh.csp {
+        if csp.is_empty() {
+            bail!(
+                "[security_headers] csp must not be an empty string. \
+                 Omit the key or set it to None to suppress the CSP header."
+            );
+        }
+        if config.analytics.is_some() {
+            tracing::warn!(
+                "CSP is configured and analytics is enabled. The inline analytics \
+                 snippet may be blocked. Add 'unsafe-inline' to script-src or \
+                 compute the script hash and add it as 'sha256-...' to your CSP."
+            );
+        }
+    }
+
+    if let Some(ref hsts) = sh.hsts {
+        if hsts.max_age == 0 {
+            tracing::warn!(
+                "[security_headers.hsts] max_age = 0 revokes HSTS. \
+                 This is intentional only if you are removing HSTS from a live site."
+            );
+        }
+        if hsts.preload && !hsts.include_subdomains {
+            bail!(
+                "[security_headers.hsts] preload = true requires include_subdomains = true \
+                 per the HSTS preload list requirements."
+            );
+        }
+        if !config.site.base_url.starts_with("https://") {
+            tracing::warn!(
+                "[security_headers.hsts] HSTS is configured but site.base_url \
+                 does not start with 'https://'. HSTS has no effect on non-HTTPS origins."
             );
         }
     }
@@ -1910,5 +2015,86 @@ url = "https://cdn.example.com"
         assert_eq!(config.build.rate_limit, Some(10));
         assert_eq!(config.sources["api"].rate_limit, Some(5));
         assert_eq!(config.sources["cdn"].rate_limit, None);
+    }
+
+    // --- validate_security_headers_config ---
+
+    fn base_config_with_security_headers(sh: SecurityHeadersConfig) -> SiteConfig {
+        let mut config: SiteConfig = toml::from_str(
+            r#"
+[site]
+name = "Test"
+base_url = "https://example.com"
+"#,
+        )
+        .unwrap();
+        config.security_headers = sh;
+        config
+    }
+
+    #[test]
+    fn test_hsts_preload_requires_include_subdomains() {
+        let mut sh = SecurityHeadersConfig::default();
+        sh.hsts = Some(HstsConfig {
+            max_age: 31536000,
+            include_subdomains: false,
+            preload: true,
+        });
+        let config = base_config_with_security_headers(sh);
+        assert!(validate_security_headers_config(&config).is_err());
+    }
+
+    #[test]
+    fn test_hsts_valid_preload() {
+        let mut sh = SecurityHeadersConfig::default();
+        sh.hsts = Some(HstsConfig {
+            max_age: 31536000,
+            include_subdomains: true,
+            preload: true,
+        });
+        let config = base_config_with_security_headers(sh);
+        assert!(validate_security_headers_config(&config).is_ok());
+    }
+
+    #[test]
+    fn test_csp_empty_string_rejected() {
+        let mut sh = SecurityHeadersConfig::default();
+        sh.csp = Some(String::new());
+        let config = base_config_with_security_headers(sh);
+        assert!(validate_security_headers_config(&config).is_err());
+    }
+
+    #[test]
+    fn test_csp_none_accepted() {
+        let sh = SecurityHeadersConfig::default();
+        let config = base_config_with_security_headers(sh);
+        assert!(validate_security_headers_config(&config).is_ok());
+    }
+
+    #[test]
+    fn test_hsts_max_age_zero_warn() {
+        let mut sh = SecurityHeadersConfig::default();
+        sh.hsts = Some(HstsConfig {
+            max_age: 0,
+            include_subdomains: false,
+            preload: false,
+        });
+        let config = base_config_with_security_headers(sh);
+        // Warning emitted but not an error.
+        assert!(validate_security_headers_config(&config).is_ok());
+    }
+
+    #[test]
+    fn test_hsts_non_https_warn() {
+        let mut sh = SecurityHeadersConfig::default();
+        sh.hsts = Some(HstsConfig {
+            max_age: 31536000,
+            include_subdomains: false,
+            preload: false,
+        });
+        let mut config = base_config_with_security_headers(sh);
+        config.site.base_url = "http://example.com".to_string();
+        // Warning emitted but not an error.
+        assert!(validate_security_headers_config(&config).is_ok());
     }
 }

@@ -117,6 +117,7 @@ mod tests {
             plugins: HashMap::new(),
             feed: HashMap::new(),
             audit: None,
+            security_headers: Default::default(),
         }
     }
 

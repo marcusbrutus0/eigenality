@@ -262,6 +262,7 @@ mod tests {
             plugins: std::collections::HashMap::new(),
             feed: std::collections::HashMap::new(),
             audit: None,
+            security_headers: Default::default(),
         };
 
         let mut env = Environment::new();
