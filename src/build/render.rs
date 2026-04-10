@@ -85,7 +85,7 @@ pub(crate) struct BuildContext {
 /// Run the full build process.
 ///
 /// This is the main entry point for `eigen build`.
-pub async fn build(project_root: &Path, dev: bool, fresh: bool) -> Result<()> {
+pub async fn build(project_root: &Path, dev: bool, fresh: bool, _full: bool) -> Result<()> {
     let config = crate::config::load_config(project_root)?;
     tracing::info!("Loading config... ✓ ({})", config.site.name);
 
@@ -128,11 +128,12 @@ pub async fn build(project_root: &Path, dev: bool, fresh: bool) -> Result<()> {
         tracing::info!("Skipped {} draft/scheduled page(s).", skipped);
     }
 
-    // Set up output directory.
+    // Set up output directory (clean=true for now; Commit 4 will add incremental logic).
     output::setup_output_dir(
         project_root,
         config.build.fragments,
         &config.build.fragment_dir,
+        true,
     )?;
     // Phase 1: Copy static assets (with content hashing if enabled).
     let manifest = output::copy_static_assets(project_root, &config.build.content_hash)?;

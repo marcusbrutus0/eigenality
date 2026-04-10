@@ -183,11 +183,12 @@ impl DevBuildState {
         let global_data = data::load_global_data(project_root)?;
         let pages = discovery::discover_pages(project_root, config)?;
 
-        // Set up output directory.
+        // Set up output directory (dev always does a full clean rebuild).
         crate::build::output::setup_output_dir(
             project_root,
             config.build.fragments,
             &config.build.fragment_dir,
+            true,
         )?;
         let _ = crate::build::output::copy_static_assets(
             project_root,

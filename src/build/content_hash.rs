@@ -72,6 +72,19 @@ impl AssetManifest {
         pairs
     }
 
+    /// Return all (original, hashed) pairs sorted alphabetically by original path.
+    ///
+    /// Deterministic ordering for stable hashing of the content manifest.
+    pub fn entries_sorted(&self) -> Vec<(&str, &str)> {
+        let mut pairs: Vec<(&str, &str)> = self
+            .entries
+            .iter()
+            .map(|(k, v)| (k.as_str(), v.as_str()))
+            .collect();
+        pairs.sort_by_key(|(k, _)| *k);
+        pairs
+    }
+
     /// Whether the manifest is empty (no assets were hashed).
     pub fn is_empty(&self) -> bool {
         self.entries.is_empty()

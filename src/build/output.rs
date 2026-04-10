@@ -9,18 +9,24 @@ use eyre::{Result, WrapErr};
 use std::path::Path;
 use walkdir::WalkDir;
 
-/// Prepare the output directory: clean, recreate, and optionally create
-/// the fragments subdirectory.
-pub fn setup_output_dir(project_root: &Path, fragments_enabled: bool, fragment_dir: &str) -> Result<()> {
+/// Prepare the output directory: optionally clean, recreate, and optionally
+/// create the fragments subdirectory.
+///
+/// When `clean` is `false`, an existing `dist/` is left intact (only created
+/// if missing). This allows incremental builds to call `copy_static_assets`
+/// before deciding whether a full wipe is needed.
+pub fn setup_output_dir(project_root: &Path, fragments_enabled: bool, fragment_dir: &str, clean: bool) -> Result<()> {
     let dist = project_root.join("dist");
 
-    // Clean: remove the entire dist/ directory if it exists.
-    if dist.exists() {
-        std::fs::remove_dir_all(&dist)
-            .wrap_err_with(|| format!("Failed to remove {}", dist.display()))?;
+    if clean {
+        // Wipe the entire dist/ directory if it exists.
+        if dist.exists() {
+            std::fs::remove_dir_all(&dist)
+                .wrap_err_with(|| format!("Failed to remove {}", dist.display()))?;
+        }
     }
 
-    // Recreate dist/.
+    // Recreate (or create fresh) dist/.
     std::fs::create_dir_all(&dist)
         .wrap_err("Failed to create dist/ directory")?;
 
@@ -107,7 +113,7 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let root = tmp.path();
 
-        setup_output_dir(root, false, "_fragments").unwrap();
+        setup_output_dir(root, false, "_fragments", true).unwrap();
         assert!(root.join("dist").is_dir());
         assert!(!root.join("dist/_fragments").exists());
     }
@@ -117,7 +123,7 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let root = tmp.path();
 
-        setup_output_dir(root, true, "_fragments").unwrap();
+        setup_output_dir(root, true, "_fragments", true).unwrap();
         assert!(root.join("dist").is_dir());
         assert!(root.join("dist/_fragments").is_dir());
     }
@@ -131,10 +137,23 @@ mod tests {
         write(root, "dist/old_file.html", "old");
         write(root, "dist/subdir/old.html", "old");
 
-        setup_output_dir(root, false, "_fragments").unwrap();
+        setup_output_dir(root, false, "_fragments", true).unwrap();
         assert!(root.join("dist").is_dir());
         assert!(!root.join("dist/old_file.html").exists());
         assert!(!root.join("dist/subdir").exists());
+    }
+
+    #[test]
+    fn test_setup_output_dir_no_clean_preserves_existing() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path();
+
+        // Pre-existing content should survive when clean=false.
+        write(root, "dist/kept.html", "keep me");
+
+        setup_output_dir(root, false, "_fragments", false).unwrap();
+        assert!(root.join("dist").is_dir());
+        assert!(root.join("dist/kept.html").exists());
     }
 
     #[test]
@@ -142,7 +161,7 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let root = tmp.path();
 
-        setup_output_dir(root, true, "_frags").unwrap();
+        setup_output_dir(root, true, "_frags", true).unwrap();
         assert!(root.join("dist/_frags").is_dir());
     }
 
