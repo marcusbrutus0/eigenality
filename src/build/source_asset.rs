@@ -11,7 +11,7 @@ use std::sync::{Arc, Mutex};
 use eyre::{Result, WrapErr};
 
 use crate::assets::cache::AssetCache;
-use crate::assets::download;
+use crate::assets::download::{self, DownloadResult};
 use crate::build::rate_limit::RateLimiterPool;
 use crate::config::SourceConfig;
 
@@ -146,6 +146,162 @@ pub async fn resolve_source_assets(
     let mut result = html.to_string();
     for (original, local) in &sorted {
         result = result.replace(original, local);
+    }
+    Ok(result)
+}
+
+/// Phase 1: identify which source-asset requests need downloading.
+///
+/// Deduplicates by URL.  Returns `(to_download, already_cached)`:
+/// - `to_download`: unique requests where the file is not on disk yet
+/// - `already_cached`: map of URL → local `/assets/…` path for files already present
+///
+/// The caller should release any `AssetCache` mutex after this returns, then
+/// call `download_source_assets` without holding the lock.
+pub fn check_source_asset_cache(
+    cache: &AssetCache,
+    requests: &[SourceAssetRequest],
+) -> (Vec<SourceAssetRequest>, HashMap<String, String>) {
+    let mut seen: HashMap<&str, &str> = HashMap::new();
+    for req in requests {
+        seen.entry(req.url.as_str()).or_insert(req.source_name.as_str());
+    }
+
+    let mut to_download: Vec<SourceAssetRequest> = Vec::new();
+    let mut already_cached: HashMap<String, String> = HashMap::new();
+
+    for (&url, &source_name) in &seen {
+        if cache.has_file(url) {
+            if let Some(meta) = cache.get(url) {
+                already_cached.insert(
+                    url.to_string(),
+                    format!("/assets/{}", meta.local_filename),
+                );
+            }
+        } else {
+            to_download.push(SourceAssetRequest {
+                source_name: source_name.to_string(),
+                url: url.to_string(),
+            });
+        }
+    }
+
+    (to_download, already_cached)
+}
+
+/// Phase 2: download source assets that are not in the cache. No lock needed.
+///
+/// Returns `(url, DownloadResult)` for each successfully attempted download.
+/// Auth headers are built per-source from `sources`.  Failed downloads are
+/// logged as warnings and omitted from the result.
+pub async fn download_source_assets(
+    client: &reqwest::Client,
+    sources: &HashMap<String, SourceConfig>,
+    to_download: Vec<SourceAssetRequest>,
+    pool: &RateLimiterPool,
+) -> Vec<(String, DownloadResult)> {
+    let mut results = Vec::with_capacity(to_download.len());
+    for req in to_download {
+        let source = match sources.get(&req.source_name) {
+            Some(s) => s,
+            None => {
+                tracing::warn!(
+                    "source_asset: source '{}' not found, skipping URL: {}",
+                    req.source_name, req.url
+                );
+                continue;
+            }
+        };
+
+        let mut headers = reqwest::header::HeaderMap::new();
+        for (key, val) in &source.headers {
+            if let (Ok(name), Ok(value)) = (
+                reqwest::header::HeaderName::from_bytes(key.as_bytes()),
+                reqwest::header::HeaderValue::from_str(val),
+            ) {
+                headers.insert(name, value);
+            }
+        }
+
+        // Pass cached_meta=None: we only reach here on a cache miss.
+        match download::download_asset_with_headers(
+            client,
+            &req.url,
+            None,
+            &headers,
+            pool,
+        )
+        .await
+        {
+            Ok(result) => results.push((req.url, result)),
+            Err(e) => tracing::warn!("Failed to download source asset {}: {:#}", req.url, e),
+        }
+    }
+    results
+}
+
+/// Phase 3: store downloaded source assets in the cache and rewrite HTML.
+///
+/// Reacquire the `AssetCache` lock before calling this.
+pub async fn store_source_assets_and_rewrite(
+    html: &str,
+    cache: &mut AssetCache,
+    download_results: Vec<(String, DownloadResult)>,
+    already_cached: HashMap<String, String>,
+    dist_assets_dir: &Path,
+) -> Result<String> {
+    let mut url_map = already_cached;
+
+    // Ensure already-cached assets are present in dist.
+    for url in url_map.keys() {
+        if let Err(e) = cache.copy_to_dist(url, dist_assets_dir) {
+            tracing::warn!("Failed to copy cached source asset to dist {}: {:#}", url, e);
+        }
+    }
+
+    for (url, result) in download_results {
+        match result {
+            DownloadResult::Downloaded {
+                data,
+                local_filename,
+                etag,
+                last_modified,
+                content_type,
+            } => {
+                match cache.store(&url, &data, &local_filename, etag, last_modified, content_type) {
+                    Ok(final_name) => {
+                        cache.copy_to_dist(&url, dist_assets_dir)
+                            .wrap_err_with(|| {
+                                format!("Failed to copy source asset to dist: {}", url)
+                            })?;
+                        url_map.insert(url, format!("/assets/{}", final_name));
+                    }
+                    Err(e) => tracing::warn!("Failed to store source asset {}: {:#}", url, e),
+                }
+            }
+            DownloadResult::NotModified => {
+                if let Some(meta) = cache.get(&url).cloned() {
+                    cache.copy_to_dist(&url, dist_assets_dir)
+                        .wrap_err_with(|| {
+                            format!("Failed to copy not-modified source asset to dist: {}", url)
+                        })?;
+                    url_map.insert(url, format!("/assets/{}", meta.local_filename));
+                }
+            }
+        }
+    }
+
+    if url_map.is_empty() {
+        return Ok(html.to_string());
+    }
+
+    // Rewrite URLs in HTML, longest-first to avoid partial-match corruption.
+    let mut sorted: Vec<_> = url_map.into_iter().collect();
+    sorted.sort_by(|a, b| b.0.len().cmp(&a.0.len()));
+
+    let mut result = html.to_string();
+    for (original, local) in &sorted {
+        result = result.replace(original.as_str(), local.as_str());
     }
     Ok(result)
 }
@@ -423,5 +579,50 @@ mod tests {
 
         // Both occurrences should be rewritten.
         assert!(!result.contains(&asset_url), "all URLs should be replaced");
+    }
+
+    // --- check_source_asset_cache tests ---
+
+    #[test]
+    fn check_source_asset_cache_returns_miss_when_not_on_disk() {
+        let tmp = tempfile::TempDir::new().expect("tempdir");
+        let cache = crate::assets::cache::AssetCache::open(tmp.path()).expect("cache");
+        let requests = vec![SourceAssetRequest {
+            source_name: "cms".into(),
+            url: "https://cms.example.com/img.jpg".into(),
+        }];
+
+        let (to_download, already_cached) = check_source_asset_cache(&cache, &requests);
+
+        assert_eq!(to_download.len(), 1);
+        assert_eq!(to_download[0].url, "https://cms.example.com/img.jpg");
+        assert!(already_cached.is_empty());
+    }
+
+    #[test]
+    fn check_source_asset_cache_deduplicates_duplicate_requests() {
+        let tmp = tempfile::TempDir::new().expect("tempdir");
+        let cache = crate::assets::cache::AssetCache::open(tmp.path()).expect("cache");
+        let url = "https://cms.example.com/banner.png";
+        let requests = vec![
+            SourceAssetRequest { source_name: "cms".into(), url: url.into() },
+            SourceAssetRequest { source_name: "cms".into(), url: url.into() },
+        ];
+
+        let (to_download, _) = check_source_asset_cache(&cache, &requests);
+
+        // Duplicates should be merged into one download request.
+        assert_eq!(to_download.len(), 1);
+    }
+
+    #[test]
+    fn check_source_asset_cache_returns_empty_for_empty_requests() {
+        let tmp = tempfile::TempDir::new().expect("tempdir");
+        let cache = crate::assets::cache::AssetCache::open(tmp.path()).expect("cache");
+
+        let (to_download, already_cached) = check_source_asset_cache(&cache, &[]);
+
+        assert!(to_download.is_empty());
+        assert!(already_cached.is_empty());
     }
 }

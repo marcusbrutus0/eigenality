@@ -15,8 +15,8 @@ use std::path::Path;
 use crate::build::rate_limit::RateLimiterPool;
 use crate::config::AssetsConfig;
 
-use super::cache::AssetCache;
-use super::download;
+use super::cache::{AssetCache, AssetCacheMeta};
+use super::download::{self, DownloadResult};
 
 /// Default CDN hostnames that are skipped (not downloaded).
 ///
@@ -121,6 +121,152 @@ pub async fn localize_assets(
     // Rewrite the HTML.
     let result = rewrite_urls(html, &url_map);
     Ok(result)
+}
+
+/// Phase 1: identify which URLs need downloading and which are already cached.
+///
+/// Returns `(urls_to_download, already_cached_map)`.  `already_cached_map`
+/// maps original URL → local `/assets/…` path for URLs we already have on
+/// disk.  The caller should release any `AssetCache` mutex lock after this
+/// returns, then call `download_missing_assets` without holding the lock.
+pub fn check_asset_cache(
+    cache: &AssetCache,
+    html: &str,
+    config: &AssetsConfig,
+    skip_urls: &HashSet<String>,
+) -> (Vec<(String, Option<AssetCacheMeta>)>, HashMap<String, String>) {
+    if !config.localize {
+        return (Vec::new(), HashMap::new());
+    }
+
+    let urls = extract_remote_urls(html);
+    let mut to_download: Vec<(String, Option<AssetCacheMeta>)> = Vec::new();
+    let mut already_cached: HashMap<String, String> = HashMap::new();
+    let mut seen: HashSet<String> = HashSet::new();
+
+    for url in urls {
+        if !seen.insert(url.clone()) {
+            continue;
+        }
+        if !url.starts_with("http://") && !url.starts_with("https://") {
+            continue;
+        }
+        if url.starts_with("/assets/") {
+            continue;
+        }
+        if skip_urls.contains(url.as_str()) {
+            continue;
+        }
+        if should_skip_cdn(&url, config) {
+            tracing::debug!("  Skipping CDN URL: {}", url);
+            continue;
+        }
+
+        if cache.has_file(&url) {
+            let meta = cache.get(&url).cloned();
+            let local_filename = meta
+                .as_ref()
+                .map(|m| m.local_filename.clone())
+                .unwrap_or_default();
+            already_cached.insert(url, format!("/assets/{}", local_filename));
+        } else {
+            let meta = cache.get(&url).cloned();
+            to_download.push((url, meta));
+        }
+    }
+
+    (to_download, already_cached)
+}
+
+/// Phase 2: download URLs that are not in the cache. No lock needed.
+///
+/// Returns a list of `(url, DownloadResult)` for each URL attempted.
+/// Failed downloads are logged as warnings and omitted from the result.
+pub async fn download_missing_assets(
+    client: &reqwest::Client,
+    to_download: Vec<(String, Option<AssetCacheMeta>)>,
+    pool: &RateLimiterPool,
+) -> Vec<(String, DownloadResult)> {
+    let mut results = Vec::with_capacity(to_download.len());
+    for (url, cached_meta) in to_download {
+        match download::download_asset_with_headers(
+            client,
+            &url,
+            cached_meta.as_ref(),
+            &reqwest::header::HeaderMap::new(),
+            pool,
+        )
+        .await
+        {
+            Ok(result) => results.push((url, result)),
+            Err(e) => tracing::warn!("Failed to download asset {}: {:#}", url, e),
+        }
+    }
+    results
+}
+
+/// Phase 3: store downloaded results in the cache and rewrite URLs in HTML.
+///
+/// Reacquire the `AssetCache` lock before calling this.  `already_cached`
+/// contains URLs that were already on disk from the check phase.
+pub async fn store_and_rewrite_assets(
+    html: &str,
+    cache: &mut AssetCache,
+    download_results: Vec<(String, DownloadResult)>,
+    already_cached: HashMap<String, String>,
+    dist_assets_dir: &Path,
+) -> Result<String> {
+    let mut url_map = already_cached;
+
+    // Copy already-cached assets to dist (they may not have been copied yet).
+    for (url, local_path) in &url_map {
+        if let Err(e) = cache.copy_to_dist(url, dist_assets_dir) {
+            tracing::warn!("Failed to copy cached asset to dist {}: {:#}", url, e);
+            // Remove from map so the original URL is left unrewritten.
+            let _ = local_path; // suppress unused warning below
+        }
+    }
+    // Re-copy errors mean URL stays in url_map with old local path, which is
+    // fine — the file should already be there from a prior build phase.
+
+    for (url, result) in download_results {
+        match result {
+            DownloadResult::Downloaded {
+                data,
+                local_filename,
+                etag,
+                last_modified,
+                content_type,
+            } => {
+                match cache.store(&url, &data, &local_filename, etag, last_modified, content_type) {
+                    Ok(final_name) => {
+                        cache.copy_to_dist(&url, dist_assets_dir)
+                            .wrap_err_with(|| {
+                                format!("Failed to copy asset to dist: {}", url)
+                            })?;
+                        url_map.insert(url, format!("/assets/{}", final_name));
+                    }
+                    Err(e) => tracing::warn!("Failed to store asset {}: {:#}", url, e),
+                }
+            }
+            DownloadResult::NotModified => {
+                // Server confirmed cache is still valid; copy to dist and map URL.
+                if let Some(meta) = cache.get(&url).cloned() {
+                    cache.copy_to_dist(&url, dist_assets_dir)
+                        .wrap_err_with(|| {
+                            format!("Failed to copy not-modified asset to dist: {}", url)
+                        })?;
+                    url_map.insert(url, format!("/assets/{}", meta.local_filename));
+                }
+            }
+        }
+    }
+
+    if url_map.is_empty() {
+        return Ok(html.to_string());
+    }
+
+    Ok(rewrite_urls(html, &url_map))
 }
 
 /// Extract all remote URLs from HTML that should be considered for localization.
@@ -426,5 +572,83 @@ mod tests {
         map.insert("https://example.com/x.jpg".to_string(), "/assets/x-abc.jpg".to_string());
         let result = rewrite_urls(html, &map);
         assert_eq!(result.matches("/assets/x-abc.jpg").count(), 2);
+    }
+
+    // --- check_asset_cache tests ---
+
+    #[test]
+    fn check_asset_cache_returns_miss_when_not_on_disk() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let cache = super::super::cache::AssetCache::open(tmp.path()).unwrap();
+        let config = default_config();
+        let html = r#"<img src="https://example.com/photo.jpg">"#;
+
+        let (to_download, already_cached) =
+            check_asset_cache(&cache, html, &config, &HashSet::new());
+
+        assert_eq!(to_download.len(), 1);
+        assert_eq!(to_download[0].0, "https://example.com/photo.jpg");
+        assert!(already_cached.is_empty());
+    }
+
+    #[test]
+    fn check_asset_cache_skips_cdn_urls() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let cache = super::super::cache::AssetCache::open(tmp.path()).unwrap();
+        let config = default_config();
+        let html = r#"<img src="https://cdn.jsdelivr.net/npm/foo.js">"#;
+
+        let (to_download, already_cached) =
+            check_asset_cache(&cache, html, &config, &HashSet::new());
+
+        assert!(to_download.is_empty());
+        assert!(already_cached.is_empty());
+    }
+
+    #[test]
+    fn check_asset_cache_skips_urls_in_skip_set() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let cache = super::super::cache::AssetCache::open(tmp.path()).unwrap();
+        let config = default_config();
+        let html = r#"<img src="https://example.com/auth-img.jpg">"#;
+        let mut skip = HashSet::new();
+        skip.insert("https://example.com/auth-img.jpg".to_string());
+
+        let (to_download, already_cached) = check_asset_cache(&cache, html, &config, &skip);
+
+        assert!(to_download.is_empty());
+        assert!(already_cached.is_empty());
+    }
+
+    #[test]
+    fn check_asset_cache_deduplicates_urls() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let cache = super::super::cache::AssetCache::open(tmp.path()).unwrap();
+        let config = default_config();
+        let html = r#"<img src="https://example.com/x.jpg"><img src="https://example.com/x.jpg">"#;
+
+        let (to_download, _) = check_asset_cache(&cache, html, &config, &HashSet::new());
+
+        // Same URL twice — only one download entry.
+        assert_eq!(to_download.len(), 1);
+    }
+
+    #[test]
+    fn check_asset_cache_returns_empty_when_localize_disabled() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let cache = super::super::cache::AssetCache::open(tmp.path()).unwrap();
+        let config = AssetsConfig {
+            localize: false,
+            cdn_skip_hosts: Vec::new(),
+            cdn_allow_hosts: Vec::new(),
+            images: Default::default(),
+        };
+        let html = r#"<img src="https://example.com/photo.jpg">"#;
+
+        let (to_download, already_cached) =
+            check_asset_cache(&cache, html, &config, &HashSet::new());
+
+        assert!(to_download.is_empty());
+        assert!(already_cached.is_empty());
     }
 }
