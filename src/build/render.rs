@@ -2098,6 +2098,117 @@ minify = false
     }
 
     #[tokio::test]
+    async fn test_build_dynamic_large_collection_all_rendered() {
+        // Verify that concurrent inner-loop rendering produces correct output
+        // for all items — the key behavioral guarantee of the parallel implementation.
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path();
+
+        write(
+            root,
+            "site.toml",
+            r#"
+[site]
+name = "Large Collection"
+base_url = "https://test.com"
+
+[build]
+fragments = false
+"#,
+        );
+
+        write(root, "templates/_base.html", "<html>{% block content %}{% endblock %}</html>");
+
+        write(
+            root,
+            "templates/[post].html",
+            r#"---
+collection:
+  file: "posts.json"
+slug_field: slug
+item_as: post
+---
+{% extends "_base.html" %}
+{% block content %}<h1>{{ post.title }}</h1>{% endblock %}"#,
+        );
+
+        // 20 items — well above default concurrency — exercises the concurrent path.
+        let items: String = (1..=20)
+            .map(|i| format!(r#"{{"slug": "post-{}", "title": "Post {}" }}"#, i, i))
+            .collect::<Vec<_>>()
+            .join(",");
+        write(root, "_data/posts.json", &format!("[{}]", items));
+
+        build(root, true, false).await.unwrap();
+
+        for i in 1..=20 {
+            let path = root.join(format!("dist/post-{}.html", i));
+            assert!(path.exists(), "dist/post-{}.html missing", i);
+            let html = fs::read_to_string(&path).unwrap();
+            assert!(html.contains(&format!("Post {}", i)), "wrong content in post-{}", i);
+        }
+    }
+
+    #[tokio::test]
+    async fn test_build_dynamic_partial_invalid_slugs_skipped() {
+        // Verify that items with missing slug fields are skipped while valid
+        // items still produce output — the skip path must be correct under concurrency.
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path();
+
+        write(
+            root,
+            "site.toml",
+            r#"
+[site]
+name = "Partial Invalid"
+base_url = "https://test.com"
+
+[build]
+fragments = false
+"#,
+        );
+
+        write(root, "templates/_base.html", "<html>{% block content %}{% endblock %}</html>");
+
+        write(
+            root,
+            "templates/[item].html",
+            r#"---
+collection:
+  file: "items.json"
+slug_field: slug
+item_as: item
+---
+{% extends "_base.html" %}
+{% block content %}<p>{{ item.name }}</p>{% endblock %}"#,
+        );
+
+        // Mix of valid items and items missing the slug field.
+        write(
+            root,
+            "_data/items.json",
+            r#"[
+                {"slug": "valid-one", "name": "Valid One"},
+                {"name": "No Slug Here"},
+                {"slug": "valid-two", "name": "Valid Two"},
+                {"name": "Also Missing"}
+            ]"#,
+        );
+
+        build(root, true, false).await.unwrap();
+
+        assert!(root.join("dist/valid-one.html").exists());
+        assert!(root.join("dist/valid-two.html").exists());
+
+        let one = fs::read_to_string(root.join("dist/valid-one.html")).unwrap();
+        assert!(one.contains("Valid One"));
+
+        let two = fs::read_to_string(root.join("dist/valid-two.html")).unwrap();
+        assert!(two.contains("Valid Two"));
+    }
+
+    #[tokio::test]
     async fn test_is_published_today() {
         let fm = crate::frontmatter::Frontmatter {
             publish_date: Some(chrono::NaiveDate::from_ymd_opt(2026, 3, 18).unwrap()),
