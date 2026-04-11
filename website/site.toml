@@ -1,6 +1,6 @@
 [site]
 name = "eigen"
-base_url = "https://eigen.wavefunk.dev"
+base_url = "https://eigen.wavefunk.io"
 
 [site.seo]
 title = "eigen — a static site generator that thinks in fragments"
