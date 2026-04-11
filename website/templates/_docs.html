@@ -1,0 +1,10 @@
+{% extends "_base.html" %}
+
+{% block content %}
+<div class="docs-layout">
+  {% include "_partials/sidebar.html" %}
+  <article class="doc-content" id="doc-content">
+    {% block doc_content %}{% endblock %}
+  </article>
+</div>
+{% endblock %}
