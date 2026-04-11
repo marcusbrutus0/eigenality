@@ -1,0 +1,51 @@
+---
+data:
+  nav:
+    file: "nav.yaml"
+  docs_list:
+    file: "docs.yaml"
+seo:
+  title: "Documentation — eigen"
+  description: "Comprehensive documentation for eigen — templates, data fetching, optimization, SEO, and more."
+schema:
+  type: WebSite
+  breadcrumb_names:
+    docs: "Documentation"
+---
+{% extends "_base.html" %}
+
+{% block title %}Documentation — {{ site.name }}{% endblock %}
+
+{% block content %}
+<div class="docs-index">
+  <h1>Documentation</h1>
+  <div class="docs-index-intro">
+    <p>Everything you need to build fast, fragment-driven static sites with eigen. Start with the quickstart guide or jump into a specific topic.</p>
+  </div>
+
+  {% set categories = [
+    {"name": "Getting Started", "desc": "Install eigen and build your first site."},
+    {"name": "Templating", "desc": "Draft pages, clean URLs, and template features."},
+    {"name": "Data", "desc": "Fetch data from files, APIs, and remote sources."},
+    {"name": "Optimization", "desc": "Build performance, asset optimization, and caching."},
+    {"name": "SEO and Meta", "desc": "Search engine optimization, meta tags, and structured data."},
+    {"name": "Frontend", "desc": "Analytics, transitions, and browser-side features."}
+  ] %}
+
+  <div class="category-cards">
+    {% for cat in categories %}
+    <div class="category-card">
+      <h3>{{ cat.name }}</h3>
+      <p class="category-card-desc">{{ cat.desc }}</p>
+      <ul>
+        {% for d in docs_list %}
+          {% if d.category == cat.name %}
+          <li><a href="/docs/{{ d.slug }}">{{ d.title }}</a></li>
+          {% endif %}
+        {% endfor %}
+      </ul>
+    </div>
+    {% endfor %}
+  </div>
+</div>
+{% endblock %}

@@ -1,0 +1,28 @@
+---
+collection:
+  file: "docs.yaml"
+slug_field: slug
+item_as: doc
+fragment_blocks:
+  - doc_content
+data:
+  nav:
+    file: "nav.yaml"
+  docs_list:
+    file: "docs.yaml"
+seo:
+  title: "{{ doc.title }} — eigen docs"
+  description: "{{ doc.description }}"
+schema:
+  type: Article
+  breadcrumb_names:
+    docs: "Documentation"
+---
+{% extends "_docs.html" %}
+
+{% block title %}{{ doc.title }} — {{ site.name }} docs{% endblock %}
+
+{% block doc_content %}
+<h1>{{ doc.title }}</h1>
+{{ doc.content | markdown }}
+{% endblock %}
