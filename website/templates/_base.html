@@ -7,7 +7,7 @@
   <link rel="stylesheet" href="{{ asset('/css/style.css') }}">
   <script src="https://unpkg.com/htmx.org@2.0.4" defer></script>
 </head>
-<body>
+<body hx-boost="true">
   {% include "_partials/nav.html" %}
   <main id="content">
     {% block content %}{% endblock %}
