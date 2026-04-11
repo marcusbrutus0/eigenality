@@ -1,0 +1,17 @@
+- name: Getting Started
+  desc: Install eigen and build your first site.
+
+- name: Templating
+  desc: Draft pages, clean URLs, and template features.
+
+- name: Data
+  desc: Fetch data from files, APIs, and remote sources.
+
+- name: Optimization
+  desc: Build performance, asset optimization, and caching.
+
+- name: SEO and Meta
+  desc: Search engine optimization, meta tags, and structured data.
+
+- name: Frontend
+  desc: Analytics, transitions, and browser-side features.

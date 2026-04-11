@@ -4,6 +4,8 @@ data:
     file: "nav.yaml"
   docs_list:
     file: "docs.yaml"
+  categories:
+    file: "categories.yaml"
 seo:
   title: "Documentation — eigen"
   description: "Comprehensive documentation for eigen — templates, data fetching, optimization, SEO, and more."
@@ -22,15 +24,6 @@ schema:
   <div class="docs-index-intro">
     <p>Everything you need to build fast, fragment-driven static sites with eigen. Start with the quickstart guide or jump into a specific topic.</p>
   </div>
-
-  {% set categories = [
-    {"name": "Getting Started", "desc": "Install eigen and build your first site."},
-    {"name": "Templating", "desc": "Draft pages, clean URLs, and template features."},
-    {"name": "Data", "desc": "Fetch data from files, APIs, and remote sources."},
-    {"name": "Optimization", "desc": "Build performance, asset optimization, and caching."},
-    {"name": "SEO and Meta", "desc": "Search engine optimization, meta tags, and structured data."},
-    {"name": "Frontend", "desc": "Analytics, transitions, and browser-side features."}
-  ] %}
 
   <div class="category-cards">
     {% for cat in categories %}

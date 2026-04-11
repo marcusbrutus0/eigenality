@@ -1,10 +1,9 @@
 <aside class="sidebar" id="sidebar">
-  {% set categories = ["Getting Started", "Templating", "Data", "Optimization", "SEO and Meta", "Frontend"] %}
   {% for cat in categories %}
   <details class="sidebar-category" open>
-    <summary class="sidebar-category-title">{{ cat }}</summary>
+    <summary class="sidebar-category-title">{{ cat.name }}</summary>
     {% for d in docs_list %}
-      {% if d.category == cat %}
+      {% if d.category == cat.name %}
       <a href="/docs/{{ d.slug }}"
          hx-get="/_fragments/docs/{{ d.slug }}/doc_content.html"
          hx-target="#doc-content"
