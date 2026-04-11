@@ -22,6 +22,10 @@
     document.getElementById('sidebar').classList.remove('open');
     document.getElementById('sidebar-overlay').classList.remove('open');
   }
+  document.addEventListener('click', function(e) {
+    var a = e.target.closest('a[href]');
+    if (a && a.getAttribute('href') === window.location.pathname) e.preventDefault();
+  });
   document.addEventListener('DOMContentLoaded', function() {
     document.querySelectorAll('.doc-content pre').forEach(function(pre) {
       var btn = document.createElement('button');
