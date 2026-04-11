@@ -28,25 +28,25 @@ fn build_google_snippet(tracking_id: &str) -> String {
 /// - `data-auto-track="false"` when `auto_track` is false (true is Umami's default)
 /// - `data-tag` when `tag` is set
 fn build_umami_snippet(config: &UmamiAnalyticsConfig) -> String {
-    let mut attrs = format!(
+    let mut script = format!(
         r#"<script defer src="{}/script.js"
   data-website-id="{}""#,
         config.host_url, config.website_id,
     );
     if let Some(ref domains) = config.domains {
-        attrs.push_str(&format!(r#"
+        script.push_str(&format!(r#"
   data-domains="{domains}""#));
     }
     if !config.auto_track {
-        attrs.push_str(r#"
+        script.push_str(r#"
   data-auto-track="false""#);
     }
     if let Some(ref tag) = config.tag {
-        attrs.push_str(&format!(r#"
+        script.push_str(&format!(r#"
   data-tag="{tag}""#));
     }
-    attrs.push_str("></script>");
-    attrs
+    script.push_str("></script>");
+    script
 }
 
 /// Inject analytics snippets into rendered HTML before `</body>`.

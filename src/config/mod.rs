@@ -919,6 +919,9 @@ fn validate_analytics_config(config: &SiteConfig) -> Result<()> {
             if umami.website_id.is_empty() {
                 bail!("[analytics.umami] website_id must not be empty");
             }
+            if umami.host_url.is_empty() {
+                bail!("[analytics.umami] host_url must not be empty");
+            }
         }
     }
     Ok(())
@@ -2542,5 +2545,21 @@ website_id = ""
         let err = load_config_from_str(toml_str).unwrap_err();
         let msg = format!("{err}");
         assert!(msg.contains("website_id"), "error should mention website_id: {msg}");
+    }
+
+    #[test]
+    fn test_validate_analytics_umami_empty_host_url() {
+        let toml_str = r#"
+[site]
+name = "My Site"
+base_url = "https://example.com"
+
+[analytics.umami]
+website_id = "abc-123"
+host_url = ""
+"#;
+        let err = load_config_from_str(toml_str).unwrap_err();
+        let msg = format!("{err}");
+        assert!(msg.contains("host_url"), "error should mention host_url: {msg}");
     }
 }
