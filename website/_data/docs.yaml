@@ -1,0 +1,2261 @@
+# Getting Started
+
+- title: "GitHub Action"
+  slug: github-action
+  category: Getting Started
+  description: "The setup-eigen GitHub Action installs eigen and optionally runs eigen build in your CI pipeline."
+  content: |
+    # GitHub Action
+
+    ## Overview
+
+    The `setup-eigen` GitHub Action installs eigen and optionally runs `eigen build`
+    in your CI pipeline. It uses the cargo-dist shell installer for platform
+    detection and binary download.
+
+    ## Usage
+
+    Add to your workflow:
+
+    ```yaml
+    steps:
+      - uses: actions/checkout@v4
+      - uses: wavefunk/setup-eigen@v1
+    ```
+
+    This installs the latest eigen and runs `eigen build` in the repo root.
+
+    ## Inputs
+
+    | Input | Default | Description |
+    |-------|---------|-------------|
+    | `version` | `latest` | Eigen version (e.g. `0.13.0`). |
+    | `build` | `true` | Run `eigen build` after install. |
+    | `source` | `.` | Working directory for `eigen build`. |
+    | `args` | `""` | Extra arguments for `eigen build`. |
+
+    ## Outputs
+
+    | Output | Description |
+    |--------|-------------|
+    | `version` | Installed eigen version string. |
+
+    ## Examples
+
+    ### Pin a version
+
+    ```yaml
+    - uses: wavefunk/setup-eigen@v1
+      with:
+        version: '0.13.0'
+    ```
+
+    ### Build a site in a subdirectory
+
+    ```yaml
+    - uses: wavefunk/setup-eigen@v1
+      with:
+        source: './my-site'
+    ```
+
+    ### Install only (no build)
+
+    ```yaml
+    - uses: wavefunk/setup-eigen@v1
+      with:
+        build: 'false'
+    ```
+
+    ### Deploy to GitHub Pages
+
+    ```yaml
+    name: Deploy
+    on:
+      push:
+        branches: [main]
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    jobs:
+      build:
+        runs-on: ubuntu-latest
+        steps:
+          - uses: actions/checkout@v4
+          - uses: wavefunk/setup-eigen@v1
+          - uses: actions/upload-pages-artifact@v3
+            with:
+              path: dist
+          - uses: actions/deploy-pages@v4
+    ```
+
+    ## Platform Support
+
+    Supported runners (via cargo-dist installer):
+    - `ubuntu-latest` (x86_64 Linux)
+    - `macos-latest` (Apple Silicon)
+    - `macos-13` (Intel macOS)
+    - `windows-latest` (x86_64 Windows)
+
+# Templating
+
+- title: "Draft and Scheduled Pages"
+  slug: draft-pages
+  category: Templating
+  description: "Mark pages as drafts or schedule them for future publication."
+  content: |
+    # Draft and Scheduled Pages
+
+    Mark pages as drafts or schedule them for future publication. Draft and
+    scheduled pages are excluded from production builds but visible in dev
+    mode.
+
+    ## Draft Pages
+
+    Add `draft: true` to a page's frontmatter:
+
+    ```yaml
+    ---
+    draft: true
+    ---
+    ```
+
+    The page will be:
+    - **Excluded** from `eigen build` output (not rendered, not in sitemap)
+    - **Visible** in `eigen dev` with a red "DRAFT" banner at the bottom
+
+    ## Scheduled Pages
+
+    Set a `publish_date` to schedule publication:
+
+    ```yaml
+    ---
+    publish_date: 2026-04-01
+    ---
+    ```
+
+    The page will be excluded from production builds until the date arrives.
+    On the publish date and after, it builds normally.
+
+    ## Combining Both
+
+    You can use both fields together:
+
+    ```yaml
+    ---
+    draft: true
+    publish_date: 2026-04-01
+    ---
+    ```
+
+    This means "work in progress, targeting April 1st." The page is excluded
+    from production builds due to `draft: true` regardless of the date. Remove
+    `draft: true` when the content is ready, and the page will auto-publish
+    on the scheduled date.
+
+    ## Dev Mode
+
+    In `eigen dev`, all pages are rendered including drafts and scheduled
+    pages. A fixed banner at the bottom of the viewport shows the page status:
+
+    - **DRAFT** — for pages with `draft: true`
+    - **SCHEDULED: 2026-04-01** — for pages with a future publish date
+    - **DRAFT | SCHEDULED: 2026-04-01** — for both
+
+    The banner has `id="eigen-draft-banner"` if you need to style or hide it.
+
+    ## Scope
+
+    Draft/scheduled filtering applies to **static pages only**. Dynamic
+    collection pages (e.g., `[slug].html`) are never skipped — filter
+    individual collection items via data query transforms instead.
+
+    The `publish_date` format is `YYYY-MM-DD` (date only, no time component).
+
+- title: "Clean Links"
+  slug: clean-links
+  category: Templating
+  description: "The clean_links option strips .html extensions from generated links, producing URLs like /about instead of /about.html."
+  content: |
+    # Clean Links
+
+    ## Overview
+
+    The `clean_links` option strips `.html` extensions from generated links, producing URLs like `/about` instead of `/about.html`. This is designed for deployment targets like Cloudflare Pages that automatically resolve `/about` to `about.html`.
+
+    ## Configuration
+
+    ```toml
+    [build]
+    clean_links = true
+    ```
+
+    ## What it affects
+
+    ### `link_to()` function
+
+    With `clean_links = true`:
+
+    ```jinja
+    <a {{ link_to("/about.html") }}>About</a>
+    ```
+
+    Produces:
+    ```html
+    <a href="/about" hx-get="/_fragments/about.html" hx-target="#content" hx-push-url="/about">About</a>
+    ```
+
+    You can also write clean paths directly:
+    ```jinja
+    <a {{ link_to("/about") }}>About</a>
+    ```
+
+    ### `page.current_url`
+
+    With `clean_links = true`, `page.current_url` returns `/about` instead of `/about.html`. Useful for active-link highlighting:
+
+    ```jinja
+    <a href="/about" class="{{ 'active' if page.current_url == '/about' }}">About</a>
+    ```
+
+    ### Sitemap
+
+    When `clean_links` is enabled, sitemap URLs use clean paths (`/about`) instead of file paths (`/about.html`). This takes precedence over `sitemap.clean_urls`.
+
+    ### Dev server
+
+    The dev server always resolves extensionless paths to `.html` files (e.g. `/about` serves `about.html`). This works regardless of the `clean_links` setting.
+
+    ## Interaction with `clean_urls`
+
+    `clean_links` and `clean_urls` are independent:
+
+    - `clean_urls` controls **output file structure** (`about.html` vs `about/index.html`)
+    - `clean_links` controls **generated link format** (`/about.html` vs `/about`)
+
+    They compose correctly:
+
+    | `clean_urls` | `clean_links` | File on disk | Link in template |
+    |---|---|---|---|
+    | off | off | `about.html` | `/about.html` |
+    | off | on | `about.html` | `/about` |
+    | on | off | `about/index.html` | `/about/index.html` |
+    | on | on | `about/index.html` | `/about` |
+
+# Data
+
+- title: "Data Source Caching"
+  slug: data-cache
+  category: Data
+  description: "Eigen caches remote data source responses on disk using HTTP conditional requests (ETag and Last-Modified headers)."
+  content: |
+    # Data Source Caching
+
+    Eigen caches remote data source responses on disk using HTTP conditional
+    requests (ETag and Last-Modified headers). This avoids redundant fetches
+    when the remote data hasn't changed, speeding up builds.
+
+    ## How It Works
+
+    When Eigen fetches data from a remote source configured in `site.toml`, it:
+
+    1. Checks an in-memory cache first (within a single build, the same URL
+       is never fetched twice).
+    2. If cached metadata exists on disk (`.eigen_cache/data/`), sends
+       conditional headers (`If-None-Match`, `If-Modified-Since`) with the
+       request.
+    3. If the server responds with `304 Not Modified`, uses the cached
+       response body without re-downloading.
+    4. If the server responds with `200 OK`, stores the new response and
+       caching headers for next time.
+
+    Both GET and POST requests are cached. POST requests are keyed by
+    URL + request body hash, so different POST bodies are cached separately.
+
+    Responses without ETag or Last-Modified headers are not cached to disk
+    (no conditional request would be possible).
+
+    ## Cache Location
+
+    All cached data lives in `.eigen_cache/data/` under the project root.
+    Each cached response produces two files:
+
+    - `<hash>.body` — raw response bytes
+    - `<hash>.meta` — JSON with the cache key, ETag, and Last-Modified values
+
+    This directory is safe to delete at any time — Eigen will re-fetch on the
+    next build.
+
+    ## Bypassing the Cache
+
+    Use `--fresh` to skip the cache entirely:
+
+    ```bash
+    eigen build --fresh
+    eigen dev --fresh
+    ```
+
+    This ignores all cached data for that run but does not delete the cache
+    files. A subsequent run without `--fresh` can still use them.
+
+    ## Error Handling
+
+    The cache never prevents a successful build:
+
+    - Corrupted cache files are silently skipped with a warning log.
+    - If a `304` response has no usable cached body, Eigen re-fetches.
+    - Disk write failures are logged as warnings and do not fail the build.
+
+- title: "POST Method for Data Sources"
+  slug: post-method
+  category: Data
+  description: "Data queries in frontmatter support HTTP POST requests with JSON bodies."
+  content: |
+    # POST Method for Data Sources
+
+    Data queries in frontmatter support HTTP POST requests with JSON bodies.
+    This lets you call APIs that require a request body — such as GraphQL
+    endpoints, Notion database queries, or any REST API that uses POST for
+    reads.
+
+    ## Frontmatter Syntax
+
+    Add `method: POST` and a `body` field to any data query:
+
+    ```yaml
+    ---
+    data:
+      - name: results
+        url: https://api.example.com/query
+        method: POST
+        body:
+          filter:
+            status: published
+          page_size: 100
+    ---
+    ```
+
+    The `body` value is serialized as JSON and sent with
+    `Content-Type: application/json`. The `method` field is
+    case-insensitive (`POST`, `post`, `Post` all work).
+
+    ## Example: Notion Database Query
+
+    ```yaml
+    ---
+    data:
+      - name: posts
+        url: https://api.notion.com/v1/databases/${NOTION_DB_ID}/query
+        method: POST
+        headers:
+          Authorization: Bearer ${NOTION_API_KEY}
+          Notion-Version: "2022-06-28"
+        body:
+          filter:
+            property: Status
+            select:
+              equals: Published
+          sorts:
+            - property: Date
+              direction: descending
+          page_size: 50
+    ---
+    ```
+
+    `${NOTION_DB_ID}` and `${NOTION_API_KEY}` are resolved from environment
+    variables at query time (see [Env Var Interpolation](#env-var-interpolation-in-body)).
+
+    ## Example: POST with Item Interpolation
+
+    Dynamic collection pages can use `{{ item.field }}` inside the body.
+    Eigen resolves these per item when rendering the collection:
+
+    ```yaml
+    ---
+    collection:
+      source: posts
+    data:
+      - name: related
+        url: https://api.example.com/related
+        method: POST
+        body:
+          tags: "{{ item.tags }}"
+          exclude_id: "{{ item.id }}"
+          limit: 5
+    ---
+    ```
+
+    Each item in the `posts` collection triggers its own POST request with
+    the body interpolated for that item's values.
+
+    ## Cache Key Behavior
+
+    - **GET requests** — the cache key is the URL.
+    - **POST requests** — the cache key is `url + sha256(body)`. Two POST
+      requests to the same URL with different bodies are cached separately.
+
+    If you use item interpolation in the body, each unique rendered body
+    produces its own cache entry. This means a collection of 50 items with
+    50 distinct bodies results in 50 cached responses.
+
+    ## Env Var Interpolation in Body
+
+    `${ENV_VAR}` patterns inside body values are resolved at query time,
+    before the body is serialized to JSON. This works at any nesting depth:
+
+    ```yaml
+    body:
+      auth:
+        token: ${API_TOKEN}
+      workspace: ${WORKSPACE_ID}
+    ```
+
+    Interpolation happens after the YAML is parsed, so the substitution
+    targets are always string values. If the variable is not set, eigen
+    logs a warning and leaves the placeholder as-is.
+
+    ## Limitations
+
+    **Type preservation** — interpolated values (`{{ item.field }}` and
+    `${ENV_VAR}`) are always substituted as strings. If your API expects a
+    number or boolean, wrap the field in a type coercion on the API side or
+    use a template filter if the value is sourced from a template variable.
+
+    **JSON bodies only** — the `body` field must be a YAML mapping that
+    serializes to a JSON object. Form-encoded bodies and raw string bodies
+    are not supported.
+
+    **Read-only methods** — only `GET` and `POST` are supported. PUT, PATCH,
+    and DELETE are not available as data source methods.
+
+    ## Warning Behavior
+
+    If you set `body` on a `GET` request, eigen logs a warning and ignores
+    the body:
+
+    ```
+    WARN: data query for "results" has a body but method is GET — body ignored
+    ```
+
+    Either remove the `body` field or change `method` to `POST`.
+
+- title: "Rate Limiting"
+  slug: rate-limiting
+  category: Data
+  description: "Eigen can throttle outbound HTTP requests during build to avoid overwhelming external APIs."
+  content: |
+    # Rate Limiting
+
+    Eigen can throttle outbound HTTP requests during build to avoid overwhelming external APIs. Rate limits are expressed as requests per second and use a token bucket algorithm for smooth throttling.
+
+    ## Configuration
+
+    ### Global rate limit
+
+    Set a default rate limit for all outbound HTTP requests in `[build]`:
+
+    ```toml
+    [build]
+    rate_limit = 10  # max 10 requests per second per host
+    ```
+
+    ### Per-source rate limit
+
+    Override the global default for a specific source:
+
+    ```toml
+    [sources.strapi]
+    url = "https://strapi.example.com"
+    rate_limit = 5  # max 5 requests per second to this source
+    ```
+
+    ### No rate limit (default)
+
+    If `rate_limit` is not set anywhere, requests are not throttled. This is the default behavior.
+
+    ## Behavior
+
+    - Rate limits are applied **per host**. Requests to different hosts are throttled independently.
+    - Per-source `rate_limit` overrides the global default for that source's host.
+    - Asset localization downloads (images, media found in HTML) use the global rate limit.
+    - The token bucket algorithm allows brief bursts while maintaining the average rate.
+    - Rate limiting only affects build-time requests, not the dev server proxy.
+
+- title: "Authenticated Source Assets"
+  slug: source-asset
+  category: Data
+  description: "Download images and other assets from authenticated data sources using the source_asset() template function."
+  content: |
+    # Authenticated Source Assets
+
+    Download images and other assets from authenticated data sources using the
+    `source_asset()` template function.
+
+    ## Problem
+
+    Data sources (CMSes, APIs) often return JSON containing image URLs that require
+    the same authentication as the API itself. Standard `<img>` tags can't send
+    auth headers, and eigen's asset localization doesn't know which source an image
+    belongs to.
+
+    ## Usage
+
+    ```jinja
+    {# Relative path — resolved against the source's base URL #}
+    <img src="{{ source_asset('my_cms', '/uploads/' ~ item.image.hash) }}">
+
+    {# Absolute URL from data #}
+    <img src="{{ source_asset('my_cms', item.image_url) }}">
+    ```
+
+    ### Arguments
+
+    | Argument | Type | Description |
+    |---|---|---|
+    | `source_name` | string | Must match a `[sources.*]` key in `site.toml` |
+    | `url_or_path` | string | Absolute URL or path relative to source base URL |
+
+    ### URL Resolution
+
+    - Starts with `http://` or `https://` → used as-is (absolute)
+    - Otherwise → joined with the source's configured `url`
+
+    ### Return Value
+
+    - **Build time:** Downloads the asset with the source's auth headers, saves to
+      `dist/assets/`, and returns the local `/assets/...` path.
+    - **Dev time:** Returns a `/_proxy/{source_name}/...` URL. The dev server's
+      proxy forwards the request with auth headers — no download needed.
+
+    ## Configuration
+
+    No new configuration. Uses your existing `[sources.*]` setup:
+
+    ```toml
+    [sources.my_cms]
+    url = "https://cms.example.com"
+    headers = { Authorization = "Bearer ${CMS_TOKEN}" }
+    ```
+
+    ## Error Handling
+
+    | Condition | Behavior |
+    |---|---|
+    | Unknown source name | Template render error listing available sources |
+    | Empty URL | Template render error |
+    | Download fails (build) | Warning logged, original URL left in place |
+    | Proxy fails (dev) | 502 Bad Gateway from dev proxy |
+
+    ## Examples
+
+    ### Strapi CMS with image hashes
+
+    ```toml
+    # site.toml
+    [sources.strapi]
+    url = "https://strapi.mysite.com"
+    headers = { Authorization = "Bearer ${STRAPI_TOKEN}" }
+    ```
+
+    ```jinja
+    {# In your template #}
+    {% for post in posts %}
+      <article>
+        <img src="{{ source_asset('strapi', '/uploads/' ~ post.cover.hash ~ post.cover.ext) }}">
+        <h2>{{ post.title }}</h2>
+      </article>
+    {% endfor %}
+    ```
+
+    ### API with images on a different CDN
+
+    When images are hosted on a different domain but use the same auth:
+
+    ```jinja
+    {# The API returns full URLs like https://media.example.com/photo.jpg #}
+    <img src="{{ source_asset('my_api', item.photo_url) }}">
+    ```
+
+    In dev mode this proxies through `/_proxy/my_api/__source_asset__/https://media.example.com/photo.jpg`,
+    forwarding your API's auth headers. At build time, the image is downloaded with
+    auth and saved locally.
+
+# Optimization
+
+- title: "Async Build Pipeline"
+  slug: async-build
+  category: Optimization
+  description: "Eigen's build pipeline runs asynchronously on the tokio runtime, enabling concurrent page rendering and overlapping HTTP requests."
+  content: |
+    # Async Build Pipeline
+
+    Eigen's build pipeline runs asynchronously on the tokio runtime, enabling
+    concurrent page rendering and overlapping HTTP requests.
+
+    ## How It Works
+
+    Pages are rendered concurrently using `futures::stream::buffer_unordered`
+    with a concurrency limit of `available_parallelism * 2`. Shared state
+    (data cache, asset cache, template engine) is wrapped in
+    `Arc<tokio::sync::Mutex<T>>` for safe concurrent access.
+
+    ## Concurrency Model
+
+    - **HTTP requests** overlap across pages — while one page waits for a
+      response, others can render or fetch.
+    - **Template rendering** is serialized via a mutex on
+      `minijinja::Environment` (it's `Send` but not `Sync`). Each render
+      is fast (microseconds), so this is not a bottleneck.
+    - **File writes** use `tokio::fs` for non-blocking I/O.
+    - **CPU-bound work** (minification, CSS parsing, image optimization)
+      runs synchronously within async tasks — tokio handles scheduling.
+
+    ## Dev Server
+
+    The dev server runs builds natively on the tokio runtime. No
+    `spawn_blocking` or thread bridging is needed. Dev rebuilds are
+    sequential (single task) since they're fast enough for interactive use.
+
+    ## Configuration
+
+    No new configuration is needed. The concurrency limit is automatic.
+
+- title: "Incremental Builds"
+  slug: incremental-builds
+  category: Optimization
+  description: "Eigen supports incremental builds that skip re-rendering pages whose inputs are unchanged."
+  content: |
+    # Incremental Builds
+
+    Eigen supports incremental builds that skip re-rendering pages whose inputs are unchanged. This makes repeated `eigen build` invocations fast when only a few pages have changed.
+
+    ## How It Works
+
+    The incremental build system uses a two-tier invalidation model and a persisted manifest.
+
+    ### Manifest
+
+    After each successful build, Eigen writes `.eigen_cache/build_manifest.json`. This file stores:
+
+    - Tier 1 global hashes: eigen version, config, layout templates, global data, content asset manifest.
+    - Per-page records: template path, template body hash, frontmatter hash, data hashes, output file paths.
+    - Per-dynamic-template slug lists (used for orphan detection).
+
+    The manifest is only written on successful completion. A failed build leaves the previous manifest intact so the next run starts from a clean known state.
+
+    ### Tier 1: Global Invalidation
+
+    Before rendering any pages, Eigen computes:
+
+    | Hash | Source |
+    |------|--------|
+    | `eigen_version` | `CARGO_PKG_VERSION` |
+    | `config_hash` | SHA-256 of `site.toml` |
+    | `layout_hash` | SHA-256 of all `_`-prefixed templates under `templates/`, sorted by path |
+    | `global_data_hash` | SHA-256 of all files under `_data/`, sorted by path |
+    | `content_manifest_hash` | SHA-256 of the content-hashed asset manifest |
+
+    If **any** Tier 1 hash differs from the previous manifest, a full rebuild is triggered (all pages are re-rendered).
+
+    ### Tier 2: Per-Page Invalidation
+
+    When Tier 1 is clean, each page is checked individually:
+
+    - **Template body hash**: SHA-256 of the template file's contents.
+    - **Frontmatter hash**: SHA-256 of the raw frontmatter YAML string.
+    - **Data hashes**: SHA-256 of each resolved data query result.
+    - **Output file existence**: all expected output files must exist on disk.
+
+    If all hashes match and all output files exist, the page is skipped — its previous manifest record is carried forward unchanged. Otherwise the page is re-rendered and its record is updated.
+
+    ### Two-Stage `dist/` Preparation
+
+    To support incremental builds:
+
+    1. `dist/` is created (not wiped) and static assets are copied.
+    2. Tier 1 hashes are computed and compared to the previous manifest.
+    3. If a full rebuild is needed, `dist/` is wiped and static assets are re-copied.
+    4. If incremental, `dist/` is left intact and only changed pages are re-written.
+
+    ### Orphan Detection
+
+    During incremental builds, pages present in the previous manifest but absent from the current build are treated as orphans — their output files are deleted from `dist/`. This keeps the output directory clean when templates are deleted or renamed.
+
+    ## CLI Flags
+
+    ```
+    eigen build             # incremental build (default)
+    eigen build --full      # force full rebuild, ignoring the manifest
+    eigen build --fresh     # clear data cache AND force full rebuild
+    ```
+
+    `--fresh` implies `--full`.
+
+    Dev mode (`eigen dev`) always does a full rebuild and does not update or consult the manifest.
+
+    ## Implementation
+
+    | File | Role |
+    |------|------|
+    | `src/build/incremental.rs` | Structs, hash functions, manifest load/save, invalidation checks, orphan deletion |
+    | `src/build/render.rs` | Two-stage dist prep, manifest threading in `BuildContext`, per-page skip in render functions, manifest save and orphan cleanup at build end |
+
+    Key types:
+
+    - `BuildManifest` — top-level manifest; serialized as JSON.
+    - `PageRecord` — per-page entry with all hashes and output file paths.
+    - `DynamicTemplateRecord` — per-dynamic-template list of rendered slugs.
+
+    Hash functions use SHA-256 via the `sha2` crate. All directory walks are sorted before hashing to ensure deterministic results regardless of filesystem ordering.
+
+- title: "Content Hashing for Static Assets"
+  slug: content-hashing
+  category: Optimization
+  description: "Content hashing fingerprints static assets with SHA-256 hashes for cache busting."
+  content: |
+    # Content Hashing for Static Assets
+
+    ## Overview
+
+    Content hashing fingerprints static assets (CSS, JS, images, fonts) by
+    embedding a SHA-256 hash in the filename. This enables browsers and CDNs
+    to cache assets indefinitely with `Cache-Control: immutable`.
+
+    Example: `style.css` becomes `style.a1b2c3d4e5f67890.css`
+
+    ## Configuration
+
+    Add to `site.toml`:
+
+    ```toml
+    [build.content_hash]
+    enabled = true
+    ```
+
+    ### Custom exclusions
+
+    ```toml
+    [build.content_hash]
+    enabled = true
+    exclude = [
+        "favicon.ico",
+        "robots.txt",
+        "CNAME",
+        "_headers",
+        "_redirects",
+        ".well-known/**",
+        "sw.js",           # service workers need stable URLs
+        "manifest.json",   # PWA manifests need stable URLs
+    ]
+    ```
+
+    ## How It Works
+
+    ### Three Phases
+
+    1. **Phase 1 (Build Manifest):** During `copy_static_assets`, files in
+       `dist/` are hashed and renamed. A manifest maps original paths to
+       hashed paths.
+
+    2. **Phase 2 (Template Resolution):** The `asset()` template function
+       uses the manifest to return hashed paths at render time.
+
+    3. **Phase 3 (Post-Render Rewrite):** After all rendering, a final pass
+       rewrites any remaining hardcoded asset references in `.html`, `.css`,
+       and `.js` files.
+
+    ### Template Usage
+
+    Always use the `asset()` function for static asset references:
+
+    ```html
+    <link rel="stylesheet" href="{{ asset('/css/style.css') }}">
+    <script src="{{ asset('/js/app.js') }}"></script>
+    <img src="{{ asset('/images/logo.png') }}" alt="Logo">
+    ```
+
+    Hardcoded paths also work (Phase 3 rewrites them), but `asset()` is
+    preferred because it gives templates the correct URL at render time.
+
+    ## Default Exclusions
+
+    These files are excluded from hashing by default (they must keep stable
+    names for deployment platforms):
+
+    - `favicon.ico`
+    - `robots.txt`
+    - `CNAME`
+    - `_headers`
+    - `_redirects`
+    - `.well-known/**`
+
+    ## Dev Server
+
+    Content hashing is always disabled during dev server operation. The
+    `asset()` function returns paths unchanged in dev mode.
+
+    ## Interactions
+
+    - **Image optimization:** Works correctly. Use `asset()` for source
+      image paths; image optimization reads the hashed filename from dist.
+    - **Critical CSS:** Enhanced to resolve hashed paths via manifest
+      fallback when the original file path is not found.
+    - **Resource hints:** Preload/prefetch URLs naturally use hashed paths
+      when templates use `asset()`.
+    - **Asset localization:** Downloaded assets are not hashed (they already
+      have content-based filenames).
+
+    ## Limitations
+
+    - Relative CSS `url()` paths (e.g., `../images/icon.png`) are not
+      rewritten. Use absolute paths in CSS files.
+    - Dynamic JavaScript references constructed at runtime cannot be
+      statically rewritten.
+    - Source map relative references may not be rewritten. Use absolute
+      paths or exclude `*.map` files.
+
+    ## Module Location
+
+    `src/build/content_hash.rs` -- single-file module containing
+    `AssetManifest`, `build_manifest()`, and `rewrite_references()`.
+
+- title: "Critical CSS Inlining"
+  slug: critical-css
+  category: Optimization
+  description: "Critical CSS inlining extracts the subset of CSS rules actually used on each page, inlines them in a style block in head, and defers the full stylesheet load."
+  content: |
+    # Critical CSS Inlining
+
+    ## What it does
+
+    Critical CSS inlining extracts the subset of CSS rules actually used on each page, inlines them in a `<style>` block in `<head>`, and defers the full stylesheet load. This eliminates render-blocking CSS, improving First Contentful Paint (FCP) and Largest Contentful Paint (LCP).
+
+    ## How it works
+
+    1. After rendering, eigen finds all `<link rel="stylesheet">` tags pointing to local CSS files.
+    2. It parses each stylesheet with lightningcss and the rendered HTML with scraper.
+    3. For each CSS rule, it tests whether its selector matches any element in the HTML.
+    4. Matching rules (plus transitively referenced @font-face, @keyframes, and custom properties) are serialized into a `<style>` block.
+    5. The original `<link>` tags are rewritten to load asynchronously using the preload pattern.
+
+    ## Pipeline position
+
+    ```
+    render template -> strip fragments -> localize assets -> optimize images
+      -> rewrite CSS backgrounds -> plugin post_render_html
+      -> critical CSS inlining  <-- HERE
+      -> minify HTML -> write to disk
+    ```
+
+    Critical CSS runs after plugins (which may generate CSS files) and before minification (so the inlined CSS benefits from minify-html's CSS minifier).
+
+    ## Configuration
+
+    In `site.toml`:
+
+    ```toml
+    [build.critical_css]
+    enabled = true              # default: false (opt-in)
+    max_inline_size = 50000     # default: 50KB, skip inlining if exceeded
+    preload_full = true         # default: true, async-load full stylesheet
+    exclude = ["**/vendor/**"]  # glob patterns to skip
+    ```
+
+    ### Fields
+
+    | Field | Type | Default | Description |
+    |-------|------|---------|-------------|
+    | `enabled` | bool | `false` | Master switch |
+    | `max_inline_size` | usize | `50000` | Max bytes for inlined CSS before falling back |
+    | `preload_full` | bool | `true` | Keep async `<link>` for full stylesheet |
+    | `exclude` | Vec\<String\> | `[]` | Glob patterns for hrefs to skip |
+
+    ## Deferred loading pattern
+
+    When `preload_full = true`, each processed `<link>` becomes:
+
+    ```html
+    <style>/* critical CSS */</style>
+    <link rel="preload" href="/css/style.css" as="style"
+          onload="this.onload=null;this.rel='stylesheet'">
+    <noscript><link rel="stylesheet" href="/css/style.css"></noscript>
+    ```
+
+    When `preload_full = false`, the `<link>` is removed entirely (tree-shaking mode).
+
+    ## What is skipped
+
+    - External stylesheets (http/https URLs)
+    - `<link>` tags with a `media` attribute (already non-blocking)
+    - Stylesheets matching `exclude` glob patterns
+    - Existing inline `<style>` blocks (already inline)
+    - Fragments (partial HTML loaded via HTMX)
+
+    ## Error handling
+
+    Critical CSS is a pure optimization. All failures fall back to returning the original HTML unchanged:
+
+    - Missing CSS file: warning logged, stylesheet skipped
+    - CSS parse error: warning logged, stylesheet skipped
+    - Size limit exceeded: info logged, no inlining for that page
+    - HTML parse error: warning logged, original HTML returned
+    - Selector parse error: rule included conservatively
+
+    ## Caching
+
+    A `StylesheetCache` is created per build to avoid re-reading the same CSS file for every page. The raw CSS text (after reading from disk and resolving @import) is cached. The CSS is re-parsed per page by lightningcss since parsing is fast and the AST contains page-specific matching state.
+
+    ## Dev server
+
+    Critical CSS inlining is disabled during `eigen dev` regardless of configuration. The dev server render functions do not invoke it.
+
+    ## Module structure
+
+    ```
+    src/build/critical_css/
+      mod.rs       -- public API, StylesheetCache, orchestration, @import resolution
+      extract.rs   -- CSS parsing, rule walking, selector matching, global deps
+      rewrite.rs   -- lol_html HTML mutation (inject <style>, rewrite <link>)
+    ```
+
+- title: "CSS/JS Bundling and Tree-Shaking"
+  slug: css-js-bundling
+  category: Optimization
+  description: "CSS/JS bundling merges multiple CSS and JS files into single bundled files, reduces HTTP requests, and removes unused CSS selectors via tree-shaking."
+  content: |
+    # CSS/JS Bundling and Tree-Shaking
+
+    ## Overview
+
+    CSS/JS bundling merges multiple CSS and JS files into single bundled files,
+    reduces HTTP requests, and removes unused CSS selectors via tree-shaking.
+
+    ## Configuration
+
+    Add to `site.toml`:
+
+    ```toml
+    [build.bundling]
+    enabled = true
+    ```
+
+    ### Options
+
+    | Option | Default | Description |
+    |--------|---------|-------------|
+    | `enabled` | `false` | Master switch (opt-in) |
+    | `css` | `true` | Bundle CSS files |
+    | `tree_shake_css` | `true` | Remove unused CSS selectors |
+    | `js` | `true` | Bundle JS files |
+    | `css_output` | `"css/bundle.css"` | Output path for CSS bundle |
+    | `js_output` | `"js/bundle.js"` | Output path for JS bundle |
+    | `exclude` | `[]` | Glob patterns to exclude from bundling |
+
+    ### Examples
+
+    CSS only (no JS bundling):
+    ```toml
+    [build.bundling]
+    enabled = true
+    js = false
+    ```
+
+    Exclude vendor files:
+    ```toml
+    [build.bundling]
+    enabled = true
+    exclude = ["**/vendor/**", "**/print.css"]
+    ```
+
+    ## Pipeline Position
+
+    Runs as Phase 2.5 in the build pipeline:
+    1. Phase 1: Copy static assets (+ content hash manifest)
+    2. Phase 2: Render all pages (per-page pipeline)
+    3. Phase 2 (cont): Sitemap, post-build plugins
+    4. **Phase 2.5: CSS/JS bundling and tree-shaking** <-- this feature
+    5. Phase 3: Content hash rewrite
+
+    ## How It Works
+
+    ### CSS Bundling
+    1. Scans all HTML files in `dist/` for `<link rel="stylesheet">` tags
+    2. Deduplicates hrefs in first-encounter order (sorted by file path)
+    3. Reads and concatenates CSS files, resolving `@import` chains
+    4. Tree-shakes: parses all HTML DOMs, keeps selectors matching any page
+    5. Writes bundled CSS to `dist/{css_output}`
+
+    ### JS Bundling
+    1. Scans all HTML files for `<script src="...">` tags
+    2. Skips: `defer`, `async`, `type="module"`, inline scripts
+    3. Wraps each file in IIFE: `;(function(){ ... })();`
+    4. Writes bundled JS to `dist/{js_output}`
+
+    ### HTML Rewriting
+    - First `<link>`/`<script>` referencing a bundled file: rewritten to bundle
+    - Subsequent references: removed
+    - Critical CSS preload pattern: both preload `<link>` and `<noscript>` fallback rewritten
+
+    ## Interactions
+
+    - **Critical CSS**: Runs before bundling (Phase 2). Bundling rewrites the preload links.
+    - **Content Hashing**: Runs after bundling (Phase 3). Hashes the bundle files.
+    - **Dev Server**: Bundling is disabled during dev.
+
+    ## CSS Frameworks (Tailwind, etc.)
+
+    Tree-shaking correctly handles CSS selectors with escaped characters, such as
+    Tailwind's responsive breakpoint classes (`md\:flex-row`, `lg\:grid-cols-3`),
+    arbitrary value selectors (`w-\[200px\]`), and fraction utilities (`w-1\/2`).
+
+    Both backslash-character escapes (`\:`) and hex escapes (`\3a `) are preserved
+    during pseudo-class stripping, so selectors inside `@media` blocks are matched
+    against the DOM correctly.
+
+    ## What Is Skipped
+    - External URLs (http/https)
+    - `<link>` with `media` attribute
+    - `<script>` with `defer`, `async`, or `type="module"`
+    - Inline `<style>` and `<script>` blocks
+    - Paths matching `exclude` patterns
+
+    ## Module Structure
+    ```
+    src/build/bundling/
+      mod.rs      -- public API (bundle_assets), orchestration
+      collect.rs  -- HTML scanning, reference collection
+      css.rs      -- CSS merging, tree-shaking
+      js.rs       -- JS concatenation with IIFE wrapping
+      rewrite.rs  -- HTML rewriting
+    ```
+
+- title: "Lazy Loading for Below-Fold Images"
+  slug: lazy-loading
+  category: Optimization
+  description: "Eigen automatically adds loading=lazy and decoding=async to below-fold img tags during the build, improving page load performance without any configuration."
+  content: |
+    # Lazy Loading for Below-Fold Images
+
+    Eigen automatically adds `loading="lazy"` and `decoding="async"` to
+    below-fold `<img>` tags during the build, improving page load
+    performance without any configuration.
+
+    ## How It Works
+
+    During the image optimization step (`optimize_and_rewrite_images`),
+    every `<img>` tag is evaluated and assigned loading attributes:
+
+    - **First qualifying image** on each page gets `loading="eager"`.
+      This preserves Largest Contentful Paint (LCP) performance for the
+      above-fold hero image.
+    - **All subsequent images** get `loading="lazy" decoding="async"`,
+      deferring their download until they approach the viewport.
+
+    ### First-Image Detection
+
+    An image "qualifies" as a potential above-fold image if it is NOT:
+
+    - Decorative (`alt=""` or `role="presentation"`)
+    - A small icon (both `width` and `height` < 100px)
+    - A data URI (`src="data:..."`)
+
+    The first qualifying image in document order is treated as eager.
+    This heuristic matches the criteria used by the preload hints module
+    (`auto_detect_hero_image`), keeping the two systems consistent.
+
+    ## Controlling Eagerness
+
+    ### `data-eager` attribute
+
+    Add `data-eager` to any `<img>` to force eager loading regardless of
+    position:
+
+    ```html
+    <img src="/assets/promo-banner.jpg" data-eager alt="Promo">
+    ```
+
+    The `data-eager` attribute is stripped from the output HTML. It does
+    NOT consume the first-image slot -- the actual first qualifying image
+    still gets eager treatment independently.
+
+    ### Explicit `loading` attribute
+
+    If a template author sets `loading` explicitly, eigen preserves it:
+
+    ```html
+    <img src="/assets/photo.jpg" loading="eager" alt="Photo">
+    ```
+
+    Exception: if both `data-eager` and `loading="lazy"` are present,
+    `data-eager` wins and `loading="eager"` is emitted.
+
+    ### `hero_image` in frontmatter
+
+    ```yaml
+    ---
+    hero_image: /assets/hero-banner.jpg
+    ---
+    ```
+
+    Any `<img>` whose `src` matches the `hero_image` path is always
+    eager. This also consumes the first-image slot.
+
+    ## Behavior When Optimization Is Disabled
+
+    ```toml
+    [assets.images]
+    optimize = false
+    ```
+
+    Images remain as plain `<img>` tags (no `<picture>` wrapping), but
+    lazy loading attributes are still applied via a lightweight lol_html
+    pass (`apply_lazy_loading`).
+
+    ## Fragment Behavior
+
+    Fragments (partial HTML loaded via HTMX) get their own independent
+    `LazyLoadContext`. The first qualifying image in each fragment is
+    treated as eager; subsequent images are lazy. Fragments do not
+    receive a `hero_image` (it is a page-level concept).
+
+    ## Interaction with Preload Hints
+
+    The preload hints module auto-detects the hero image by finding the
+    first `<img>` without `loading="lazy"`. Since lazy loading runs
+    before hints in the pipeline, and the first qualifying image is
+    marked eager, auto-detection correctly identifies the same image.
+    No changes to the hints module are needed.
+
+    ## Attribute Precedence
+
+    1. `data-eager` present: `loading="eager"`, strip `data-eager`
+    2. Explicit `loading` (no `data-eager`): preserve as-is
+    3. `src` matches `hero_image`: `loading="eager"`
+    4. First qualifying image: `loading="eager"`, consume counter
+    5. All others: `loading="lazy"`
+
+    For `decoding`:
+
+    1. Explicit `decoding`: preserve as-is
+    2. Eager image: do not set (let browser decide)
+    3. Lazy image: `decoding="async"`
+
+    ## Implementation
+
+    All changes are in two existing files:
+
+    - `src/assets/html_rewrite.rs`: `LazyLoadContext`, `is_qualifying_image`,
+      `resolve_loading_attrs`, `apply_lazy_loading`, and modifications to
+      `rewrite_img_to_picture` and `build_picture_html`.
+    - `src/build/render.rs`: passes `hero_image` to `optimize_and_rewrite_images`.
+
+- title: "Preload / Prefetch Resource Hints"
+  slug: preload-prefetch
+  category: Optimization
+  description: "Eigen automatically injects link resource hints into head to improve page load performance."
+  content: |
+    # Preload / Prefetch Resource Hints
+
+    ## Overview
+
+    Eigen automatically injects `<link>` resource hints into `<head>` to improve page load performance:
+
+    - **`<link rel="preload">`** for hero images -- tells the browser to start fetching the LCP image immediately, before the HTML parser reaches the `<img>` tag. Reduces Largest Contentful Paint.
+    - **`<link rel="prefetch">`** for navigation links -- tells the browser to fetch HTMX fragment files at idle time, making partial-page transitions feel instant.
+
+    Resource hints are enabled by default. They are purely additive (they add `<link>` tags but never modify or remove existing content) and cannot break output.
+
+    ## Configuration
+
+    ### site.toml
+
+    ```toml
+    [build.hints]
+    # Master switch. Default: true.
+    enabled = true
+
+    # Auto-detect hero image from first qualifying <img>. Default: true.
+    auto_detect_hero = true
+
+    # Generate prefetch hints for navigation links. Default: true.
+    prefetch_links = true
+
+    # Maximum prefetch hints per page. Default: 5.
+    max_prefetch = 5
+
+    # Fallback imagesizes for hero preload. Default: "100vw".
+    hero_image_sizes = "100vw"
+
+    # Glob patterns to exclude from prefetching.
+    exclude_prefetch = ["**/archive/**"]
+    ```
+
+    ### Frontmatter
+
+    Designate a specific hero image in template frontmatter:
+
+    ```yaml
+    ---
+    hero_image: /assets/hero-banner.jpg
+    data:
+      nav:
+        file: "nav.yaml"
+    ---
+    ```
+
+    When `hero_image` is set, it takes priority over auto-detection.
+
+    ## Hero Image Preload
+
+    ### Resolution order
+
+    1. Frontmatter `hero_image` field (highest priority).
+    2. Auto-detected first `<img>` without `loading="lazy"` (if `auto_detect_hero` is enabled).
+    3. No preload hint generated.
+
+    ### Responsive variants
+
+    When image optimization is active and the hero image has a `<picture>` element with `<source srcset>`, the preload uses `imagesrcset` and `imagesizes` to let the browser preload the correct size:
+
+    ```html
+    <link rel="preload" as="image" href="/assets/hero.jpg"
+          imagesrcset="/assets/hero-480w-abc.avif 480w, /assets/hero-768w-abc.avif 768w"
+          imagesizes="100vw"
+          type="image/avif">
+    ```
+
+    The preload targets the best format (AVIF if available). Browsers that don't support AVIF ignore the hint safely.
+
+    ### CSS background images
+
+    If the hero is a CSS `background-image`, auto-detection won't find it. Use the frontmatter `hero_image` field. The module will scan `dist/` for variant files as a fallback.
+
+    ## Navigation Prefetch
+
+    ### How it works
+
+    - When fragments are enabled: scans `hx-get` attributes to prefetch fragment files.
+    - When fragments are disabled: scans `<a href>` attributes to prefetch full pages (adds `as="document"`).
+
+    ### Filtering
+
+    - External URLs (http/https) are excluded.
+    - Self-referencing links (current page) are excluded.
+    - Anchor-only links (#...) are excluded.
+    - Links with `target="_blank"` are excluded (href mode only).
+    - URLs matching `exclude_prefetch` glob patterns are excluded.
+    - Duplicate URLs are deduplicated (first occurrence wins).
+    - At most `max_prefetch` URLs are included (document order).
+
+    ## Pipeline position
+
+    ```
+    render template
+      -> strip fragment markers
+      -> localize assets
+      -> optimize images (img -> picture)
+      -> rewrite CSS background images
+      -> plugin post_render_html
+      -> critical CSS inlining
+      -> preload/prefetch hints  <-- THIS FEATURE
+      -> minify HTML
+      -> write to disk
+    ```
+
+    Fragments do NOT get resource hints (they lack a `<head>` element).
+    Dev server builds also skip resource hints.
+
+    ## Error handling
+
+    All errors are non-fatal. If anything goes wrong (missing `<head>`, IO errors, parse failures), the original HTML is returned unchanged with a warning logged.
+
+# SEO and Meta
+
+- title: "Audit"
+  slug: audit
+  category: SEO and Meta
+  description: "Eigen includes a built-in audit system that checks rendered pages for SEO, performance, accessibility, and best-practice issues."
+  content: |
+    # Audit
+
+    Eigen includes a built-in audit system that checks rendered pages for SEO,
+    performance, accessibility, and best-practice issues. It runs automatically
+    in dev mode and is available as a standalone CLI command.
+
+    Each finding includes a stable check ID, severity, and an actionable fix
+    with the file to edit and what to change.
+
+    ## Quick Start
+
+    Run `eigen dev`. The audit runs automatically after every rebuild. Visit
+    `/_audit` in the browser for a styled, filterable report. A floating badge
+    on every page shows the issue count for that page.
+
+    ## Dev Mode Endpoints
+
+    When the dev server is running, three files are written to `dist/` and
+    served as static assets:
+
+    | Path | Format | Use case |
+    |------|--------|----------|
+    | `/_audit` | HTML | Interactive report with severity/category filters |
+    | `/_audit.json` | JSON | Structured data for scripts and AI tools |
+    | `/_audit.md` | Markdown | Copy-paste into an AI chat or issue tracker |
+
+    These files are regenerated on every rebuild.
+
+    ## Overlay Badge
+
+    In dev mode, a floating badge is injected before `</body>` on every
+    rendered page. It shows the number of audit findings for that page and
+    is color-coded by worst severity (red = critical, orange = high,
+    yellow = medium, green = none).
+
+    Clicking the badge expands a panel listing each finding with its severity,
+    check ID, and message. The panel includes a link to the full `/_audit`
+    report. Expanded/collapsed state is persisted in `localStorage`.
+
+    ## CLI: `eigen audit`
+
+    Run the audit outside the dev server. By default it builds the site first,
+    then audits the output.
+
+    ```bash
+    # Markdown report to stdout (default)
+    eigen audit --project .
+
+    # JSON report to stdout
+    eigen audit --project . --format json
+
+    # Write report.json and report.md files
+    eigen audit --project . --output report
+
+    # Skip build, audit existing dist/
+    eigen audit --project . --no-build
+    ```
+
+    ### Flags
+
+    | Flag | Default | Description |
+    |------|---------|-------------|
+    | `--project` / `-p` | `.` | Path to the project root |
+    | `--format` / `-f` | `markdown` | Output format: `markdown` or `json` |
+    | `--output` / `-o` | (none) | Write `<path>.json` and `<path>.md` instead of printing to stdout |
+    | `--no-build` | false | Skip build step, audit the existing `dist/` directory |
+
+    ## Configuration
+
+    Add an `[audit]` table to `site.toml`. The audit runs even when the table
+    is absent; the table is only needed to ignore specific checks.
+
+    ```toml
+    [audit]
+    ignore = ["seo/twitter-tags", "a11y/color-contrast-hint"]
+    ```
+
+    ### Fields
+
+    | Field | Type | Default | Description |
+    |-------|------|---------|-------------|
+    | `ignore` | `Vec<String>` | `[]` | Check IDs to suppress from the report |
+
+    ## Check Reference
+
+    Every check has a stable slash-delimited ID of the form `category/name`.
+
+    ### SEO
+
+    | ID | Severity | Description |
+    |----|----------|-------------|
+    | `seo/sitemap` | critical | No sitemap.xml generated |
+    | `seo/robots-txt` | high | No robots.txt configured |
+    | `seo/feed` | low | No Atom feed configured |
+    | `seo/meta-title` | high | Missing `<title>` tag |
+    | `seo/meta-description` | high | Missing `<meta name="description">` |
+    | `seo/canonical` | high | Missing `<link rel="canonical">` |
+    | `seo/og-tags` | medium | Missing Open Graph tags |
+    | `seo/twitter-tags` | low | Missing Twitter Card tags |
+    | `seo/structured-data` | medium | Missing JSON-LD structured data |
+    | `seo/heading-hierarchy` | medium | Missing or multiple `<h1>` tags |
+
+    ### Performance
+
+    | ID | Severity | Description |
+    |----|----------|-------------|
+    | `perf/image-optimization` | high | Image optimization disabled |
+    | `perf/image-formats` | medium | No modern image formats configured |
+    | `perf/minification` | high | HTML minification disabled |
+    | `perf/critical-css` | medium | Critical CSS inlining not enabled |
+    | `perf/bundling` | medium | CSS/JS bundling not enabled |
+    | `perf/content-hash` | low | Content hashing not enabled |
+    | `perf/preload-hints` | medium | Resource hints disabled |
+    | `perf/render-blocking-scripts` | high | Script in head without defer/async |
+    | `perf/large-image` | high | Image without srcset |
+    | `perf/font-preload` | medium | Font file not preloaded |
+
+    ### Accessibility
+
+    | ID | Severity | Description |
+    |----|----------|-------------|
+    | `a11y/html-lang` | critical | Missing lang attribute on `<html>` |
+    | `a11y/viewport-meta` | critical | Missing or misconfigured viewport |
+    | `a11y/img-alt-text` | high | Image missing alt attribute |
+    | `a11y/link-text` | medium | Link with empty text |
+    | `a11y/color-contrast-hint` | low | Reminder to check contrast |
+
+    ### Best Practices
+
+    | ID | Severity | Description |
+    |----|----------|-------------|
+    | `bp/base-url` | critical | `base_url` not set properly |
+    | `bp/favicon` | medium | No favicon found |
+    | `bp/https-links` | medium | HTTP links found |
+
+    ## AI Workflow
+
+    The audit output is designed to be fed directly to AI tools.
+
+    ### From the dev server
+
+    ```bash
+    # Grab the markdown report and paste into an AI chat
+    curl http://localhost:3000/_audit.md
+
+    # Or the structured JSON
+    curl http://localhost:3000/_audit.json
+    ```
+
+    ### From the CLI
+
+    ```bash
+    # Pipe JSON directly to an AI tool
+    eigen audit --format json | ai-tool fix-issues
+    ```
+
+    ### JSON structure
+
+    The JSON output includes `fix.file` and `fix.instruction` for every
+    finding, giving AI tools the exact file to edit and what to do:
+
+    ```json
+    {
+      "summary": { "total": 2, "by_severity": { "high": 1, "medium": 1 } },
+      "site_findings": [
+        {
+          "id": "seo/robots-txt",
+          "severity": "high",
+          "message": "No robots.txt configured",
+          "fix": {
+            "file": "site.toml",
+            "instruction": "Add a [robots] table"
+          }
+        }
+      ],
+      "page_findings": {
+        "/about/index.html": [
+          {
+            "id": "seo/meta-description",
+            "severity": "medium",
+            "message": "Missing meta description",
+            "fix": {
+              "file": "templates/about.html",
+              "instruction": "Add <meta name=\"description\" content=\"...\">"
+            }
+          }
+        ]
+      }
+    }
+    ```
+
+    ## Architecture
+
+    ```
+    src/build/audit/
+      mod.rs                 -- AuditReport, run_audit(), core types
+      overlay.rs             -- overlay badge injection for dev mode
+      checks/
+        mod.rs               -- check registry, run_site_checks / run_page_checks
+        seo.rs               -- SEO checks (site + page level)
+        performance.rs       -- performance checks (site + page level)
+        accessibility.rs     -- accessibility checks (site + page level)
+        best_practices.rs    -- best-practice checks (site + page level)
+      output/
+        mod.rs               -- write_all() convenience function
+        html.rs              -- styled HTML report with filter UI
+        json.rs              -- JSON serialization via serde
+        markdown.rs          -- markdown report for AI/human consumption
+    ```
+
+    ## Build Pipeline Position
+
+    ```
+    render pages -> sitemap -> robots.txt -> feeds -> bundling
+      -> audit checks -> write _audit.{html,json,md} -> inject overlay badges
+    ```
+
+    The audit runs as the final phase after all rendering and optimization.
+    In dev mode, overlay badges are injected into the HTML files on disk
+    after the audit report files are written.
+
+- title: "JSON-LD Structured Data"
+  slug: json-ld
+  category: SEO and Meta
+  description: "Eigen auto-injects JSON-LD structured data into the head of rendered pages during the build pipeline."
+  content: |
+    # JSON-LD Structured Data
+
+    ## Overview
+
+    Eigen auto-injects JSON-LD structured data (`<script type="application/ld+json">`)
+    into the `<head>` of rendered pages during the build pipeline. This enables search
+    engines (Google, Bing) to understand page content and generate rich results.
+
+    JSON-LD is complementary to the OG/Twitter meta tags injected by `build::seo`.
+    While OG/Twitter tags target social media crawlers, JSON-LD targets search engine
+    crawlers.
+
+    ## Supported Schema Types
+
+    Three schema.org types are supported out of the box:
+
+    ### Article
+
+    For blog posts, news articles, and similar content pages.
+
+    Fields (auto-populated from SEO config and frontmatter):
+    - `headline`: from `seo.title` > `site.seo.title` > `site.name`
+    - `url`: canonical URL (same logic as `build::seo`)
+    - `description`: from `seo.description` > `site.seo.description` (optional)
+    - `image`: from `seo.image` > `site.seo.image`, resolved to absolute URL (optional)
+    - `datePublished`: from `schema.date_published` in frontmatter (optional)
+    - `dateModified`: from `schema.date_modified`, falls back to `datePublished` (optional)
+    - `author`: from `schema.author` or `site.schema.author` (optional)
+    - `publisher`: always `{ "@type": "Organization", "name": site.name }`
+
+    ### BreadcrumbList
+
+    Generated from the page URL path. For `/blog/posts/my-article.html`, produces
+    breadcrumb items: Home > blog > posts > my-article.
+
+    Skipped for root pages (`/` or `/index.html`) since single-item breadcrumbs
+    are not useful.
+
+    Segment names can be overridden via `breadcrumb_names` in frontmatter.
+
+    ### WebSite
+
+    For the homepage. Enables sitelinks in search results.
+
+    Fields:
+    - `name`: `site.name`
+    - `url`: `site.base_url`
+    - `description`: `site.seo.description` (optional)
+
+    ## Configuration
+
+    ### Site-Level Defaults (site.toml)
+
+    ```toml
+    [site.schema]
+    author = "Jane Doe"              # Default author for Article schemas
+    default_types = ["BreadcrumbList"] # Schema types applied to all pages
+    ```
+
+    When `default_types` is set, those schemas are generated for every page unless
+    the page's frontmatter overrides them. Pages can still add additional types.
+
+    ### Frontmatter
+
+    The `schema` field in frontmatter supports three formats:
+
+    **String (single type):**
+    ```yaml
+    schema: Article
+    ```
+
+    **List (multiple types):**
+    ```yaml
+    schema:
+      - Article
+      - BreadcrumbList
+    ```
+
+    **Full config (type with overrides):**
+    ```yaml
+    schema:
+      type: Article
+      author: "Jane Doe"
+      date_published: "2026-03-15"
+      date_modified: "2026-03-17"
+      breadcrumb_names:
+        blog: "Blog Posts"
+    ```
+
+    ### Dynamic Pages
+
+    For dynamic pages, schema fields can contain minijinja template expressions:
+
+    ```yaml
+    schema:
+      type: Article
+      author: "{{ post.author_name }}"
+      date_published: "{{ post.published_at }}"
+      date_modified: "{{ post.updated_at }}"
+    ```
+
+    Expressions are resolved per-item via `resolve_schema_expressions`, which runs
+    alongside `seo::resolve_seo_expressions` in the render flow.
+
+    ## Opt-In Behavior
+
+    JSON-LD is **opt-in** -- no structured data is generated unless configured.
+    This differs from OG/Twitter tags (which are universally useful). Structured
+    data is type-specific: an Article schema on a 404 page would be incorrect.
+
+    The three ways to enable JSON-LD:
+    1. Set `default_types` in `[site.schema]` for site-wide defaults.
+    2. Add `schema` to individual page frontmatter.
+    3. Both (page frontmatter overrides site defaults).
+
+    ## Existing JSON-LD Detection
+
+    If the rendered HTML already contains a `<script type="application/ld+json">`
+    block (e.g. from the template itself), the injection step skips entirely.
+    This respects author-provided structured data.
+
+    ## Pipeline Position
+
+    ```
+      -> SEO meta tag injection       (build::seo)
+      -> JSON-LD injection            (build::json_ld)  <-- this feature
+      -> minify HTML                  (build::minify)
+      -> write to disk
+    ```
+
+    JSON-LD runs after SEO tags (both inject into `<head>`) and before minification
+    (so the injected script benefits from `minify-html`).
+
+    Fragments do NOT get JSON-LD -- they are partial HTML snippets loaded via HTMX
+    and have no `<head>`.
+
+    ## Error Handling
+
+    JSON-LD is an enhancement. Failures never break the build:
+    - Unrecognized schema type: warning logged, type skipped.
+    - Template expression failure: field treated as absent, warning logged.
+    - lol_html injection error: original HTML returned unchanged, warning logged.
+    - No `<head>` element: no injection (lol_html selector does not match).
+
+    ## Module Structure
+
+    Single file: `src/build/json_ld.rs`
+
+    Public API:
+    - `inject_json_ld()`: main pipeline step
+    - `resolve_schema_expressions()`: template expression evaluation
+
+    ## Examples
+
+    ### Minimal (no JSON-LD)
+
+    No `[site.schema]` in site.toml and no `schema` in frontmatter. No JSON-LD
+    is generated on any page.
+
+    ### Blog post with Article schema
+
+    ```yaml
+    ---
+    seo:
+      title: "My First Post"
+      description: "An introduction to my blog"
+      image: "/assets/hero.jpg"
+    schema:
+      type: Article
+      author: "Jane Doe"
+      date_published: "2026-03-15"
+    ---
+    ```
+
+    ### Homepage with WebSite schema
+
+    ```yaml
+    ---
+    schema: WebSite
+    ---
+    ```
+
+    ### BreadcrumbList everywhere via site defaults
+
+    ```toml
+    [site.schema]
+    default_types = ["BreadcrumbList"]
+    ```
+
+- title: "Open Graph / Twitter Card Meta Tags"
+  slug: og-twitter-meta
+  category: SEO and Meta
+  description: "Eigen auto-injects Open Graph and Twitter Card meta tags into every page's head during the build pipeline."
+  content: |
+    # Open Graph / Twitter Card Meta Tags
+
+    ## Overview
+
+    Eigen auto-injects Open Graph (`og:*`) and Twitter Card (`twitter:*`)
+    meta tags into every page's `<head>` during the build pipeline. This
+    ensures shared links on social media (Twitter/X, Facebook, LinkedIn,
+    Slack, Discord, etc.) display rich preview cards with title,
+    description, and image.
+
+    No template changes are required. The feature is always-on.
+
+    ## How It Works
+
+    1. SEO values are resolved from a three-layer cascade:
+       - Auto-derived defaults (title = site.name, og:type = "website", canonical URL = base_url + page path)
+       - Site-level defaults from `[site.seo]` in `site.toml`
+       - Per-page overrides from `[seo]` in template frontmatter
+
+    2. The rendered HTML is scanned for existing OG/Twitter meta tags.
+    3. Only missing tags are generated and injected into `<head>`.
+
+    ## Configuration
+
+    ### Site-level defaults (`site.toml`)
+
+    ```toml
+    [site]
+    name = "My Blog"
+    base_url = "https://blog.example.com"
+
+    [site.seo]
+    title = "My Blog"                          # optional, falls back to site.name
+    description = "A blog about interesting things"  # optional
+    image = "/assets/default-share.jpg"        # optional, site-relative or absolute URL
+    og_type = "website"                        # default: "website"
+    twitter_site = "@myblog"                   # optional, Twitter @handle
+    twitter_card = "summary_large_image"       # default: "summary_large_image"
+    ```
+
+    All fields are optional. If `[site.seo]` is omitted entirely, sensible
+    defaults are used.
+
+    ### Per-page frontmatter
+
+    ```yaml
+    ---
+    seo:
+      title: About Us
+      description: Learn about our team and mission
+      image: /assets/about-hero.jpg
+      og_type: website
+      twitter_card: summary_large_image
+      canonical_url: https://example.com/about
+    ---
+    ```
+
+    All fields are optional. When absent, site-level defaults are used.
+
+    ### Dynamic pages with template expressions
+
+    For dynamic pages, SEO field values can reference collection item data
+    using minijinja template expressions:
+
+    ```yaml
+    ---
+    collection:
+      source: blog_api
+      path: /posts
+    item_as: post
+    seo:
+      title: "{{ post.title }} | My Blog"
+      description: "{{ post.excerpt }}"
+      image: "{{ post.cover_image }}"
+      og_type: article
+    ---
+    ```
+
+    Expressions are resolved per-item using the same template context
+    used for the page template.
+
+    ## Generated Tags
+
+    For a fully configured page, these tags are generated:
+
+    ```html
+    <!-- Open Graph -->
+    <meta property="og:title" content="Page Title">
+    <meta property="og:description" content="Page description">
+    <meta property="og:image" content="https://example.com/assets/share.jpg">
+    <meta property="og:url" content="https://example.com/about.html">
+    <meta property="og:type" content="website">
+    <meta property="og:site_name" content="My Site">
+
+    <!-- Twitter Card -->
+    <meta name="twitter:card" content="summary_large_image">
+    <meta name="twitter:title" content="Page Title">
+    <meta name="twitter:description" content="Page description">
+    <meta name="twitter:image" content="https://example.com/assets/share.jpg">
+    <meta name="twitter:site" content="@mysite">
+
+    <!-- Canonical URL -->
+    <link rel="canonical" href="https://example.com/about.html">
+    ```
+
+    Tags are omitted when their value is not available:
+    - No description at any level: `og:description` and `twitter:description` omitted
+    - No image at any level: `og:image`, `twitter:image` omitted, `twitter:card` forced to `"summary"`
+    - No `twitter_site` configured: `twitter:site` omitted
+
+    ## Duplicate Detection
+
+    If a template already contains OG/Twitter meta tags or a canonical
+    link, the build pipeline detects them and does not inject duplicates.
+    This allows template authors to manually control specific tags when
+    needed.
+
+    ## URL Resolution
+
+    - Image paths starting with `/` are resolved to absolute URLs using `site.base_url`
+    - Already-absolute URLs (`http://` or `https://`) are used as-is
+    - Canonical URLs are auto-generated from `site.base_url + page_path`
+    - `/index.html` paths are normalized to `/` in canonical URLs
+
+    ## Pipeline Position
+
+    SEO injection runs after preload/prefetch hints and before HTML
+    minification. It does not run during dev server rendering.
+
+    ## Module
+
+    `src/build/seo.rs` -- single file containing all resolution, detection,
+    generation, and injection logic.
+
+- title: "robots.txt Generation"
+  slug: robots-txt
+  category: SEO and Meta
+  description: "Eigen can auto-generate a robots.txt file at build time."
+  content: |
+    # robots.txt Generation
+
+    Eigen can auto-generate a `robots.txt` file at build time. The file is
+    written to `dist/robots.txt` and follows the
+    [Robots Exclusion Standard (RFC 9309)](https://www.rfc-editor.org/rfc/rfc9309).
+
+    ## Configuration
+
+    Add a `[robots]` table to `site.toml`. When the table is present (even
+    empty), a `robots.txt` is generated. When absent, no file is generated.
+
+    ### Minimal (all defaults)
+
+    ```toml
+    [robots]
+    ```
+
+    Produces:
+
+    ```
+    User-agent: *
+    Allow: /
+
+    Sitemap: https://example.com/sitemap.xml
+    ```
+
+    ### Full example
+
+    ```toml
+    [robots]
+    sitemap = true
+    extra_sitemaps = ["https://example.com/news-sitemap.xml"]
+
+    [[robots.rules]]
+    user_agent = "*"
+    allow = ["/"]
+    disallow = ["/admin/", "/private/"]
+
+    [[robots.rules]]
+    user_agent = "BadBot"
+    disallow = ["/"]
+    ```
+
+    ### Config fields
+
+    | Field | Type | Default | Description |
+    |---|---|---|---|
+    | `sitemap` | `bool` | `true` | Include `Sitemap:` directive for generated sitemap.xml |
+    | `extra_sitemaps` | `Vec<String>` | `[]` | Additional absolute sitemap URLs |
+    | `rules` | `Vec<RobotsRule>` | `[{user_agent: "*", allow: ["/"]}]` | Rule groups |
+
+    ### RobotsRule fields
+
+    | Field | Type | Default | Description |
+    |---|---|---|---|
+    | `user_agent` | `String` | (required) | User-agent this rule applies to |
+    | `allow` | `Vec<String>` | `[]` | Paths to allow |
+    | `disallow` | `Vec<String>` | `[]` | Paths to disallow |
+
+    ## Validation
+
+    - Each rule must have a non-empty `user_agent`.
+    - `extra_sitemaps` entries must be absolute URLs (`http://` or `https://`).
+    - A rule with no `allow` or `disallow` directives triggers a warning
+      (valid per spec but pointless).
+
+    ## Build pipeline position
+
+    ```
+    render pages -> sitemap -> robots.txt -> feeds -> post-build hooks -> bundling
+    ```
+
+    ## Architecture
+
+    - Config structs: `src/config/mod.rs` (`RobotsConfig`, `RobotsRule`)
+    - Generation: `src/build/robots.rs`
+    - Pipeline call: `src/build/render.rs`
+
+    ## Notes
+
+    - If a `robots.txt` exists in `static/`, the generated file overwrites it.
+      Use the config instead of a static file.
+    - The sitemap URL is built from `site.base_url` + `/sitemap.xml`.
+      Trailing slashes on `base_url` are handled automatically.
+
+- title: "Atom Feed Generation"
+  slug: rss-feed
+  category: SEO and Meta
+  description: "Eigen can auto-generate Atom 1.0 XML feeds for configured data collections."
+  content: |
+    # Atom Feed Generation
+
+    Eigen can auto-generate Atom 1.0 (RFC 4287) XML feeds for configured
+    data collections. Feeds are written to `dist/` at configurable paths
+    during the build process.
+
+    ## Configuration
+
+    Add `[feed.<name>]` tables to `site.toml`. Each feed defines its data
+    source (same fields as a frontmatter `DataQuery`) plus metadata and
+    field mappings.
+
+    ### File-based example
+
+    ```toml
+    [feed.blog]
+    file = "posts.json"        # file in _data/
+    sort = "-date"              # sort descending by date
+    limit = 20                  # max 20 entries
+    path = "blog/feed.xml"      # output path in dist/
+    link_prefix = "blog"        # entry URLs: {base_url}/blog/{slug}.html
+    ```
+
+    ### Remote source example
+
+    ```toml
+    [sources.cms]
+    url = "https://cms.example.com/api"
+
+    [feed.blog]
+    source = "cms"              # source from [sources.*]
+    query_path = "/posts"       # appended to source URL
+    root = "data.posts"         # dot-path into response JSON
+    sort = "-publishedAt"
+    title = "My Blog Feed"
+    author = "Jane Doe"
+    title_field = "title"
+    date_field = "publishedAt"
+    summary_field = "excerpt"
+    slug_field = "slug"
+    link_prefix = "blog"
+    ```
+
+    ### Multiple feeds
+
+    ```toml
+    [feed.blog]
+    file = "posts.json"
+    path = "blog/feed.xml"
+    link_prefix = "blog"
+
+    [feed.changelog]
+    file = "releases.json"
+    path = "changelog/feed.xml"
+    title_field = "version"
+    link_prefix = "changelog"
+    ```
+
+    ## Configuration Reference
+
+    | Field | Type | Default | Description |
+    |---|---|---|---|
+    | `file` | string | - | Local file in `_data/`. Required if `source` not set. |
+    | `source` | string | - | Source name from `[sources.*]`. Required if `file` not set. |
+    | `query_path` | string | - | URL path appended to source's base URL. |
+    | `root` | string | - | Dot-path into response JSON for array extraction. |
+    | `sort` | string | - | Sort spec: `"field"` ascending, `"-field"` descending. |
+    | `title` | string | `site.name` | Feed title. |
+    | `path` | string | `"feed.xml"` | Output path relative to `dist/`. |
+    | `author` | string | `site.schema.author` | Feed author name. |
+    | `limit` | usize | `50` | Maximum number of entries. |
+    | `title_field` | string | `"title"` | Field on each item for entry title. |
+    | `date_field` | string | `"date"` | Field on each item for entry date. |
+    | `summary_field` | string | - | Field on each item for entry summary. Omitted if unset. |
+    | `slug_field` | string | `"slug"` | Field on each item for URL slug. |
+    | `link_prefix` | string | - | URL prefix for entry links. |
+
+    ## Validation
+
+    - Each feed must have either `file` or `source`.
+    - If `source` is set, it must exist in `[sources.*]`.
+    - `path` must not be empty.
+    - `limit` must be > 0.
+    - `slug_field` must not be empty.
+
+    ## Entry Link Construction
+
+    Entry URLs are built as: `{base_url}/{link_prefix}/{slug}.html`
+
+    If `link_prefix` is not set: `{base_url}/{slug}.html`
+
+    ## Date Handling
+
+    Supported input formats for the date field:
+    - RFC 3339: `2026-03-17T12:00:00Z`
+    - Date only: `2026-03-17` (midnight UTC assumed)
+    - With timezone: `2026-03-17T12:00:00+05:30`
+
+    Dates are output as RFC 3339 in the Atom `<updated>` element.
+    If a date cannot be parsed, the build timestamp is used as fallback.
+
+    ## Error Handling
+
+    - Missing required fields (title, slug) on an entry: entry is skipped
+      with a warning, not a build failure.
+    - Invalid feed config: build error via validation.
+    - Empty collections: valid feed with zero entries.
+
+    ## Architecture
+
+    - Module: `src/build/feed.rs`
+    - Pipeline position: after sitemap generation, before post-build hooks
+    - Reuses `DataFetcher` (cache-warm from page rendering) and
+      `escape_xml` from `src/build/sitemap.rs`
+    - No external XML library; string-based XML construction
+    - No new crate dependencies (uses existing chrono, serde, eyre)
+
+    ## Autodiscovery
+
+    Autodiscovery `<link>` tags are not injected automatically. Add this
+    to your base template's `<head>` manually:
+
+    ```html
+    <link rel="alternate" type="application/atom+xml"
+          title="My Blog Feed" href="/blog/feed.xml" />
+    ```
+
+- title: "Redirect Rules"
+  slug: redirects
+  category: SEO and Meta
+  description: "Eigen generates a dist/_redirects file from redirects rules declared in site.toml."
+  content: |
+    # Redirect Rules (`_redirects`)
+
+    Eigen generates a `dist/_redirects` file from `[[redirects]]` rules declared
+    in `site.toml`. The format is compatible with Cloudflare Pages and Netlify.
+
+    ## Configuration
+
+    ```toml
+    [[redirects]]
+    from = "/old-path"
+    to   = "/new-path"
+    status = 301          # optional; default 301
+
+    [[redirects]]
+    from = "/blog/*"
+    to   = "/posts/:splat"
+    status = 302
+
+    [[redirects]]
+    from = "https://old.example.com/*"
+    to   = "https://new.example.com/:splat"
+    status = 301
+    ```
+
+    ### Fields
+
+    | Field    | Required | Default | Notes |
+    |----------|----------|---------|-------|
+    | `from`   | yes      | —       | Source path or absolute URL |
+    | `to`     | yes      | —       | Destination path or absolute URL |
+    | `status` | no       | `301`   | Must be 301, 302, 307, or 308 |
+
+    ## Conflict policy
+
+    If `static/_redirects` exists **and** `[[redirects]]` rules are configured,
+    the build aborts with an error. Remove one or the other — redirect ordering
+    is load-bearing and silent merging would produce incorrect behaviour.
+
+    If `static/_redirects` exists and `[[redirects]]` is empty, the static file
+    is copied to `dist/_redirects` verbatim (same as `_headers` behaviour).
+
+    ## Validation
+
+    Errors (build aborts):
+    - `from` or `to` is empty
+    - `from` starts with `#` (interpreted as comment by platforms)
+    - `from` or `to` does not start with `/`, `http://`, or `https://`
+    - `status` is not 301, 302, 307, or 308 (200/rewrite is explicitly rejected)
+
+    Warnings (build continues):
+    - `from == to` (browser redirect loop)
+    - Duplicate `from` values (first match wins; later rules are dead)
+    - Rule count exceeds 2,000 (Cloudflare Pages per-project limit)
+
+    ## Content hash exclusion
+
+    `_redirects` is excluded from the content hash pipeline by default (via
+    `default_hash_exclude()` in `src/config/mod.rs`). No user action required.
+
+    ## Dev vs. production
+
+    The `_redirects` file is written in all builds (dev and production). There
+    is no separate dev-mode code path. This matches the behaviour of robots.txt
+    and sitemaps.
+
+# Frontend
+
+- title: "Analytics"
+  slug: analytics
+  category: Frontend
+  description: "Eigen injects analytics tracking snippets into every full rendered page before </body>."
+  content: |
+    # Analytics
+
+    Eigen injects analytics tracking snippets into every full rendered page before
+    `</body>`. Fragment files are not affected. Configure one or both providers
+    under `[analytics]` in `site.toml`.
+
+    ## Google Analytics
+
+    ```toml
+    [analytics.google]
+    tracking_id = "G-XXXXXXXXXX"
+    ```
+
+    | Field | Required | Description |
+    |-------|----------|-------------|
+    | `tracking_id` | yes | Google Analytics measurement ID (e.g. `G-XXXXXXXXXX`) |
+
+    Injects the standard gtag.js async snippet.
+
+    ## Umami
+
+    ```toml
+    [analytics.umami]
+    website_id = "abc-123-def"
+    host_url = "https://analytics.example.com"
+    domains = "example.com,www.example.com"
+    auto_track = true
+    tag = "production"
+    ```
+
+    | Field | Required | Default | Description |
+    |-------|----------|---------|-------------|
+    | `website_id` | yes | — | Website ID from the Umami dashboard |
+    | `host_url` | no | `https://cloud.umami.is` | Base URL of your Umami instance |
+    | `domains` | no | — | Comma-separated domains to restrict tracking to |
+    | `auto_track` | no | `true` | Automatically track page views |
+    | `tag` | no | — | Custom event tag applied to all events |
+
+    Injects a deferred script tag loading `{host_url}/script.js` with the
+    configured `data-*` attributes.
+
+    ## Using Both
+
+    Both providers can be active simultaneously:
+
+    ```toml
+    [analytics.google]
+    tracking_id = "G-XXXXXXXXXX"
+
+    [analytics.umami]
+    website_id = "abc-123-def"
+    ```
+
+    Google's snippet is injected first, followed by Umami's.
+
+    ## Disabling
+
+    Omit the `[analytics]` section entirely, or remove both sub-tables, to
+    disable all analytics injection.
+
+- title: "View Transitions API"
+  slug: view-transitions
+  category: Frontend
+  description: "Eigen can inject the View Transitions API into your pages, making HTMX partial swaps animate smoothly."
+  content: |
+    # View Transitions API
+
+    Eigen can inject the View Transitions API into your pages, making HTMX
+    partial swaps animate smoothly instead of instantly replacing content.
+
+    ## Enabling
+
+    ```toml
+    [build.view_transitions]
+    enabled = true
+    ```
+
+    ## What It Does
+
+    When enabled, three things are injected into every full page:
+
+    ### 1. Cross-Document Transitions Meta Tag
+
+    ```html
+    <meta name="view-transition" content="same-origin">
+    ```
+
+    Enables the browser's native view transitions for full page navigations
+    (initial load, non-HTMX links, browser back/forward).
+
+    ### 2. HTMX Integration Script
+
+    A small inline script that sets `htmx.config.globalViewTransitions = true`.
+    This makes HTMX wrap all partial swaps in `document.startViewTransition()`,
+    giving you animated transitions between pages.
+
+    ### 3. Transition Names on Fragment Targets
+
+    Elements whose `id` matches a fragment block name (e.g., `content`,
+    `sidebar`) automatically get `view-transition-name` added. This lets
+    the browser animate each region independently instead of a whole-page
+    cross-fade.
+
+    ## Progressive Enhancement
+
+    Browsers without View Transitions support (currently Firefox) get the
+    same instant swaps as before. No polyfill is loaded.
+
+    ## Custom Animations
+
+    The browser's default transition is a cross-fade. To customize, add
+    CSS rules targeting the `::view-transition-*` pseudo-elements:
+
+    ```css
+    ::view-transition-old(content) {
+      animation: slide-out 0.2s ease-in;
+    }
+
+    ::view-transition-new(content) {
+      animation: slide-in 0.2s ease-out;
+    }
+    ```
+
+    The transition names match your fragment block names (`content`,
+    `sidebar`, etc.), so you can target each region independently.
+
+    ## Overriding Transition Names
+
+    If you set `view-transition-name` on an element in your own CSS or
+    inline styles, eigen will not overwrite it.

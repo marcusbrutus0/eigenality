@@ -1,0 +1,5 @@
+- label: Docs
+  url: /docs/
+- label: GitHub
+  url: https://github.com/wavefunk/eigen
+  external: true
