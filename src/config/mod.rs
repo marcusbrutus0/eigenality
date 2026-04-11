@@ -898,11 +898,29 @@ fn validate_config(config: &SiteConfig) -> Result<()> {
     if config.site.name.is_empty() {
         bail!("site.name must not be empty in site.toml");
     }
+    validate_analytics_config(config)?;
     validate_feed_configs(config)?;
     validate_robots_config(config)?;
     validate_audit_config(config)?;
     validate_security_headers_config(config)?;
     validate_redirect_rules(config)?;
+    Ok(())
+}
+
+/// Validate analytics provider configurations.
+fn validate_analytics_config(config: &SiteConfig) -> Result<()> {
+    if let Some(ref analytics) = config.analytics {
+        if let Some(ref google) = analytics.google {
+            if google.tracking_id.is_empty() {
+                bail!("[analytics.google] tracking_id must not be empty");
+            }
+        }
+        if let Some(ref umami) = analytics.umami {
+            if umami.website_id.is_empty() {
+                bail!("[analytics.umami] website_id must not be empty");
+            }
+        }
+    }
     Ok(())
 }
 
@@ -1156,6 +1174,13 @@ mod tests {
 
     fn parse_toml(input: &str) -> Result<SiteConfig> {
         toml::from_str(input).map_err(Into::into)
+    }
+
+    /// Parse + validate a TOML string as a SiteConfig.
+    fn load_config_from_str(input: &str) -> Result<SiteConfig> {
+        let config: SiteConfig = toml::from_str(input)?;
+        validate_config(&config)?;
+        Ok(config)
     }
 
     #[test]
@@ -2487,5 +2512,35 @@ base_url = "https://example.com"
 "#;
         let config = parse_toml(toml_str).unwrap();
         assert!(config.analytics.is_none());
+    }
+
+    #[test]
+    fn test_validate_analytics_google_empty_tracking_id() {
+        let toml_str = r#"
+[site]
+name = "My Site"
+base_url = "https://example.com"
+
+[analytics.google]
+tracking_id = ""
+"#;
+        let err = load_config_from_str(toml_str).unwrap_err();
+        let msg = format!("{err}");
+        assert!(msg.contains("tracking_id"), "error should mention tracking_id: {msg}");
+    }
+
+    #[test]
+    fn test_validate_analytics_umami_empty_website_id() {
+        let toml_str = r#"
+[site]
+name = "My Site"
+base_url = "https://example.com"
+
+[analytics.umami]
+website_id = ""
+"#;
+        let err = load_config_from_str(toml_str).unwrap_err();
+        let msg = format!("{err}");
+        assert!(msg.contains("website_id"), "error should mention website_id: {msg}");
     }
 }
