@@ -25,6 +25,16 @@ jobs:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
     runs-on: ubuntu-latest
+    env:
+      # Doc code examples contain ${VAR} references — set each to its own
+      # name so eigen's interpolation is a no-op.
+      NOTION_DB_ID: ${NOTION_DB_ID}
+      NOTION_API_KEY: ${NOTION_API_KEY}
+      ENV_VAR: ${ENV_VAR}
+      API_TOKEN: ${API_TOKEN}
+      WORKSPACE_ID: ${WORKSPACE_ID}
+      CMS_TOKEN: ${CMS_TOKEN}
+      STRAPI_TOKEN: ${STRAPI_TOKEN}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
