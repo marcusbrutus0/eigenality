@@ -400,6 +400,10 @@ pre code {
   min-height: calc(100vh - var(--nav-height));
 }
 
+.sidebar-overlay {
+  display: none;
+}
+
 /* --- Sidebar --- */
 .sidebar {
   position: sticky;
