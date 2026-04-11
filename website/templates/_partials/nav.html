@@ -1,6 +1,6 @@
 <header class="nav">
   <div class="nav-inner">
-    <a href="/" class="nav-logo">eigen</a>
+    <a {{ link_to("/index.html") }} class="nav-logo">eigen</a>
     <button class="nav-toggle" onclick="toggleSidebar()" aria-label="Toggle navigation">
       <span></span>
       <span></span>
@@ -9,9 +9,11 @@
     <ul class="nav-links">
       {% for item in nav %}
       <li>
-        <a href="{{ item.url }}"{% if item.external %} target="_blank" rel="noopener"{% endif %}>
-          {{ item.label }}
-        </a>
+        {% if item.external %}
+        <a href="{{ item.url }}" target="_blank" rel="noopener">{{ item.label }}</a>
+        {% else %}
+        <a {{ link_to(item.url) }}>{{ item.label }}</a>
+        {% endif %}
       </li>
       {% endfor %}
     </ul>
