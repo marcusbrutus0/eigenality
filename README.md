@@ -9,7 +9,9 @@
 </p>
 
 <p align="center">
+  <a href="https://github.com/wavefunk/eigen/actions/workflows/test.yml"><img src="https://github.com/wavefunk/eigen/actions/workflows/test.yml/badge.svg" alt="Tests"></a>
   <a href="https://github.com/wavefunk/eigen/actions/workflows/website.yml"><img src="https://github.com/wavefunk/eigen/actions/workflows/website.yml/badge.svg" alt="Website"></a>
+  <img src="https://img.shields.io/badge/version-0.13.1-e78a4e" alt="Version 0.13.1">
 </p>
 
 ---
