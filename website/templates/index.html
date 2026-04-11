@@ -1,0 +1,88 @@
+---
+data:
+  nav:
+    file: "nav.yaml"
+  features:
+    file: "features.yaml"
+seo:
+  title: "eigen — a static site generator that thinks in fragments"
+  description: "A Rust-powered static site generator with HTMX fragment navigation, data fetching, and built-in optimization."
+schema:
+  type: WebSite
+---
+{% extends "_base.html" %}
+
+{% block title %}eigen — a static site generator that thinks in fragments{% endblock %}
+
+{% block content %}
+<section class="hero">
+  <h1 class="hero-title">eigen</h1>
+  <p class="hero-tagline">A static site generator that thinks in fragments.</p>
+  <div class="hero-actions">
+    <a href="/docs/quickstart" class="btn btn-primary">Get Started</a>
+    <a href="https://github.com/wavefunk/eigen" class="btn btn-secondary" target="_blank" rel="noopener">View on GitHub</a>
+  </div>
+  <div class="hero-code">
+    <span class="code-label">site.toml</span>
+    <pre><code>[site]
+name = "my-site"
+base_url = "https://example.com"
+
+[build]
+fragments = true
+clean_links = true
+
+[sources.api]
+url = "https://api.example.com"</code></pre>
+  </div>
+</section>
+
+<section class="section">
+  <h2 class="section-title">Features</h2>
+  <div class="features-grid">
+    {% for feature in features %}
+    <div class="feature-card">
+      <h3>{{ feature.title }}</h3>
+      <p>{{ feature.description }}</p>
+    </div>
+    {% endfor %}
+  </div>
+</section>
+
+<section class="section">
+  <h2 class="section-title">How It Works</h2>
+  <div class="steps">
+    <div class="step">
+      <span class="step-number">01</span>
+      <h3>Write templates</h3>
+      <pre><code>{{ "<h1>" }}{{ "{{" }} post.title {{ "}}" }}{{ "</h1>" }}
+{{ "{{" }} post.body | markdown {{ "}}" }}</code></pre>
+    </div>
+    <div class="step">
+      <span class="step-number">02</span>
+      <h3>Configure data</h3>
+      <pre><code>data:
+  posts:
+    source: blog_api
+    path: /posts
+    limit: 10</code></pre>
+    </div>
+    <div class="step">
+      <span class="step-number">03</span>
+      <h3>Build &amp; deploy</h3>
+      <pre><code>$ eigen build
+  Rendered 47 pages
+  Extracted 47 fragments
+  Built in 0.8s</code></pre>
+    </div>
+  </div>
+</section>
+
+<section class="section cta">
+  <div class="cta-install">
+    <code>cargo install eigen</code>
+    <button class="cta-copy" onclick="navigator.clipboard.writeText('cargo install eigen')" aria-label="Copy install command" title="Copy to clipboard">&#x2398;</button>
+  </div>
+  <p><a href="/docs/quickstart">Read the quickstart guide &rarr;</a></p>
+</section>
+{% endblock %}
