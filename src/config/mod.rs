@@ -288,17 +288,47 @@ fn default_permissions_policy() -> String {
     "camera=(), microphone=(), geolocation=()".to_string()
 }
 
-/// Google Analytics configuration.
+/// Analytics provider configuration.
 ///
-/// Located under `[analytics]` in site.toml. When present with a
-/// `tracking_id`, the gtag.js snippet is injected into every rendered page
-/// before `</body>`.
+/// Located under `[analytics]` in site.toml. Each provider is an optional
+/// sub-table. When present, the corresponding tracking snippet is injected
+/// into every rendered full page before `</body>`.
 ///
-/// Absent or missing `tracking_id` = analytics disabled.
+/// Absent `[analytics]` section = analytics disabled.
 #[derive(Debug, Clone, Deserialize)]
 pub struct AnalyticsConfig {
+    /// Google Analytics (gtag.js) configuration.
+    pub google: Option<GoogleAnalyticsConfig>,
+    /// Umami analytics configuration.
+    pub umami: Option<UmamiAnalyticsConfig>,
+}
+
+/// Google Analytics (gtag.js) configuration.
+///
+/// Located under `[analytics.google]` in site.toml.
+#[derive(Debug, Clone, Deserialize)]
+pub struct GoogleAnalyticsConfig {
     /// Google Analytics measurement ID, e.g. `"G-XXXXXXXXXX"`.
     pub tracking_id: String,
+}
+
+/// Umami analytics configuration.
+///
+/// Located under `[analytics.umami]` in site.toml.
+#[derive(Debug, Clone, Deserialize)]
+pub struct UmamiAnalyticsConfig {
+    /// Umami website ID (UUID from the Umami dashboard).
+    pub website_id: String,
+    /// Base URL of the Umami instance. Default: `"https://cloud.umami.is"`.
+    #[serde(default = "default_umami_host")]
+    pub host_url: String,
+    /// Comma-separated list of domains to restrict tracking to.
+    pub domains: Option<String>,
+    /// Whether Umami should automatically track page views. Default: true.
+    #[serde(default = "default_true")]
+    pub auto_track: bool,
+    /// Custom event tag applied to all events from this site.
+    pub tag: Option<String>,
 }
 
 fn default_true() -> bool {
@@ -311,6 +341,10 @@ fn default_fragment_dir() -> String {
 
 fn default_content_block() -> String {
     "content".to_string()
+}
+
+fn default_umami_host() -> String {
+    "https://cloud.umami.is".to_string()
 }
 
 /// Configuration for asset localization.
@@ -976,7 +1010,9 @@ fn validate_security_headers_config(config: &SiteConfig) -> Result<()> {
                  Omit the key or set it to None to suppress the CSP header."
             );
         }
-        if config.analytics.is_some() {
+        let analytics_active = config.analytics.as_ref()
+            .is_some_and(|a| a.google.is_some() || a.umami.is_some());
+        if analytics_active {
             tracing::warn!(
                 "CSP is configured and analytics is enabled. The inline analytics \
                  snippet may be blocked. Add 'unsafe-inline' to script-src or \
@@ -2360,5 +2396,96 @@ base_url = "https://example.com"
             "https://new.com",
         )]);
         assert!(validate_redirect_rules(&config).is_ok());
+    }
+
+    #[test]
+    fn test_parse_analytics_google_only() {
+        let toml_str = r#"
+[site]
+name = "My Site"
+base_url = "https://example.com"
+
+[analytics.google]
+tracking_id = "G-TEST123"
+"#;
+        let config = parse_toml(toml_str).unwrap();
+        let analytics = config.analytics.unwrap();
+        let google = analytics.google.unwrap();
+        assert_eq!(google.tracking_id, "G-TEST123");
+        assert!(analytics.umami.is_none());
+    }
+
+    #[test]
+    fn test_parse_analytics_umami_only_defaults() {
+        let toml_str = r#"
+[site]
+name = "My Site"
+base_url = "https://example.com"
+
+[analytics.umami]
+website_id = "abc-123"
+"#;
+        let config = parse_toml(toml_str).unwrap();
+        let analytics = config.analytics.unwrap();
+        assert!(analytics.google.is_none());
+        let umami = analytics.umami.unwrap();
+        assert_eq!(umami.website_id, "abc-123");
+        assert_eq!(umami.host_url, "https://cloud.umami.is");
+        assert!(umami.auto_track);
+        assert!(umami.domains.is_none());
+        assert!(umami.tag.is_none());
+    }
+
+    #[test]
+    fn test_parse_analytics_umami_full() {
+        let toml_str = r#"
+[site]
+name = "My Site"
+base_url = "https://example.com"
+
+[analytics.umami]
+website_id = "abc-123"
+host_url = "https://analytics.example.com"
+domains = "example.com,www.example.com"
+auto_track = false
+tag = "production"
+"#;
+        let config = parse_toml(toml_str).unwrap();
+        let umami = config.analytics.unwrap().umami.unwrap();
+        assert_eq!(umami.website_id, "abc-123");
+        assert_eq!(umami.host_url, "https://analytics.example.com");
+        assert_eq!(umami.domains.as_deref(), Some("example.com,www.example.com"));
+        assert!(!umami.auto_track);
+        assert_eq!(umami.tag.as_deref(), Some("production"));
+    }
+
+    #[test]
+    fn test_parse_analytics_both_providers() {
+        let toml_str = r#"
+[site]
+name = "My Site"
+base_url = "https://example.com"
+
+[analytics.google]
+tracking_id = "G-BOTH"
+
+[analytics.umami]
+website_id = "both-123"
+"#;
+        let config = parse_toml(toml_str).unwrap();
+        let analytics = config.analytics.unwrap();
+        assert!(analytics.google.is_some());
+        assert!(analytics.umami.is_some());
+    }
+
+    #[test]
+    fn test_parse_no_analytics_section() {
+        let toml_str = r#"
+[site]
+name = "My Site"
+base_url = "https://example.com"
+"#;
+        let config = parse_toml(toml_str).unwrap();
+        assert!(config.analytics.is_none());
     }
 }

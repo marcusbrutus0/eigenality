@@ -662,7 +662,11 @@ async fn finalize_page_html(input: FinalizeInput<'_>, ctx: &BuildContext) -> Res
 
     // Inject analytics snippet if configured.
     let full_html = if let Some(ref analytics) = config.analytics {
-        analytics::inject_analytics(&full_html, &analytics.tracking_id)
+        if let Some(ref google) = analytics.google {
+            analytics::inject_analytics(&full_html, &google.tracking_id)
+        } else {
+            full_html
+        }
     } else {
         full_html
     };
