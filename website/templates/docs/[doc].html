@@ -23,6 +23,5 @@ schema:
 {% block title %}{{ doc.title }} — {{ site.name }} docs{% endblock %}
 
 {% block doc_content %}
-<h1>{{ doc.title }}</h1>
 {{ doc.content | markdown }}
 {% endblock %}

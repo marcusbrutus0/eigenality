@@ -53,14 +53,14 @@
       nav:
         file: "nav.yaml"
     ---
-    {%- raw %} {% extends "_base.html" %}
+    {% extends "_base.html" %}
 
     {% block title %}About — {{ site.name }}{% endblock %}
 
     {% block content %}
     <h1>About</h1>
     <p>This is a page built with eigen.</p>
-    {% endblock %}{% endraw %}
+    {% endblock %}
     ```
 
     The YAML frontmatter between `---` markers loads data into the template context. Here we load `nav.yaml` from the `_data/` directory.
@@ -79,12 +79,11 @@
     Use it in your template:
 
     ```html
-    {%- raw %}
     <nav>
       {% for item in nav %}
       <li><a href="{{ item.url }}">{{ item.label }}</a></li>
       {% endfor %}
-    </nav>{% endraw %}
+    </nav>
     ```
 
     ## Fetch remote data
@@ -135,8 +134,7 @@
     Use `link_to()` to generate HTMX-powered links:
 
     ```html
-    {%- raw %}
-    <a {{ link_to("/about.html") }}>About</a>{% endraw %}
+    <a {{ link_to("/about.html") }}>About</a>
     ```
 
     This emits both a regular `href` (for initial load and SEO) and `hx-get`/`hx-target` attributes (for fragment swaps). Navigation feels instant — only the content block is replaced.
