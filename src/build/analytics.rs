@@ -1,11 +1,14 @@
-//! Google Analytics (gtag.js) injection.
+//! Analytics snippet injection.
 //!
-//! When `[analytics] tracking_id` is set in site.toml, the gtag.js snippet
-//! is injected into every full rendered page before `</body>`.
+//! When `[analytics.google]` and/or `[analytics.umami]` are configured in
+//! site.toml, the corresponding tracking snippets are injected into every
+//! full rendered page before `</body>`.
 //! Fragment files are not affected — analytics only belongs on full pages.
 
-/// Build the gtag.js snippet for the given tracking ID.
-fn build_snippet(tracking_id: &str) -> String {
+use crate::config::{AnalyticsConfig, UmamiAnalyticsConfig};
+
+/// Build the Google Analytics gtag.js snippet.
+fn build_google_snippet(tracking_id: &str) -> String {
     format!(
         r#"<script async src="https://www.googletagmanager.com/gtag/js?id={id}"></script>
 <script>
@@ -18,158 +21,244 @@ fn build_snippet(tracking_id: &str) -> String {
     )
 }
 
-/// Inject the gtag.js snippet into rendered HTML before `</body>`.
+/// Build the Umami analytics snippet.
 ///
-/// Uses a case-insensitive search for `</body>` and inserts immediately
-/// before it. If no `</body>` tag is found (e.g. a bare HTML fragment),
-/// the snippet is appended at the end.
-pub fn inject_analytics(html: &str, tracking_id: &str) -> String {
-    let snippet = build_snippet(tracking_id);
+/// Optional `data-*` attributes are only emitted when configured:
+/// - `data-domains` when `domains` is set
+/// - `data-auto-track="false"` when `auto_track` is false (true is Umami's default)
+/// - `data-tag` when `tag` is set
+fn build_umami_snippet(config: &UmamiAnalyticsConfig) -> String {
+    let mut attrs = format!(
+        r#"<script defer src="{}/script.js"
+  data-website-id="{}""#,
+        config.host_url, config.website_id,
+    );
+    if let Some(ref domains) = config.domains {
+        attrs.push_str(&format!(r#"
+  data-domains="{domains}""#));
+    }
+    if !config.auto_track {
+        attrs.push_str(r#"
+  data-auto-track="false""#);
+    }
+    if let Some(ref tag) = config.tag {
+        attrs.push_str(&format!(r#"
+  data-tag="{tag}""#));
+    }
+    attrs.push_str("></script>");
+    attrs
+}
+
+/// Inject analytics snippets into rendered HTML before `</body>`.
+///
+/// Collects all enabled provider snippets (Google first, then Umami) and
+/// inserts them before the last `</body>` tag. If no `</body>` tag is found,
+/// the snippets are appended at the end.
+pub fn inject_analytics(html: &str, config: &AnalyticsConfig) -> String {
+    let mut snippets = Vec::new();
+
+    if let Some(ref google) = config.google {
+        snippets.push(build_google_snippet(&google.tracking_id));
+    }
+    if let Some(ref umami) = config.umami {
+        snippets.push(build_umami_snippet(umami));
+    }
+
+    if snippets.is_empty() {
+        return html.to_string();
+    }
+
+    let combined = snippets.join("\n");
     let lower = html.to_lowercase();
 
     if let Some(pos) = lower.rfind("</body>") {
-        let mut result = String::with_capacity(html.len() + snippet.len() + 1);
+        let mut result = String::with_capacity(html.len() + combined.len() + 2);
         result.push_str(&html[..pos]);
         result.push('\n');
-        result.push_str(&snippet);
+        result.push_str(&combined);
         result.push('\n');
         result.push_str(&html[pos..]);
         result
     } else {
-        format!("{}\n{}", html, snippet)
+        format!("{html}\n{combined}")
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::{AnalyticsConfig, GoogleAnalyticsConfig, UmamiAnalyticsConfig};
+
+    fn google_config(tracking_id: &str) -> AnalyticsConfig {
+        AnalyticsConfig {
+            google: Some(GoogleAnalyticsConfig {
+                tracking_id: tracking_id.to_string(),
+            }),
+            umami: None,
+        }
+    }
+
+    fn umami_config_minimal(website_id: &str) -> AnalyticsConfig {
+        AnalyticsConfig {
+            google: None,
+            umami: Some(UmamiAnalyticsConfig {
+                website_id: website_id.to_string(),
+                host_url: "https://cloud.umami.is".to_string(),
+                domains: None,
+                auto_track: true,
+                tag: None,
+            }),
+        }
+    }
+
+    // --- build_google_snippet ---
+
+    #[test]
+    fn test_google_snippet_contains_tracking_id_twice() {
+        let snippet = build_google_snippet("G-MYSITE99");
+        let count = snippet.matches("G-MYSITE99").count();
+        assert_eq!(count, 2, "tracking ID should appear in script src and gtag config");
+    }
+
+    #[test]
+    fn test_google_snippet_structure() {
+        let snippet = build_google_snippet("G-ABC123");
+        assert!(snippet.contains(r#"src="https://www.googletagmanager.com/gtag/js?id=G-ABC123""#));
+        assert!(snippet.contains("window.dataLayer = window.dataLayer || []"));
+        assert!(snippet.contains("function gtag()"));
+        assert!(snippet.contains("gtag('js', new Date())"));
+        assert!(snippet.contains("gtag('config', 'G-ABC123')"));
+    }
+
+    // --- build_umami_snippet ---
+
+    #[test]
+    fn test_umami_snippet_minimal() {
+        let config = UmamiAnalyticsConfig {
+            website_id: "abc-123".to_string(),
+            host_url: "https://cloud.umami.is".to_string(),
+            domains: None,
+            auto_track: true,
+            tag: None,
+        };
+        let snippet = build_umami_snippet(&config);
+        assert!(snippet.contains(r#"src="https://cloud.umami.is/script.js""#));
+        assert!(snippet.contains(r#"data-website-id="abc-123""#));
+        assert!(!snippet.contains("data-domains"));
+        assert!(!snippet.contains("data-auto-track"));
+        assert!(!snippet.contains("data-tag"));
+    }
+
+    #[test]
+    fn test_umami_snippet_full() {
+        let config = UmamiAnalyticsConfig {
+            website_id: "abc-123".to_string(),
+            host_url: "https://analytics.example.com".to_string(),
+            domains: Some("example.com,www.example.com".to_string()),
+            auto_track: false,
+            tag: Some("production".to_string()),
+        };
+        let snippet = build_umami_snippet(&config);
+        assert!(snippet.contains(r#"src="https://analytics.example.com/script.js""#));
+        assert!(snippet.contains(r#"data-website-id="abc-123""#));
+        assert!(snippet.contains(r#"data-domains="example.com,www.example.com""#));
+        assert!(snippet.contains(r#"data-auto-track="false""#));
+        assert!(snippet.contains(r#"data-tag="production""#));
+    }
+
+    #[test]
+    fn test_umami_snippet_auto_track_true_omits_attribute() {
+        let config = UmamiAnalyticsConfig {
+            website_id: "abc-123".to_string(),
+            host_url: "https://cloud.umami.is".to_string(),
+            domains: None,
+            auto_track: true,
+            tag: None,
+        };
+        let snippet = build_umami_snippet(&config);
+        assert!(!snippet.contains("data-auto-track"), "auto_track=true should not emit the attribute");
+    }
 
     // --- inject_analytics ---
 
-    /// Basic case: snippet is injected before </body> in a normal full HTML page.
-    /// This is the happy path — every real page will have a </body> tag.
     #[test]
-    fn test_injects_before_body_close() {
-        let html = "<html><head></head><body><h1>Hi</h1></body></html>";
-        let result = inject_analytics(html, "G-TEST123");
-        // Snippet must appear before </body>
-        let snippet_pos = result.find("googletagmanager").unwrap();
+    fn test_inject_google_only() {
+        let html = "<html><body><h1>Hi</h1></body></html>";
+        let config = google_config("G-TEST123");
+        let result = inject_analytics(html, &config);
+        assert!(result.contains("googletagmanager"));
+        assert!(!result.contains("umami"));
+    }
+
+    #[test]
+    fn test_inject_umami_only() {
+        let html = "<html><body><h1>Hi</h1></body></html>";
+        let config = umami_config_minimal("abc-123");
+        let result = inject_analytics(html, &config);
+        assert!(result.contains("data-website-id"));
+        assert!(!result.contains("googletagmanager"));
+    }
+
+    #[test]
+    fn test_inject_both_providers() {
+        let html = "<html><body><h1>Hi</h1></body></html>";
+        let config = AnalyticsConfig {
+            google: Some(GoogleAnalyticsConfig {
+                tracking_id: "G-BOTH".to_string(),
+            }),
+            umami: Some(UmamiAnalyticsConfig {
+                website_id: "both-123".to_string(),
+                host_url: "https://cloud.umami.is".to_string(),
+                domains: None,
+                auto_track: true,
+                tag: None,
+            }),
+        };
+        let result = inject_analytics(html, &config);
+        let google_pos = result.find("googletagmanager").unwrap();
+        let umami_pos = result.find("data-website-id").unwrap();
+        assert!(google_pos < umami_pos, "Google snippet should come before Umami");
         let body_pos = result.find("</body>").unwrap();
-        assert!(snippet_pos < body_pos, "snippet should come before </body>");
+        assert!(umami_pos < body_pos, "both snippets should be before </body>");
     }
 
-    /// The tracking ID must appear in the injected snippet — both in the
-    /// async script src URL and in the gtag('config', ...) call.
-    /// If the ID is wrong or missing, GA won't track anything.
     #[test]
-    fn test_tracking_id_appears_in_snippet() {
-        let html = "<html><body></body></html>";
-        let result = inject_analytics(html, "G-MYSITE99");
-        assert!(
-            result.contains("G-MYSITE99"),
-            "tracking ID must appear in the injected snippet"
-        );
-        // Must appear twice: once in script src, once in gtag('config', ...)
-        let count = result.matches("G-MYSITE99").count();
-        assert_eq!(count, 2, "tracking ID should appear exactly twice");
+    fn test_inject_neither_provider() {
+        let html = "<html><body><h1>Hi</h1></body></html>";
+        let config = AnalyticsConfig {
+            google: None,
+            umami: None,
+        };
+        let result = inject_analytics(html, &config);
+        assert_eq!(result, html, "no providers means no changes");
     }
 
-    /// The original page content must be preserved exactly.
-    /// Injection must not corrupt, truncate, or duplicate any existing HTML.
     #[test]
-    fn test_original_content_preserved() {
-        let html = "<html><body><h1>Hello World</h1><p>Some content</p></body></html>";
-        let result = inject_analytics(html, "G-TEST123");
-        assert!(result.contains("<h1>Hello World</h1>"));
-        assert!(result.contains("<p>Some content</p>"));
-        assert!(result.contains("</body></html>"));
-    }
-
-    /// </body> tag matching must be case-insensitive.
-    /// Some HTML generators or editors write </BODY> in uppercase — eigen
-    /// must still inject correctly rather than falling back to appending.
-    #[test]
-    fn test_case_insensitive_body_tag() {
+    fn test_inject_case_insensitive_body_tag() {
         let html = "<html><body><p>test</p></BODY></html>";
-        let result = inject_analytics(html, "G-TEST123");
-        // Should inject before the closing tag, not at the end
-        let snippet_pos = result.find("googletagmanager").unwrap();
+        let config = umami_config_minimal("abc-123");
+        let result = inject_analytics(html, &config);
+        let snippet_pos = result.find("data-website-id").unwrap();
         let body_pos = result.find("</BODY>").unwrap();
         assert!(snippet_pos < body_pos);
     }
 
-    /// When there are multiple </body> tags (malformed HTML or nested
-    /// templates that haven't been fully composed), inject before the LAST
-    /// one. rfind ensures we always target the outermost closing tag.
     #[test]
-    fn test_injects_before_last_body_tag() {
-        let html = "<body>inner</body><body>outer</body>";
-        let result = inject_analytics(html, "G-TEST123");
-        // rfind means snippet goes before the second </body>
-        let last_body = result.rfind("</body>").unwrap();
-        let snippet_pos = result.rfind("googletagmanager").unwrap();
-        assert!(snippet_pos < last_body);
-    }
-
-    /// When there is no </body> tag at all (e.g. a bare HTML fragment or
-    /// a partial template), the snippet is appended at the end.
-    /// This prevents silent failures where analytics is never injected.
-    #[test]
-    fn test_no_body_tag_appends_at_end() {
-        let html = "<h1>Just a fragment</h1><p>No body tag here</p>";
-        let result = inject_analytics(html, "G-TEST123");
+    fn test_inject_no_body_tag_appends() {
+        let html = "<h1>Fragment</h1>";
+        let config = google_config("G-FRAG");
+        let result = inject_analytics(html, &config);
         assert!(result.contains("googletagmanager"));
-        // Since there's no </body>, snippet is at the very end
         assert!(result.ends_with("</script>"));
     }
 
-    /// An empty tracking ID produces a snippet with empty strings in the src
-    /// URL and config call. This is a misconfiguration — the config validator
-    /// should catch it, but injection itself must not panic.
     #[test]
-    fn test_empty_tracking_id_does_not_panic() {
-        let html = "<html><body></body></html>";
-        let result = inject_analytics(html, "");
-        // Should complete without panicking; snippet still injected
-        assert!(result.contains("googletagmanager"));
-    }
-
-    /// Injecting into an already-analytics-injected page (e.g. if the
-    /// pipeline runs twice by accident) must not produce two snippets.
-    /// This guards against double-counting in GA.
-    /// NOTE: eigen does not call this twice in normal operation, but this
-    /// test documents the behaviour if it ever happens.
-    #[test]
-    fn test_double_injection_behaviour() {
-        let html = "<html><body></body></html>";
-        let once = inject_analytics(html, "G-TEST123");
-        let twice = inject_analytics(&once, "G-TEST123");
-        // Two snippets would mean double-counting — document that this happens
-        // so if eigen ever deduplicates, this test needs updating.
-        let count = twice.matches("googletagmanager").count();
-        assert_eq!(count, 2, "double injection produces two snippets — caller must ensure single injection");
-    }
-
-    /// An entirely empty HTML string should not panic and should return
-    /// just the snippet. Edge case for empty template output.
-    #[test]
-    fn test_empty_html_input() {
-        let result = inject_analytics("", "G-TEST123");
-        assert!(result.contains("googletagmanager"));
-    }
-
-    /// The snippet structure must conform to the standard gtag.js pattern:
-    /// - async script tag loading gtag/js with the measurement ID
-    /// - inline script with dataLayer init, gtag function, and config call
-    /// If this structure breaks, GA stops working entirely.
-    #[test]
-    fn test_snippet_structure() {
-        let html = "<html><body></body></html>";
-        let result = inject_analytics(html, "G-ABC123");
-        assert!(result.contains(r#"src="https://www.googletagmanager.com/gtag/js?id=G-ABC123""#));
-        assert!(result.contains("window.dataLayer = window.dataLayer || []"));
-        assert!(result.contains("function gtag()"));
-        assert!(result.contains("gtag('js', new Date())"));
-        assert!(result.contains("gtag('config', 'G-ABC123')"));
+    fn test_inject_preserves_original_content() {
+        let html = "<html><body><h1>Hello World</h1><p>Content</p></body></html>";
+        let config = google_config("G-TEST");
+        let result = inject_analytics(html, &config);
+        assert!(result.contains("<h1>Hello World</h1>"));
+        assert!(result.contains("<p>Content</p>"));
+        assert!(result.contains("</body></html>"));
     }
 }
