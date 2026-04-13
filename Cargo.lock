@@ -970,7 +970,7 @@ checksum = "b04dc5a38e4f151a79d9f2451ae6037fb6eaf5cba34771f44781f80e508498e3"
 
 [[package]]
 name = "eigen"
-version = "0.13.1"
+version = "0.14.0"
 dependencies = [
  "axum",
  "axum-htmx",

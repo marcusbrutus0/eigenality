@@ -1,5 +1,24 @@
 # Changelog
 
+## v0.14.0
+
+### New Features
+
+- **Project Website**: Eigen now has its own documentation website, built with eigen itself. Includes a landing page, quickstart tutorial, docs browser with sidebar navigation, and a custom 404 page — all styled in warm gruvbox tones with the Recursive font.
+
+- **Environment Variable Escape Convention**: Use `$${...}` to write a literal `${...}` in your templates. This prevents eigen from substituting environment variables in strings you want kept verbatim (e.g., shell snippets in documentation).
+
+- **Focused Template Error Context**: When a template render fails, eigen now walks the expression path to pinpoint where the undefined variable broke, highlights the relevant template line, and falls back to a full context dump when the focused view isn't enough. Much easier to debug complex template errors.
+
+### Improvements
+
+- Flash-free HTMX navigation on the website via `hx-boost`
+- CI now runs tests on every push to master
+
+### Bug Fixes
+
+- Fixed CI toolchain pinning to match `rust-toolchain.toml`
+
 ## v0.13.1
 
 ### New Features
