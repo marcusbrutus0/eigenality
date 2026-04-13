@@ -233,18 +233,8 @@ fn interpolate_value(value: &Value, item: &Value, item_as: &str) -> Result<Value
 /// Unresolved patterns are left as-is (no error).
 /// `$${VAR_NAME}` is an escape sequence that produces a literal `${VAR_NAME}`.
 fn interpolate_env_in_string(s: &str) -> String {
-    // Phase 1: shelter escaped $${...} patterns behind sentinels.
-    static ESCAPED_ENV_RE: LazyLock<Regex> =
-        LazyLock::new(|| Regex::new(r"\$\$\{([A-Za-z_][A-Za-z0-9_]*)\}").unwrap());
+    let (working, sheltered) = crate::config::shelter_escaped_env_vars(s);
 
-    let mut sheltered: Vec<String> = Vec::new();
-    let working = ESCAPED_ENV_RE.replace_all(s, |caps: &regex::Captures| {
-        let var_name = caps[1].to_string();
-        sheltered.push(var_name);
-        format!("\x00EIGEN_ESC_{}\x00", sheltered.len() - 1)
-    }).into_owned();
-
-    // Phase 2: normal env var substitution on the sheltered string.
     let captures: Vec<(String, String)> = ENV_VAR_RE
         .captures_iter(&working)
         .map(|cap| (cap[0].to_string(), cap[1].to_string()))
@@ -257,15 +247,7 @@ fn interpolate_env_in_string(s: &str) -> String {
         }
     }
 
-    // Phase 3: restore sentinels to literal ${VAR_NAME}.
-    for (i, var_name) in sheltered.iter().enumerate() {
-        result = result.replace(
-            &format!("\x00EIGEN_ESC_{}\x00", i),
-            &format!("${{{}}}", var_name),
-        );
-    }
-
-    result
+    crate::config::restore_sheltered(result, &sheltered)
 }
 
 /// Resolve a dot-separated path like `"post.author_id"` against the current item.

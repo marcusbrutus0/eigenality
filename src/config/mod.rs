@@ -858,19 +858,42 @@ static ENV_VAR_RE: LazyLock<Regex> =
 static ESCAPED_ENV_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"\$\$\{([A-Za-z_][A-Za-z0-9_]*)\}").unwrap());
 
-/// Replace all `${VAR_NAME}` occurrences in `input` with the value of the
-/// corresponding environment variable. Returns an error if any referenced
-/// variable is not set.
-pub fn interpolate_env_vars(input: &str) -> Result<String> {
-    // Phase 1: shelter escaped $${...} patterns behind sentinels.
-    let mut sheltered: Vec<String> = Vec::new();
-    let working = ESCAPED_ENV_RE.replace_all(input, |caps: &regex::Captures| {
-        let var_name = caps[1].to_string();
-        sheltered.push(var_name);
-        format!("\x00EIGEN_ESC_{}\x00", sheltered.len() - 1)
-    }).into_owned();
+/// Replace `$${VAR}` with NUL-delimited sentinels so the env-var regex
+/// cannot match them. Returns the sheltered string and the list of
+/// original variable names (needed by [`restore_sheltered`]).
+pub fn shelter_escaped_env_vars(input: &str) -> (String, Vec<String>) {
+    if !input.contains("$${") {
+        return (input.to_string(), Vec::new());
+    }
+    let mut names: Vec<String> = Vec::new();
+    let out = ESCAPED_ENV_RE
+        .replace_all(input, |caps: &regex::Captures| {
+            let var_name = caps[1].to_string();
+            names.push(var_name);
+            format!("\x00EIGEN_ESC_{}\x00", names.len() - 1)
+        })
+        .into_owned();
+    (out, names)
+}
 
-    // Phase 2: normal env var substitution on the sheltered string.
+/// Replace sentinels produced by [`shelter_escaped_env_vars`] with
+/// literal `${VAR_NAME}` text.
+pub fn restore_sheltered(mut s: String, names: &[String]) -> String {
+    for (i, var_name) in names.iter().enumerate() {
+        s = s.replace(
+            &format!("\x00EIGEN_ESC_{}\x00", i),
+            &format!("${{{}}}", var_name),
+        );
+    }
+    s
+}
+
+/// Replace all `${VAR_NAME}` occurrences in `input` with the value of the
+/// corresponding environment variable. `$${VAR_NAME}` is left as a literal
+/// `${VAR_NAME}`. Returns an error if any referenced variable is not set.
+pub fn interpolate_env_vars(input: &str) -> Result<String> {
+    let (working, sheltered) = shelter_escaped_env_vars(input);
+
     let mut errors: Vec<String> = Vec::new();
 
     let captures: Vec<(String, String)> = ENV_VAR_RE
@@ -901,15 +924,7 @@ pub fn interpolate_env_vars(input: &str) -> Result<String> {
         );
     }
 
-    // Phase 3: restore sentinels to literal ${VAR_NAME}.
-    for (i, var_name) in sheltered.iter().enumerate() {
-        result = result.replace(
-            &format!("\x00EIGEN_ESC_{}\x00", i),
-            &format!("${{{}}}", var_name),
-        );
-    }
-
-    Ok(result)
+    Ok(restore_sheltered(result, &sheltered))
 }
 
 /// Validate the parsed configuration for required fields and consistency.
