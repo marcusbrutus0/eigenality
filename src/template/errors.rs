@@ -5,6 +5,7 @@
 //! a source context snippet, and a summary of the template context when available.
 
 use minijinja::Value;
+use regex::Regex;
 
 /// A structured representation of a template rendering error with all
 /// the detail we can extract from minijinja.
@@ -559,6 +560,20 @@ fn walk_context_path(segments: &[&str], ctx: &Value) -> ContextWalkResult {
     ContextWalkResult::FullyResolved { path }
 }
 
+/// Search the template source for a `{% for VAR in COLLECTION %}` where
+/// `VAR` matches the given root variable name. Returns the collection
+/// expression (e.g. `"posts"` or `"site.posts"`).
+fn find_loop_collection(root_var: &str, template_source: &str) -> Option<String> {
+    let pattern = format!(
+        r"\{{\%-?\s*for\s+{}\s+in\s+([\w.]+)",
+        regex::escape(root_var)
+    );
+    let re = Regex::new(&pattern).ok()?;
+    re.captures(template_source)
+        .and_then(|caps| caps.get(1))
+        .map(|m| m.as_str().to_string())
+}
+
 /// Simple HTML escaping for inserting text into HTML.
 fn html_escape(s: &str) -> String {
     s.replace('&', "&amp;")
@@ -886,6 +901,47 @@ mod tests {
             }
             other => panic!("expected FullyResolved, got {:?}", other),
         }
+    }
+
+    // --- Loop variable detection tests ---
+
+    #[test]
+    fn test_find_loop_collection_simple() {
+        let source = "{% for post in posts %}{{ post.title }}{% endfor %}";
+        assert_eq!(
+            find_loop_collection("post", source).as_deref(),
+            Some("posts")
+        );
+    }
+
+    #[test]
+    fn test_find_loop_collection_dotted() {
+        let source = "{% for item in site.posts %}{{ item.title }}{% endfor %}";
+        assert_eq!(
+            find_loop_collection("item", source).as_deref(),
+            Some("site.posts")
+        );
+    }
+
+    #[test]
+    fn test_find_loop_collection_whitespace_control() {
+        let source = "{%- for tag in tags -%}{{ tag }}{% endfor %}";
+        assert_eq!(
+            find_loop_collection("tag", source).as_deref(),
+            Some("tags")
+        );
+    }
+
+    #[test]
+    fn test_find_loop_collection_no_match() {
+        let source = "{% if show %}{{ missing }}{% endif %}";
+        assert_eq!(find_loop_collection("missing", source), None);
+    }
+
+    #[test]
+    fn test_find_loop_collection_different_var() {
+        let source = "{% for post in posts %}{{ post.title }}{% endfor %}";
+        assert_eq!(find_loop_collection("item", source), None);
     }
 
     #[test]
