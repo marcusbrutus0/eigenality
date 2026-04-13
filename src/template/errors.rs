@@ -725,6 +725,46 @@ fn format_value_shape(label: &str, val: &Value, out: &mut String) {
     }
 }
 
+/// Render the full context shape dump, highlighting the branch matching
+/// `highlight_root` with `>` prefix markers.
+///
+/// If `highlight_root` is `None`, produces the same output as `summarize_context`.
+fn format_highlighted_context(ctx: &Value, highlight_root: Option<&str>) -> String {
+    let full = summarize_context(ctx);
+    let highlight_root = match highlight_root {
+        Some(r) => r,
+        None => return full,
+    };
+
+    let mut out = String::new();
+    let mut in_highlighted_branch = false;
+
+    for line in full.lines() {
+        // A top-level key line starts with no indentation (no leading spaces).
+        let is_top_level = !line.starts_with(' ');
+
+        if is_top_level {
+            // Check if this top-level key matches the highlight root.
+            in_highlighted_branch = line.starts_with(highlight_root)
+                && line[highlight_root.len()..].starts_with(" : ");
+        }
+
+        if in_highlighted_branch {
+            out.push_str("> ");
+            out.push_str(line);
+        } else {
+            out.push_str(line);
+        }
+        out.push('\n');
+    }
+
+    // Trim trailing newline for consistency.
+    if out.ends_with('\n') {
+        out.truncate(out.len() - 1);
+    }
+    out
+}
+
 /// Show the item shape of a collection (sequence) value.
 fn format_collection_item_shape(collection: &Value, out: &mut String) {
     use std::fmt::Write;
@@ -1190,5 +1230,42 @@ mod tests {
         assert!(output.contains("`post` comes from: {% for post in posts %}"));
         assert!(output.contains("title : string"));
         assert!(output.contains("slug : string"));
+    }
+
+    // --- Highlighted context dump tests ---
+
+    #[test]
+    fn test_format_highlighted_context_marks_branch() {
+        let ctx = Value::from_iter([
+            ("title", Value::from("Hello")),
+            ("page", Value::from_iter([
+                ("url", Value::from("/about")),
+                ("base", Value::from("https://example.com")),
+            ])),
+            ("nav", Value::from_iter([
+                ("items", Value::from(Vec::<Value>::new())),
+            ])),
+        ]);
+        let output = format_highlighted_context(&ctx, Some("page"));
+        // `page` branch should be highlighted with `>`
+        assert!(output.contains("> page : map"));
+        assert!(output.contains(">   url : string"));
+        assert!(output.contains(">   base : string"));
+        // Other keys should NOT be highlighted.
+        assert!(output.contains("title : string"));
+        assert!(!output.contains("> title"));
+        assert!(output.contains("nav : map"));
+        assert!(!output.contains("> nav"));
+    }
+
+    #[test]
+    fn test_format_highlighted_context_no_highlight() {
+        let ctx = Value::from_iter([
+            ("title", Value::from("Hello")),
+        ]);
+        let output = format_highlighted_context(&ctx, None);
+        // No `>` markers, just a normal dump.
+        assert!(output.contains("title : string"));
+        assert!(!output.contains(">"));
     }
 }
