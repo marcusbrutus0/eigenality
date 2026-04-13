@@ -4,7 +4,10 @@
 //! rendering failures, including the template name, line number, error kind,
 //! a source context snippet, and a summary of the template context when available.
 
+use std::fmt::Write;
+
 use minijinja::Value;
+use minijinja::value::ValueKind;
 use regex::Regex;
 
 /// A structured representation of a template rendering error with all
@@ -392,9 +395,6 @@ fn summarize_context(ctx: &Value) -> String {
 /// element is sampled to show the item shape. Primitive kinds are shown
 /// on a single line. Recursion stops at `SHAPE_MAX_DEPTH`.
 fn describe_shape(name: &str, val: &Value, depth: usize, out: &mut String) {
-    use std::fmt::Write;
-    use minijinja::value::ValueKind;
-
     fn push_indent(out: &mut String, depth: usize) {
         for _ in 0..depth {
             out.push_str("  ");
@@ -628,7 +628,6 @@ fn format_focused_context(
     ctx: &Value,
     loop_info: Option<&LoopInfo>,
 ) -> String {
-    use std::fmt::Write;
     let mut out = String::new();
 
     match walk {
@@ -648,7 +647,8 @@ fn format_focused_context(
             } else {
                 let _ = writeln!(out);
                 let _ = writeln!(out, "Top-level context keys:");
-                append_top_level_keys(ctx, &mut out);
+                out.push_str(&summarize_context(ctx));
+                out.push('\n');
             }
         }
         ContextWalkResult::NestedMiss { path, missing_segment, parent } => {
@@ -692,7 +692,8 @@ fn format_focused_context(
             let _ = writeln!(out, "Path `{path}` resolved successfully (unexpected)");
             let _ = writeln!(out);
             let _ = writeln!(out, "Top-level context keys:");
-            append_top_level_keys(ctx, &mut out);
+            out.push_str(&summarize_context(ctx));
+            out.push('\n');
         }
     }
 
@@ -702,27 +703,8 @@ fn format_focused_context(
     out
 }
 
-/// Append all top-level context key names and types.
-fn append_top_level_keys(ctx: &Value, out: &mut String) {
-    if let Ok(keys) = ctx.try_iter() {
-        for key in keys {
-            let name = key.as_str().unwrap_or("?");
-            match ctx.get_attr(name) {
-                Ok(val) => describe_shape(name, &val, 0, out),
-                Err(_) => {
-                    out.push_str(name);
-                    out.push_str(" : ?\n");
-                }
-            }
-        }
-    }
-}
-
 /// Show the shape of a value with a label like `` `page` is a map with N keys: ``.
 fn format_value_shape(label: &str, val: &Value, out: &mut String) {
-    use std::fmt::Write;
-    use minijinja::value::ValueKind;
-
     match val.kind() {
         ValueKind::Map => {
             let keys: Vec<_> = val.try_iter()
@@ -737,12 +719,17 @@ fn format_value_shape(label: &str, val: &Value, out: &mut String) {
             }
         }
         ValueKind::Seq => {
-            let len = val.try_iter().map(|i| i.count()).unwrap_or(0);
-            let _ = writeln!(out, "`{label}` is a sequence with {len} items");
-            if let Ok(mut iter) = val.try_iter() {
-                if let Some(first) = iter.next() {
-                    describe_shape("[item]", &first, 0, out);
+            let (len, first) = match val.try_iter() {
+                Ok(mut iter) => {
+                    let first = iter.next();
+                    let rest = iter.count();
+                    (if first.is_some() { rest + 1 } else { 0 }, first)
                 }
+                Err(_) => (0, None),
+            };
+            let _ = writeln!(out, "`{label}` is a sequence with {len} items");
+            if let Some(first) = first {
+                describe_shape("[item]", &first, 0, out);
             }
         }
         other => {
@@ -793,9 +780,6 @@ fn format_highlighted_context(ctx: &Value, highlight_root: Option<&str>) -> Stri
 
 /// Show the item shape of a collection (sequence) value.
 fn format_collection_item_shape(collection: &Value, out: &mut String) {
-    use std::fmt::Write;
-    use minijinja::value::ValueKind;
-
     if collection.kind() == ValueKind::Seq {
         if let Ok(mut iter) = collection.try_iter() {
             if let Some(first) = iter.next() {
@@ -851,7 +835,6 @@ fn build_context_summary(
 
     let walk = walk_context_path(&segments, ctx);
 
-    // If top-level miss, try loop variable detection.
     let loop_info = match &walk {
         ContextWalkResult::TopLevelMiss { .. } | ContextWalkResult::NestedMiss { .. } => {
             let root = segments[0];
@@ -875,17 +858,12 @@ fn build_context_summary(
     match &walk {
         ContextWalkResult::TopLevelMiss { .. } if loop_info.is_none() => {
             let root = segments[0];
-            let is_top_level_key = ctx.get_attr(root)
-                .map(|v| !v.is_undefined())
-                .unwrap_or(false);
-            let mut out = if !is_top_level_key {
-                format!(
-                    "Variable `{root}` is not in the top-level context \
-                     — it may come from a loop or macro.\n\n"
-                )
-            } else {
-                String::new()
-            };
+            // TopLevelMiss means root is not in the context. Loop detection
+            // also failed, so note the variable's origin is unknown.
+            let mut out = format!(
+                "Variable `{root}` is not in the top-level context \
+                 — it may come from a loop or macro.\n\n"
+            );
             out.push_str(&format_highlighted_context(ctx, Some(root)));
             Some(out)
         }
