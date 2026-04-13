@@ -1217,6 +1217,14 @@ mod tests {
         assert_eq!(result, "Use ${API_KEY} here");
     }
 
+    #[test]
+    fn test_interpolate_value_env_escape() {
+        let item = json!({});
+        let value = Value::String("Use $${API_KEY} here".into());
+        let result = interpolate_value(&value, &item, "item").unwrap();
+        assert_eq!(result, Value::String("Use ${API_KEY} here".into()));
+    }
+
     // --- verify_no_remaining_interpolation body tests ---
 
     #[test]
