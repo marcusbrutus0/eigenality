@@ -3,6 +3,7 @@ use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::Path;
+use std::sync::LazyLock;
 
 /// Top-level site configuration parsed from `site.toml`.
 #[derive(Debug, Clone, Deserialize)]
@@ -851,17 +852,29 @@ pub fn load_config(project_root: &Path) -> Result<SiteConfig> {
     Ok(config)
 }
 
+static ENV_VAR_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}").unwrap());
+
+static ESCAPED_ENV_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"\$\$\{([A-Za-z_][A-Za-z0-9_]*)\}").unwrap());
+
 /// Replace all `${VAR_NAME}` occurrences in `input` with the value of the
 /// corresponding environment variable. Returns an error if any referenced
 /// variable is not set.
 pub fn interpolate_env_vars(input: &str) -> Result<String> {
-    let re = Regex::new(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}").unwrap();
-    let mut result = input.to_string();
+    // Phase 1: shelter escaped $${...} patterns behind sentinels.
+    let mut sheltered: Vec<String> = Vec::new();
+    let working = ESCAPED_ENV_RE.replace_all(input, |caps: &regex::Captures| {
+        let var_name = caps[1].to_string();
+        sheltered.push(var_name);
+        format!("\x00EIGEN_ESC_{}\x00", sheltered.len() - 1)
+    }).into_owned();
+
+    // Phase 2: normal env var substitution on the sheltered string.
     let mut errors: Vec<String> = Vec::new();
 
-    // Collect all matches first to avoid borrowing issues.
-    let captures: Vec<(String, String)> = re
-        .captures_iter(input)
+    let captures: Vec<(String, String)> = ENV_VAR_RE
+        .captures_iter(&working)
         .map(|cap| {
             let full_match = cap[0].to_string();
             let var_name = cap[1].to_string();
@@ -869,6 +882,7 @@ pub fn interpolate_env_vars(input: &str) -> Result<String> {
         })
         .collect();
 
+    let mut result = working;
     for (full_match, var_name) in &captures {
         match std::env::var(var_name) {
             Ok(value) => {
@@ -884,6 +898,14 @@ pub fn interpolate_env_vars(input: &str) -> Result<String> {
         bail!(
             "Missing environment variable(s): {}",
             errors.join(", ")
+        );
+    }
+
+    // Phase 3: restore sentinels to literal ${VAR_NAME}.
+    for (i, var_name) in sheltered.iter().enumerate() {
+        result = result.replace(
+            &format!("\x00EIGEN_ESC_{}\x00", i),
+            &format!("${{{}}}", var_name),
         );
     }
 
@@ -1270,6 +1292,13 @@ url = "https://cms.example.com/api"
         assert!(result.is_err());
         let err = result.unwrap_err().to_string();
         assert!(err.contains("THIS_VAR_DEFINITELY_DOES_NOT_EXIST"));
+    }
+
+    #[test]
+    fn test_env_escape_produces_literal() {
+        let input = r#"example = "$${SOME_VALUE}""#;
+        let result = interpolate_env_vars(input).unwrap();
+        assert_eq!(result, r#"example = "${SOME_VALUE}""#);
     }
 
     #[test]
