@@ -77,14 +77,14 @@ impl TemplateError {
         // error with template source context (when available).
         let mut detail = format!("Could not render template: {:#}", err);
 
-        let mut err = &err as &dyn std::error::Error;
-        while let Some(next_err) = err.source() {
+        let mut source_err = &err as &dyn std::error::Error;
+        while let Some(next_err) = source_err.source() {
             detail.push_str("\n\n");
             detail.push_str(&format!("caused by: {:#}", next_err));
-            err = next_err;
+            source_err = next_err;
         }
 
-        let context_summary = tpl_ctx.map(summarize_context);
+        let context_summary = tpl_ctx.and_then(|ctx| build_context_summary(err, ctx));
 
         TemplateError {
             template_name,
@@ -486,15 +486,41 @@ fn extract_expression_path_from_str(expr: &str) -> Vec<&str> {
 ///
 /// `source` should come from `err.template_source()`. Combined with
 /// `err.range()`, the failing expression is sliced and parsed into path
-/// segments. Returns `None` if either is unavailable.
+/// segments.
+///
+/// Minijinja's range often points to the *failing sub-expression* (e.g.
+/// `.seo.title` instead of `page.seo.title`). When the range starts with
+/// a `.`, we walk backwards through the source to capture the full dotted
+/// path including the leading identifier segments.
+///
+/// Returns `None` if debug info is unavailable.
 fn extract_expression_path<'a>(
     err: &minijinja::Error,
     source: Option<&'a str>,
 ) -> Option<Vec<&'a str>> {
     let source = source?;
     let range = err.range()?;
-    let expr = source.get(range)?;
-    let segments = extract_expression_path_from_str(expr);
+    let expr = source.get(range.clone())?;
+
+    // If the range starts with a dot, the error points to an attribute
+    // access like `.seo.title`. Walk backwards to find the full path
+    // starting from the root identifier (e.g. `page.seo.title`).
+    let effective_start = if expr.starts_with('.') {
+        let before = &source[..range.start];
+        // Walk backwards over identifier chars and dots to find the start
+        // of the full dotted expression.
+        let prefix_start = before
+            .bytes()
+            .rposition(|b| !(b.is_ascii_alphanumeric() || b == b'_' || b == b'.'))
+            .map(|pos| pos + 1)
+            .unwrap_or(0);
+        prefix_start
+    } else {
+        range.start
+    };
+
+    let full_expr = source.get(effective_start..range.end)?;
+    let segments = extract_expression_path_from_str(full_expr);
     if segments.is_empty() {
         None
     } else {
@@ -794,6 +820,94 @@ fn format_collection_item_shape(collection: &Value, out: &mut String) {
             }
         }
     }
+}
+
+/// Build the context summary string using the focused degradation chain.
+///
+/// 1. If the error is `UndefinedError` and debug info is available, try
+///    focused path extraction.
+/// 2. If the root is a loop variable, trace it back to the collection.
+/// 3. Otherwise, fall back to a highlighted (or plain) full dump.
+/// 4. For non-`UndefinedError`, return `None` (context not relevant).
+fn build_context_summary(
+    err: &minijinja::Error,
+    ctx: &Value,
+) -> Option<String> {
+    use minijinja::ErrorKind;
+
+    // Only UndefinedError benefits from context drilling.
+    if err.kind() != ErrorKind::UndefinedError {
+        return None;
+    }
+
+    // Try to extract the expression path from debug info.
+    let source = err.template_source().map(|s| s.to_string());
+    let segments = extract_expression_path(err, source.as_deref());
+
+    let Some(segments) = segments else {
+        // No debug info — fall back to full dump.
+        return Some(summarize_context(ctx));
+    };
+
+    let walk = walk_context_path(&segments, ctx);
+
+    // If top-level miss, try loop variable detection.
+    let loop_info = match &walk {
+        ContextWalkResult::TopLevelMiss { .. } | ContextWalkResult::NestedMiss { .. } => {
+            let root = segments[0];
+            let is_top_level_key = ctx.get_attr(root)
+                .map(|v| !v.is_undefined())
+                .unwrap_or(false);
+
+            if !is_top_level_key {
+                source.as_deref().and_then(|src| {
+                    let collection_expr = find_loop_collection(root, src)?;
+                    let item_shape = resolve_dotted_path(&collection_expr, ctx);
+                    Some(LoopInfo { collection_expr, item_shape })
+                })
+            } else {
+                None
+            }
+        }
+        _ => None,
+    };
+
+    match &walk {
+        ContextWalkResult::TopLevelMiss { .. } if loop_info.is_none() => {
+            let root = segments[0];
+            let is_top_level_key = ctx.get_attr(root)
+                .map(|v| !v.is_undefined())
+                .unwrap_or(false);
+            let mut out = if !is_top_level_key {
+                format!(
+                    "Variable `{root}` is not in the top-level context \
+                     — it may come from a loop or macro.\n\n"
+                )
+            } else {
+                String::new()
+            };
+            out.push_str(&format_highlighted_context(ctx, Some(root)));
+            Some(out)
+        }
+        ContextWalkResult::FullyResolved { .. } => {
+            Some(summarize_context(ctx))
+        }
+        _ => {
+            Some(format_focused_context(&walk, ctx, loop_info.as_ref()))
+        }
+    }
+}
+
+/// Resolve a dotted path like `"site.posts"` against the context.
+fn resolve_dotted_path(path: &str, ctx: &Value) -> Option<Value> {
+    let mut current = ctx.clone();
+    for segment in path.split('.') {
+        current = match current.get_attr(segment) {
+            Ok(val) if !val.is_undefined() => val,
+            _ => return None,
+        };
+    }
+    Some(current)
 }
 
 #[cfg(test)]
@@ -1267,5 +1381,69 @@ mod tests {
         // No `>` markers, just a normal dump.
         assert!(output.contains("title : string"));
         assert!(!output.contains(">"));
+    }
+
+    // --- Integration tests: from_minijinja with focused context ---
+
+    #[test]
+    fn test_from_minijinja_produces_focused_context_on_undefined() {
+        let mut env = minijinja::Environment::new();
+        env.set_undefined_behavior(minijinja::UndefinedBehavior::Strict);
+        env.add_template("test.html", "{{ page.seo.title }}").ok();
+        let tmpl = env.get_template("test.html").unwrap();
+
+        let ctx = minijinja::context! {
+            page => minijinja::context! {
+                url => "/about",
+                base => "https://example.com",
+            },
+            title => "Hello",
+        };
+        let err = tmpl.render(&ctx).unwrap_err();
+
+        let te = TemplateError::from_minijinja(&err, "test.html", 0, Some(&ctx));
+
+        let summary = te.context_summary.as_deref().expect("should have context summary");
+        assert!(summary.contains("Tried to access:"), "summary was: {summary}");
+        assert!(summary.contains("not found"), "summary was: {summary}");
+        assert!(summary.contains("url : string"), "summary was: {summary}");
+    }
+
+    #[test]
+    fn test_from_minijinja_non_undefined_skips_context() {
+        let mut env = minijinja::Environment::new();
+        env.add_template("filter.html", "{{ x | nonexistent }}").ok();
+        let tmpl = env.get_template("filter.html").unwrap();
+        let ctx = minijinja::context! { x => "hello" };
+        let err = tmpl.render(&ctx).unwrap_err();
+
+        let te = TemplateError::from_minijinja(&err, "filter.html", 0, Some(&ctx));
+
+        assert!(te.context_summary.is_none(),
+            "expected None for non-UndefinedError, got: {:?}", te.context_summary);
+    }
+
+    #[test]
+    fn test_from_minijinja_loop_variable_shows_item_shape() {
+        let mut env = minijinja::Environment::new();
+        env.set_undefined_behavior(minijinja::UndefinedBehavior::Strict);
+        env.add_template(
+            "loop.html",
+            "{% for post in posts %}{{ post.titl }}{% endfor %}"
+        ).ok();
+        let tmpl = env.get_template("loop.html").unwrap();
+
+        let posts = vec![
+            minijinja::context! { title => "Post 1", slug => "p1" },
+        ];
+        let ctx = minijinja::context! { posts => posts };
+        let err = tmpl.render(&ctx).unwrap_err();
+
+        let te = TemplateError::from_minijinja(&err, "loop.html", 0, Some(&ctx));
+
+        let summary = te.context_summary.as_deref().expect("should have context summary");
+        assert!(summary.contains("post"), "summary was: {summary}");
+        assert!(summary.contains("title : string"), "summary was: {summary}");
+        assert!(summary.contains("slug : string"), "summary was: {summary}");
     }
 }

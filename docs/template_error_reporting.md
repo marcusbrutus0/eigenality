@@ -23,22 +23,81 @@ When the line number is adjusted, both numbers are shown:
 The frontmatter line count is computed once during page discovery using
 `frontmatter::count_frontmatter_lines()` and stored on `PageDef`.
 
-## Context Dump
+## Focused Context Summary (Degradation Chain)
 
-When a render error occurs, the error output includes a summary of the
-top-level template context variables and their types. This helps diagnose
-missing-variable errors by showing what *is* available:
+When a render error occurs and the error is an `UndefinedError`, the error
+output includes a *focused* context summary instead of a full dump. The
+summary uses a degradation chain to show the most relevant information:
+
+1. **Extract expression path:** From minijinja's debug info (`template_source()`
+   and `range()`), extract the dotted path that failed (e.g. `page.seo.title`).
+   When the range points to a sub-expression (`.seo.title`), walk backwards
+   through the source to find the full path.
+
+2. **Walk the context:** Traverse the path through the context to find where
+   it breaks. This produces a `ContextWalkResult`: top-level miss, nested miss,
+   or fully resolved.
+
+3. **Loop variable detection:** If the root variable is not in the top-level
+   context, search the template source for `{% for VAR in COLLECTION %}` and
+   resolve the collection to show item shape.
+
+4. **Format focused output:** Show what was accessed, what was missing, and
+   what the parent actually contains:
+
+```
+  Available context:
+    Tried to access: page.seo.title
+                          ^^^ not found
+
+    `page` is a map with 2 keys:
+    url : string
+    base : string
+```
+
+For loop variables:
+
+```
+  Available context:
+    Tried to access: post.titl
+    `post` comes from: {% for post in posts %}
+
+    Each item is a map with 2 keys:
+    title : string
+    slug : string
+```
+
+5. **Fallback:** If debug info is unavailable, fall back to a full context
+   shape dump with the relevant branch highlighted.
+
+6. **Non-UndefinedError:** Context summary is omitted entirely (returns `None`)
+   since context is not relevant for syntax errors, unknown filters, etc.
+
+### Full Context Shape Dump (fallback)
+
+When focused extraction is not possible, a recursive shape dump of the full
+context is shown — every key, its type, and nested structure, but never values:
 
 ```
   Available context:
     title : string
     posts : sequence (12 items)
+      [item] : map (4 keys)
+        title : string
+        slug : string
+        date : string
+        tags : sequence (3 items)
+          [item] : string
     page : map (4 keys)
-    nav : map (3 keys)
+      current_url : string
+      current_path : string
+      base_url : string
+      build_time : string
 ```
 
-For sequences and maps, the element count is included. Values are not dumped
-(collections can be large) — only the key names and their `ValueKind`.
+Maps list all their keys recursively. Sequences sample the first element to
+infer the item shape. Nesting stops at 4 levels deep. Values are never shown
+(collections can be large) — only the structure.
 
 ## Where It Appears
 
@@ -53,5 +112,9 @@ For sequences and maps, the element count is included. Values are not dumped
   via `frontmatter::count_frontmatter_lines()`.
 - `TemplateError.raw_line` — the unadjusted line from minijinja.
 - `TemplateError.line` — the file-adjusted line number.
-- `TemplateError.context_summary` — built by `summarize_context()` from the
-  minijinja `Value` passed at the call site.
+- `TemplateError.context_summary` — built by `build_context_summary()` which
+  orchestrates the focused degradation chain. For `UndefinedError`, it uses
+  `extract_expression_path()`, `walk_context_path()`, `find_loop_collection()`,
+  and `format_focused_context()`. Falls back to `summarize_context()` (full
+  shape dump) when debug info is unavailable. Returns `None` for non-undefined
+  errors. Depth is capped at `SHAPE_MAX_DEPTH` (4).
