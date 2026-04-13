@@ -501,6 +501,64 @@ fn extract_expression_path<'a>(
     }
 }
 
+/// Result of walking a dotted path through the template context.
+#[derive(Debug)]
+enum ContextWalkResult {
+    /// The root segment was not found in the top-level context.
+    TopLevelMiss {
+        path: String,
+    },
+    /// A nested segment was not found. `parent` is the last value that
+    /// resolved successfully.
+    NestedMiss {
+        path: String,
+        missing_segment: String,
+        parent: Value,
+    },
+    /// Every segment resolved (shouldn't happen for an UndefinedError, but
+    /// handled gracefully).
+    FullyResolved {
+        path: String,
+    },
+}
+
+/// Walk a dotted path through the template context and find where it breaks.
+///
+/// `segments` is something like `["page", "seo", "title"]`. We look up each
+/// segment in turn, tracking the last successfully resolved value.
+fn walk_context_path(segments: &[&str], ctx: &Value) -> ContextWalkResult {
+    let path = segments.join(".");
+
+    if segments.is_empty() {
+        return ContextWalkResult::FullyResolved { path };
+    }
+
+    // Try the root segment in the top-level context.
+    let root = segments[0];
+    let mut current = match ctx.get_attr(root) {
+        Ok(val) if !val.is_undefined() => val,
+        _ => return ContextWalkResult::TopLevelMiss { path },
+    };
+
+    // Walk remaining segments.
+    for &segment in &segments[1..] {
+        match current.get_attr(segment) {
+            Ok(val) if !val.is_undefined() => {
+                current = val;
+            }
+            _ => {
+                return ContextWalkResult::NestedMiss {
+                    path,
+                    missing_segment: segment.to_string(),
+                    parent: current,
+                };
+            }
+        }
+    }
+
+    ContextWalkResult::FullyResolved { path }
+}
+
 /// Simple HTML escaping for inserting text into HTML.
 fn html_escape(s: &str) -> String {
     s.replace('&', "&amp;")
@@ -762,6 +820,72 @@ mod tests {
     #[test]
     fn test_extract_expression_path_non_identifier_start() {
         assert!(extract_expression_path_from_str("42 + foo").is_empty());
+    }
+
+    // --- Context path walking tests ---
+
+    #[test]
+    fn test_walk_context_top_level_miss() {
+        let ctx = Value::from_iter([
+            ("title", Value::from("Hello")),
+            ("page", Value::from_iter([
+                ("url", Value::from("/about")),
+            ])),
+        ]);
+        let result = walk_context_path(&["missing"], &ctx);
+        match result {
+            ContextWalkResult::TopLevelMiss { path } => {
+                assert_eq!(path, "missing");
+            }
+            other => panic!("expected TopLevelMiss, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_walk_context_nested_miss() {
+        let ctx = Value::from_iter([
+            ("page", Value::from_iter([
+                ("url", Value::from("/about")),
+                ("base", Value::from("https://example.com")),
+            ])),
+        ]);
+        let result = walk_context_path(&["page", "seo", "title"], &ctx);
+        match result {
+            ContextWalkResult::NestedMiss { path, missing_segment, parent } => {
+                assert_eq!(path, "page.seo.title");
+                assert_eq!(missing_segment, "seo");
+                assert!(parent.kind() == minijinja::value::ValueKind::Map);
+            }
+            other => panic!("expected NestedMiss, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_walk_context_fully_resolved() {
+        let ctx = Value::from_iter([
+            ("page", Value::from_iter([
+                ("title", Value::from("Hello")),
+            ])),
+        ]);
+        let result = walk_context_path(&["page", "title"], &ctx);
+        match result {
+            ContextWalkResult::FullyResolved { path } => {
+                assert_eq!(path, "page.title");
+            }
+            other => panic!("expected FullyResolved, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_walk_context_single_segment_hit() {
+        let ctx = Value::from_iter([("title", Value::from("Hello"))]);
+        let result = walk_context_path(&["title"], &ctx);
+        match result {
+            ContextWalkResult::FullyResolved { path } => {
+                assert_eq!(path, "title");
+            }
+            other => panic!("expected FullyResolved, got {:?}", other),
+        }
     }
 
     #[test]
