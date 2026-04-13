@@ -583,6 +583,179 @@ fn html_escape(s: &str) -> String {
         .replace('\'', "&#x27;")
 }
 
+/// Information about a loop variable traced back to its collection.
+struct LoopInfo {
+    /// The collection expression from the template (e.g. `"posts"` or `"site.posts"`).
+    collection_expr: String,
+    /// The collection value from the context (used to show item shape).
+    item_shape: Option<Value>,
+}
+
+/// Format a focused context message for a `ContextWalkResult`.
+///
+/// For `TopLevelMiss`: shows the access path and lists top-level context keys.
+/// For `NestedMiss`: shows the access path, which segment was missing, and the
+/// parent's shape. If `loop_info` is provided (for loop variables), shows the
+/// loop source and item shape instead of top-level keys.
+fn format_focused_context(
+    walk: &ContextWalkResult,
+    ctx: &Value,
+    loop_info: Option<&LoopInfo>,
+) -> String {
+    use std::fmt::Write;
+    let mut out = String::new();
+
+    match walk {
+        ContextWalkResult::TopLevelMiss { path } => {
+            let _ = writeln!(out, "Tried to access: {path}");
+
+            if let Some(info) = loop_info {
+                let root = path.split('.').next().unwrap_or(path);
+                let _ = writeln!(
+                    out,
+                    "`{root}` comes from: {{% for {root} in {} %}}",
+                    info.collection_expr
+                );
+                if let Some(ref collection) = info.item_shape {
+                    format_collection_item_shape(collection, &mut out);
+                }
+            } else {
+                let _ = writeln!(out);
+                let _ = writeln!(out, "Top-level context keys:");
+                append_top_level_keys(ctx, &mut out);
+            }
+        }
+        ContextWalkResult::NestedMiss { path, missing_segment, parent } => {
+            let _ = writeln!(out, "Tried to access: {path}");
+
+            if let Some(pos) = path.find(missing_segment.as_str()) {
+                let prefix_len = "Tried to access: ".len() + pos;
+                let _ = writeln!(
+                    out,
+                    "{:>width$} not found",
+                    "^".repeat(missing_segment.len()),
+                    width = prefix_len + missing_segment.len()
+                );
+            }
+
+            if let Some(info) = loop_info {
+                let root = path.split('.').next().unwrap_or(path);
+                let _ = writeln!(out);
+                let _ = writeln!(
+                    out,
+                    "`{root}` comes from: {{% for {root} in {} %}}",
+                    info.collection_expr
+                );
+                if let Some(ref collection) = info.item_shape {
+                    format_collection_item_shape(collection, &mut out);
+                }
+            } else {
+                // Build the parent label from the path segments that resolved
+                // before the missing segment, not from rfind which would pick
+                // the last dot and land on the wrong segment.
+                let parent_path: String = path
+                    .split('.')
+                    .take_while(|s| *s != missing_segment.as_str())
+                    .collect::<Vec<_>>()
+                    .join(".");
+                let _ = writeln!(out);
+                format_value_shape(&parent_path, parent, &mut out);
+            }
+        }
+        ContextWalkResult::FullyResolved { path } => {
+            let _ = writeln!(out, "Path `{path}` resolved successfully (unexpected)");
+            let _ = writeln!(out);
+            let _ = writeln!(out, "Top-level context keys:");
+            append_top_level_keys(ctx, &mut out);
+        }
+    }
+
+    if out.ends_with('\n') {
+        out.truncate(out.len() - 1);
+    }
+    out
+}
+
+/// Append all top-level context key names and types.
+fn append_top_level_keys(ctx: &Value, out: &mut String) {
+    if let Ok(keys) = ctx.try_iter() {
+        for key in keys {
+            let name = key.as_str().unwrap_or("?");
+            match ctx.get_attr(name) {
+                Ok(val) => describe_shape(name, &val, 0, out),
+                Err(_) => {
+                    out.push_str(name);
+                    out.push_str(" : ?\n");
+                }
+            }
+        }
+    }
+}
+
+/// Show the shape of a value with a label like `` `page` is a map with N keys: ``.
+fn format_value_shape(label: &str, val: &Value, out: &mut String) {
+    use std::fmt::Write;
+    use minijinja::value::ValueKind;
+
+    match val.kind() {
+        ValueKind::Map => {
+            let keys: Vec<_> = val.try_iter()
+                .map(|i| i.collect())
+                .unwrap_or_default();
+            let _ = writeln!(out, "`{label}` is a map with {} keys:", keys.len());
+            for k in &keys {
+                let k_str = k.as_str().unwrap_or("?");
+                if let Ok(child) = val.get_attr(k_str) {
+                    describe_shape(k_str, &child, 0, out);
+                }
+            }
+        }
+        ValueKind::Seq => {
+            let len = val.try_iter().map(|i| i.count()).unwrap_or(0);
+            let _ = writeln!(out, "`{label}` is a sequence with {len} items");
+            if let Ok(mut iter) = val.try_iter() {
+                if let Some(first) = iter.next() {
+                    describe_shape("[item]", &first, 0, out);
+                }
+            }
+        }
+        other => {
+            let _ = writeln!(out, "`{label}` is a {other}");
+        }
+    }
+}
+
+/// Show the item shape of a collection (sequence) value.
+fn format_collection_item_shape(collection: &Value, out: &mut String) {
+    use std::fmt::Write;
+    use minijinja::value::ValueKind;
+
+    if collection.kind() == ValueKind::Seq {
+        if let Ok(mut iter) = collection.try_iter() {
+            if let Some(first) = iter.next() {
+                let _ = writeln!(out);
+                match first.kind() {
+                    ValueKind::Map => {
+                        let keys: Vec<_> = first.try_iter()
+                            .map(|i| i.collect())
+                            .unwrap_or_default();
+                        let _ = writeln!(out, "Each item is a map with {} keys:", keys.len());
+                        for k in &keys {
+                            let k_str = k.as_str().unwrap_or("?");
+                            if let Ok(child) = first.get_attr(k_str) {
+                                describe_shape(k_str, &child, 0, out);
+                            }
+                        }
+                    }
+                    other => {
+                        let _ = writeln!(out, "Each item is a {other}");
+                    }
+                }
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -959,5 +1132,63 @@ mod tests {
         let html = te.to_error_html("index.html", None);
         assert!(html.contains("Available Context"));
         assert!(html.contains("title : string"));
+    }
+
+    // --- Focused context formatting tests ---
+
+    #[test]
+    fn test_format_focused_top_level_miss() {
+        let ctx = Value::from_iter([
+            ("title", Value::from("Hello")),
+            ("page", Value::from_iter([
+                ("url", Value::from("/about")),
+            ])),
+        ]);
+        let result = walk_context_path(&["missing"], &ctx);
+        let output = format_focused_context(&result, &ctx, None);
+        assert!(output.contains("Tried to access: missing"));
+        // Should list top-level keys
+        assert!(output.contains("title : string"));
+        assert!(output.contains("page : map"));
+    }
+
+    #[test]
+    fn test_format_focused_nested_miss() {
+        let ctx = Value::from_iter([
+            ("page", Value::from_iter([
+                ("url", Value::from("/about")),
+                ("base", Value::from("https://example.com")),
+            ])),
+        ]);
+        let result = walk_context_path(&["page", "seo", "title"], &ctx);
+        let output = format_focused_context(&result, &ctx, None);
+        assert!(output.contains("Tried to access: page.seo.title"));
+        assert!(output.contains("seo"));
+        assert!(output.contains("not found"));
+        // Should show page's actual keys
+        assert!(output.contains("`page` is a map with 2 keys"));
+        assert!(output.contains("url : string"));
+        assert!(output.contains("base : string"));
+    }
+
+    #[test]
+    fn test_format_focused_loop_variable() {
+        let posts = Value::from(vec![
+            Value::from_iter([
+                ("title", Value::from("Post 1")),
+                ("slug", Value::from("post-1")),
+            ]),
+        ]);
+        let ctx = Value::from_iter([("posts", posts)]);
+        let result = walk_context_path(&["post", "titl"], &ctx);
+        let loop_info = Some(LoopInfo {
+            collection_expr: "posts".to_string(),
+            item_shape: ctx.get_attr("posts").ok(),
+        });
+        let output = format_focused_context(&result, &ctx, loop_info.as_ref());
+        assert!(output.contains("Tried to access: post.titl"));
+        assert!(output.contains("`post` comes from: {% for post in posts %}"));
+        assert!(output.contains("title : string"));
+        assert!(output.contains("slug : string"));
     }
 }
