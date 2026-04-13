@@ -169,7 +169,7 @@ pub fn write_fragments(
         let mut html = fragment.html.clone();
 
         // Append OOB blocks to the content fragment.
-        if fragment.block_name == content_block && !oob_html.is_empty() {
+        if !oob_html.is_empty() {
             html.push_str(&oob_html);
         }
 
@@ -381,6 +381,44 @@ mod tests {
 
         // OOB block should NOT be written as a separate fragment file.
         assert!(!dist.join("_fragments/about/nav_header.html").exists());
+    }
+
+    #[test]
+    fn test_write_fragments_oob_appends_when_content_block_absent() {
+        let tmp = TempDir::new().unwrap();
+        let dist = tmp.path().join("dist");
+        fs::create_dir_all(dist.join("_fragments")).unwrap();
+
+        // Only doc_content and sidebar — no "content" block extracted.
+        let frags = vec![
+            Fragment {
+                block_name: "doc_content".into(),
+                html: "<h1>Hi</h1>".into(),
+            },
+            Fragment {
+                block_name: "sidebar".into(),
+                html: r#"<aside id="sidebar">Side</aside>"#.into(),
+            },
+        ];
+
+        write_fragments(
+            &dist,
+            Path::new("docs/quickstart.html"),
+            &frags,
+            "content", // content_block not in frags
+            "_fragments",
+            &["sidebar".to_string()],
+        )
+        .unwrap();
+
+        let doc = fs::read_to_string(dist.join("_fragments/docs/quickstart/doc_content.html")).unwrap();
+        assert_eq!(
+            doc,
+            r#"<h1>Hi</h1><aside id="sidebar" hx-swap-oob="outerHTML">Side</aside>"#,
+        );
+
+        // OOB block should NOT be written as a separate fragment file.
+        assert!(!dist.join("_fragments/docs/quickstart/sidebar.html").exists());
     }
 
     #[test]

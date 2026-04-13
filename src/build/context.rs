@@ -75,8 +75,8 @@ pub fn build_page_context(
         if global_data.contains_key(k) {
             tracing::debug!(
                 "Frontmatter data key '{}' overrides global data from _data/. \
-                 The global data for '{}' will not be available in this template.",
-                k, k,
+                 The global data for '{}' will not be available in this template: {}.",
+                k, k, page_meta.current_path
             );
         }
         ctx.insert(k.clone(), Value::from_serialize(v));

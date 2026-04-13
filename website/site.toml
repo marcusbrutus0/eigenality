@@ -17,6 +17,7 @@ content_block = "content"
 minify = true
 clean_urls = false
 clean_links = true
+oob_blocks = ["sidebar"]
 not_found = true
 
 [build.critical_css]

@@ -2,7 +2,10 @@
 
 {% block content %}
 <div class="docs-layout">
+  {% block sidebar %}
   {% include "_partials/sidebar.html" %}
+  {% endblock %}
+  <div class="sidebar-overlay" id="sidebar-overlay" onclick="closeSidebar()"></div>
   <article class="doc-content" id="doc-content">
     {% block doc_content %}{% endblock %}
   </article>

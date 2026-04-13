@@ -327,6 +327,13 @@ async fn finalize_page_html_dev(
 ) -> Result<()> {
     use crate::build::fragments;
 
+    // Extract block names before stripping markers (needed for view transitions).
+    let block_names = if ctx.config.build.view_transitions.enabled {
+        fragments::extract_block_names(input.rendered)
+    } else {
+        Vec::new()
+    };
+
     let full_html = fragments::strip_fragment_markers(input.rendered);
     let no_skip = HashSet::new();
     let full_html = assets::localize_assets(
@@ -340,6 +347,11 @@ async fn finalize_page_html_dev(
     ).await
     .wrap_err_with(|| format!("Failed to localize assets for '{}'", input.url_path))?;
     let full_html = ctx.plugin_registry.post_render_html(full_html, input.url_path, ctx.dist_dir)?;
+    let full_html = if ctx.config.build.view_transitions.enabled {
+        crate::build::view_transitions::inject_view_transitions(&full_html, &block_names)
+    } else {
+        full_html
+    };
     let full_html = inject::inject_reload_script(&full_html);
     let full_html = inject::inject_status_banner(&full_html, input.draft_label);
 
