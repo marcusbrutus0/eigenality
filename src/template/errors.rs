@@ -1443,6 +1443,7 @@ mod tests {
 
         let summary = te.context_summary.as_deref().expect("should have context summary");
         assert!(summary.contains("post"), "summary was: {summary}");
+        assert!(summary.contains("comes from"), "summary was: {summary}");
         assert!(summary.contains("title : string"), "summary was: {summary}");
         assert!(summary.contains("slug : string"), "summary was: {summary}");
     }
