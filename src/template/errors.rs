@@ -466,9 +466,6 @@ fn extract_expression_path_from_str(expr: &str) -> Vec<&str> {
         let ident_end = rest
             .find(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
             .unwrap_or(rest.len());
-        if ident_end == 0 {
-            break;
-        }
         segments.push(&rest[..ident_end]);
         rest = &rest[ident_end..];
 
@@ -486,14 +483,14 @@ fn extract_expression_path_from_str(expr: &str) -> Vec<&str> {
 
 /// Extract the dotted expression path from a minijinja error's debug info.
 ///
-/// Uses `err.template_source()` + `err.range()` to get the exact expression
-/// that failed, then parses it into path segments. Returns `None` if debug
-/// info is unavailable.
+/// `source` should come from `err.template_source()`. Combined with
+/// `err.range()`, the failing expression is sliced and parsed into path
+/// segments. Returns `None` if either is unavailable.
 fn extract_expression_path<'a>(
-    err: &'a minijinja::Error,
-    source_holder: &'a Option<String>,
+    err: &minijinja::Error,
+    source: Option<&'a str>,
 ) -> Option<Vec<&'a str>> {
-    let source = source_holder.as_deref()?;
+    let source = source?;
     let range = err.range()?;
     let expr = source.get(range)?;
     let segments = extract_expression_path_from_str(expr);
