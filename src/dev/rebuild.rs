@@ -424,7 +424,10 @@ async fn render_static_page_dev(
     let rendered = match tmpl.render(&tpl_ctx) {
         Ok(html) => html,
         Err(err) => {
-            let te = TemplateError::from_minijinja(&err, &tmpl_name, None);
+            let te = TemplateError::from_minijinja(
+                &err, &tmpl_name,
+                page.frontmatter_line_count, Some(&tpl_ctx),
+            );
             let console_msg = te.format_console(&tmpl_name, None);
             let error_html = te.to_error_html(&tmpl_name, None);
             write_dev_error_pages(ctx.dist_dir, &output_path, &error_html);
@@ -548,7 +551,10 @@ async fn render_dynamic_page_dev(
         let rendered = match tmpl.render(&tpl_ctx) {
             Ok(html) => html,
             Err(err) => {
-                let te = TemplateError::from_minijinja(&err, &tmpl_name, Some(&slug));
+                let te = TemplateError::from_minijinja(
+                    &err, &tmpl_name,
+                    page.frontmatter_line_count, Some(&tpl_ctx),
+                );
                 let console_msg = te.format_console(&tmpl_name, Some(&slug));
                 let error_html = te.to_error_html(&tmpl_name, Some(&slug));
 

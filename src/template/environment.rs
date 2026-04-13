@@ -244,6 +244,7 @@ mod tests {
             output_dir: PathBuf::from(""),
             frontmatter: Frontmatter::default(),
             raw_frontmatter: String::new(),
+            frontmatter_line_count: 0,
             template_body: r#"{% extends "_base.html" %}{% block content %}<h1>Hi</h1>{% endblock %}"#.into(),
         }];
 
@@ -273,6 +274,7 @@ mod tests {
             output_dir: PathBuf::from(""),
             frontmatter: Frontmatter::default(),
             raw_frontmatter: String::new(),
+            frontmatter_line_count: 0,
             template_body: "<h1>{{ undefined_var }}</h1>".into(),
         }];
 
@@ -319,6 +321,7 @@ mod tests {
             output_dir: PathBuf::from(""),
             frontmatter: Frontmatter::default(),
             raw_frontmatter: String::new(),
+            frontmatter_line_count: 0,
             template_body: "{{ plugin_hello() }}".into(),
         }];
 
@@ -342,6 +345,7 @@ mod tests {
             output_dir: PathBuf::from(""),
             frontmatter: Frontmatter::default(),
             raw_frontmatter: String::new(),
+            frontmatter_line_count: 0,
             template_body: "<h1>No plugins</h1>".into(),
         }];
 

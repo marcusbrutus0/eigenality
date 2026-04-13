@@ -34,6 +34,10 @@ pub struct PageDef {
     pub raw_frontmatter: String,
     /// Template body with frontmatter stripped.
     pub template_body: String,
+    /// Number of lines consumed by the frontmatter block (including `---`
+    /// delimiters and trailing newline). Used to adjust minijinja line numbers
+    /// back to the original file line numbers in error messages.
+    pub frontmatter_line_count: usize,
 }
 
 /// Walk the `templates/` directory and discover all renderable pages.
@@ -114,6 +118,14 @@ pub fn discover_pages(project_root: &Path, config: &SiteConfig) -> Result<Vec<Pa
         let raw_frontmatter = raw_yaml_opt.unwrap_or("").to_string();
         let fm = frontmatter::parse_frontmatter(raw_yaml_opt.unwrap_or(""), &display_path)?;
 
+        // Count how many lines the frontmatter occupies so error messages can
+        // map minijinja line numbers back to the original file.
+        let frontmatter_line_count = if raw_yaml_opt.is_some() {
+            frontmatter::count_frontmatter_lines(&content, body)
+        } else {
+            0
+        };
+
         // Validate: dynamic pages MUST have a collection.
         if let PageType::Dynamic { ref param_name } = page_type {
             if fm.collection.is_none() {
@@ -142,6 +154,7 @@ pub fn discover_pages(project_root: &Path, config: &SiteConfig) -> Result<Vec<Pa
             frontmatter: fm,
             raw_frontmatter,
             template_body: body.to_string(),
+            frontmatter_line_count,
         });
     }
 

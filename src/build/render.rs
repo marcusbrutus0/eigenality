@@ -811,7 +811,10 @@ async fn render_static_page(
     let rendered = match tmpl.render(&tpl_ctx) {
         Ok(html) => html,
         Err(err) => {
-            let te = TemplateError::from_minijinja(&err, &tmpl_name, None);
+            let te = TemplateError::from_minijinja(
+                &err, &tmpl_name,
+                page.frontmatter_line_count, Some(&tpl_ctx),
+            );
             eprintln!("{}", te.format_console(&tmpl_name, None));
             return Err(eyre::eyre!(
                 "Failed to render template '{}': {}",
@@ -1106,7 +1109,10 @@ async fn render_dynamic_page(
             let rendered = match tmpl.render(&tpl_ctx) {
                 Ok(html) => html,
                 Err(err) => {
-                    let te = TemplateError::from_minijinja(&err, tmpl_name_ref, Some(&p1.slug));
+                    let te = TemplateError::from_minijinja(
+                        &err, tmpl_name_ref,
+                        page_ref.frontmatter_line_count, Some(&tpl_ctx),
+                    );
                     eprintln!("{}", te.format_console(tmpl_name_ref, Some(&p1.slug)));
                     return Err(eyre::eyre!(
                         "Failed to render template '{}' for item with slug '{}': {}",

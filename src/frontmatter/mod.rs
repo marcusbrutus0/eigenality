@@ -306,6 +306,19 @@ pub fn parse_frontmatter(raw_yaml: &str, file_path: &str) -> Result<Frontmatter>
     })
 }
 
+/// Count how many lines the frontmatter block occupies in `content`.
+///
+/// Returns 0 when there is no frontmatter. The count includes the `---`
+/// delimiter lines and any trailing newline before the template body, so
+/// adding it to a minijinja line number gives the line in the original file.
+///
+/// `body` must be the body slice returned by [`split_frontmatter`] for the
+/// same `content` (both slices point into the same allocation).
+pub fn count_frontmatter_lines(content: &str, body: &str) -> usize {
+    let byte_offset = body.as_ptr() as usize - content.as_ptr() as usize;
+    content[..byte_offset].matches('\n').count()
+}
+
 /// Convenience: extract and parse frontmatter from a template file's full
 /// content. Returns the parsed [`Frontmatter`] (or a default if none present)
 /// and the template body.
@@ -371,6 +384,47 @@ mod tests {
         let (yaml, body) = split_frontmatter(content);
         assert_eq!(yaml.unwrap(), "");
         assert_eq!(body, "<html></html>");
+    }
+
+    // --- frontmatter line count tests ---
+
+    /// Helper: split + count in one step for test convenience.
+    fn frontmatter_line_count(content: &str) -> usize {
+        let (yaml, body) = split_frontmatter(content);
+        if yaml.is_some() {
+            count_frontmatter_lines(content, body)
+        } else {
+            0
+        }
+    }
+
+    #[test]
+    fn test_frontmatter_line_count_typical() {
+        // ---           line 1
+        // title: Hello  line 2
+        // ---           line 3
+        // <body>        line 4
+        let content = "---\ntitle: Hello\n---\n<html>body</html>";
+        assert_eq!(frontmatter_line_count(content), 3);
+    }
+
+    #[test]
+    fn test_frontmatter_line_count_multiline() {
+        let content = "---\ncollection:\n  source: api\n  path: /posts\nslug_field: id\n---\n<div>tmpl</div>";
+        // 6 newlines before the body
+        assert_eq!(frontmatter_line_count(content), 6);
+    }
+
+    #[test]
+    fn test_frontmatter_line_count_empty_frontmatter() {
+        let content = "---\n---\n<html></html>";
+        assert_eq!(frontmatter_line_count(content), 2);
+    }
+
+    #[test]
+    fn test_frontmatter_line_count_no_frontmatter() {
+        let content = "<html>no frontmatter</html>";
+        assert_eq!(frontmatter_line_count(content), 0);
     }
 
     // --- parse_frontmatter tests ---
