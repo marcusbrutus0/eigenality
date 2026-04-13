@@ -347,37 +347,160 @@ impl TemplateError {
     }
 }
 
-/// Build a one-line-per-key summary of the template context, showing each
-/// top-level variable name and the kind of value it holds (map, sequence,
-/// string, etc.). For sequences and maps the element count is included.
+/// Maximum nesting depth for the recursive context shape dump.
+const SHAPE_MAX_DEPTH: usize = 4;
+
+/// Build a recursive shape dump of the template context, showing variable
+/// names, types, and nested structure (but never values).
+///
+/// Maps show all their keys; sequences sample the first element to infer
+/// the item shape. Recursion stops at [`SHAPE_MAX_DEPTH`].
 fn summarize_context(ctx: &Value) -> String {
-    let mut lines = Vec::new();
+    let mut out = String::new();
     if let Ok(keys) = ctx.try_iter() {
+        let mut any = false;
         for key in keys {
-            let label = match ctx.get_attr(key.as_str().unwrap_or("?")) {
-                Ok(val) => {
-                    let kind = val.kind();
-                    match kind {
-                        minijinja::value::ValueKind::Seq => {
-                            let len = val.try_iter().map(|i| i.count()).unwrap_or(0);
-                            format!("{kind} ({len} items)")
-                        }
-                        minijinja::value::ValueKind::Map => {
-                            let len = val.try_iter().map(|i| i.count()).unwrap_or(0);
-                            format!("{kind} ({len} keys)")
-                        }
-                        _ => kind.to_string(),
-                    }
+            any = true;
+            let name = key.as_str().unwrap_or("?");
+            match ctx.get_attr(name) {
+                Ok(val) => describe_shape(name, &val, 0, &mut out),
+                Err(_) => {
+                    out.push_str(name);
+                    out.push_str(" : ?\n");
                 }
-                Err(_) => "?".into(),
-            };
-            lines.push(format!("{key} : {label}"));
+            }
+        }
+        if !any {
+            return "(empty context)".into();
         }
     }
-    if lines.is_empty() {
+    // Trim trailing newline for consistency with callers that append their own.
+    if out.ends_with('\n') {
+        out.truncate(out.len() - 1);
+    }
+    if out.is_empty() {
         "(empty context)".into()
     } else {
-        lines.join("\n")
+        out
+    }
+}
+
+/// Append a description of `val` at the given indentation `depth`.
+///
+/// For maps, each key is listed recursively. For sequences, the first
+/// element is sampled to show the item shape. Primitive kinds are shown
+/// on a single line. Recursion stops at `SHAPE_MAX_DEPTH`.
+fn describe_shape(name: &str, val: &Value, depth: usize, out: &mut String) {
+    use std::fmt::Write;
+    use minijinja::value::ValueKind;
+
+    fn push_indent(out: &mut String, depth: usize) {
+        for _ in 0..depth {
+            out.push_str("  ");
+        }
+    }
+
+    let kind = val.kind();
+
+    match kind {
+        ValueKind::Map => {
+            // Single iteration: collect keys and recurse.
+            let keys: Vec<_> = val
+                .try_iter()
+                .map(|i| i.collect())
+                .unwrap_or_default();
+            push_indent(out, depth);
+            let _ = writeln!(out, "{name} : map ({} keys)", keys.len());
+
+            if depth < SHAPE_MAX_DEPTH {
+                for k in &keys {
+                    let k_str = k.as_str().unwrap_or("?");
+                    if let Ok(child) = val.get_attr(k_str) {
+                        describe_shape(k_str, &child, depth + 1, out);
+                    }
+                }
+            }
+        }
+        ValueKind::Seq => {
+            // Single iteration: grab the first element and count the rest.
+            let (len, first) = match val.try_iter() {
+                Ok(mut iter) => {
+                    let first = iter.next();
+                    let rest = iter.count();
+                    let total = if first.is_some() { rest + 1 } else { 0 };
+                    (total, first)
+                }
+                Err(_) => (0, None),
+            };
+            push_indent(out, depth);
+            let _ = writeln!(out, "{name} : sequence ({len} items)");
+
+            if depth < SHAPE_MAX_DEPTH {
+                if let Some(first) = first {
+                    describe_shape("[item]", &first, depth + 1, out);
+                }
+            }
+        }
+        _ => {
+            push_indent(out, depth);
+            let _ = writeln!(out, "{name} : {kind}");
+        }
+    }
+}
+
+/// Extract a dotted identifier path from an expression string.
+///
+/// Scans left-to-right collecting `identifier.identifier.identifier`,
+/// stopping at the first non-identifier character (`|`, `(`, `[`, space
+/// not followed by `.`, etc.). Returns an empty vec if the string doesn't
+/// start with a valid identifier.
+fn extract_expression_path_from_str(expr: &str) -> Vec<&str> {
+    let mut segments = Vec::new();
+    let mut rest = expr.trim();
+
+    loop {
+        // Identifiers must start with a letter or underscore (not a digit).
+        if !rest.starts_with(|c: char| c.is_ascii_alphabetic() || c == '_') {
+            break;
+        }
+        let ident_end = rest
+            .find(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
+            .unwrap_or(rest.len());
+        if ident_end == 0 {
+            break;
+        }
+        segments.push(&rest[..ident_end]);
+        rest = &rest[ident_end..];
+
+        if rest.starts_with('.') {
+            let after_dot = &rest[1..];
+            if after_dot.starts_with(|c: char| c.is_ascii_alphabetic() || c == '_') {
+                rest = after_dot;
+                continue;
+            }
+        }
+        break;
+    }
+    segments
+}
+
+/// Extract the dotted expression path from a minijinja error's debug info.
+///
+/// Uses `err.template_source()` + `err.range()` to get the exact expression
+/// that failed, then parses it into path segments. Returns `None` if debug
+/// info is unavailable.
+fn extract_expression_path<'a>(
+    err: &'a minijinja::Error,
+    source_holder: &'a Option<String>,
+) -> Option<Vec<&'a str>> {
+    let source = source_holder.as_deref()?;
+    let range = err.range()?;
+    let expr = source.get(range)?;
+    let segments = extract_expression_path_from_str(expr);
+    if segments.is_empty() {
+        None
+    } else {
+        Some(segments)
     }
 }
 
@@ -510,28 +633,54 @@ mod tests {
     // --- Context summary tests ---
 
     #[test]
-    fn test_context_summary_shows_keys() {
+    fn test_context_summary_shows_keys_and_nested_shape() {
         let ctx = Value::from_iter([
             ("title", Value::from("Hello")),
             ("page", Value::from_iter([
                 ("current_url", Value::from("/about")),
+                ("base_url", Value::from("https://example.com")),
             ])),
         ]);
         let summary = summarize_context(&ctx);
         assert!(summary.contains("title : string"));
-        assert!(summary.contains("page : map"));
+        assert!(summary.contains("page : map (2 keys)"));
+        // Nested keys should appear indented.
+        assert!(summary.contains("  current_url : string"));
+        assert!(summary.contains("  base_url : string"));
     }
 
     #[test]
-    fn test_context_summary_shows_sequence_length() {
+    fn test_context_summary_sequence_shows_item_shape() {
+        let items = Value::from(vec![
+            Value::from_iter([
+                ("title", Value::from("Post 1")),
+                ("slug", Value::from("post-1")),
+            ]),
+            Value::from_iter([
+                ("title", Value::from("Post 2")),
+                ("slug", Value::from("post-2")),
+            ]),
+        ]);
+        let ctx = Value::from_iter([("posts", items)]);
+        let summary = summarize_context(&ctx);
+        assert!(summary.contains("posts : sequence (2 items)"));
+        // First item sampled to show shape.
+        assert!(summary.contains("  [item] : map (2 keys)"));
+        assert!(summary.contains("    title : string"));
+        assert!(summary.contains("    slug : string"));
+    }
+
+    #[test]
+    fn test_context_summary_sequence_of_primitives() {
         let items = Value::from(vec![
             Value::from("a"),
             Value::from("b"),
             Value::from("c"),
         ]);
-        let ctx = Value::from_iter([("items", items)]);
+        let ctx = Value::from_iter([("tags", items)]);
         let summary = summarize_context(&ctx);
-        assert!(summary.contains("items : sequence (3 items)"));
+        assert!(summary.contains("tags : sequence (3 items)"));
+        assert!(summary.contains("  [item] : string"));
     }
 
     #[test]
@@ -539,6 +688,16 @@ mod tests {
         let ctx = Value::from_iter(std::iter::empty::<(&str, Value)>());
         let summary = summarize_context(&ctx);
         assert_eq!(summary, "(empty context)");
+    }
+
+    #[test]
+    fn test_context_summary_empty_sequence() {
+        let items = Value::from(Vec::<Value>::new());
+        let ctx = Value::from_iter([("items", items)]);
+        let summary = summarize_context(&ctx);
+        // Empty sequence — no item shape to sample.
+        assert!(summary.contains("items : sequence (0 items)"));
+        assert!(!summary.contains("[item]"));
     }
 
     #[test]
@@ -550,13 +709,62 @@ mod tests {
             kind: "UndefinedError".into(),
             short_msg: "variable `foo` is undefined".into(),
             detail: String::new(),
-            context_summary: Some("title : string\npage : map (3 keys)".into()),
+            context_summary: Some("title : string\npage : map (3 keys)\n  current_url : string".into()),
         };
 
         let formatted = te.format_console("index.html", None);
         assert!(formatted.contains("Available context:"));
         assert!(formatted.contains("title : string"));
         assert!(formatted.contains("page : map (3 keys)"));
+    }
+
+    // --- Expression path extraction tests ---
+
+    #[test]
+    fn test_extract_expression_path_simple() {
+        assert_eq!(extract_expression_path_from_str("page"), vec!["page"]);
+    }
+
+    #[test]
+    fn test_extract_expression_path_dotted() {
+        assert_eq!(
+            extract_expression_path_from_str("page.seo.title"),
+            vec!["page", "seo", "title"]
+        );
+    }
+
+    #[test]
+    fn test_extract_expression_path_with_filter() {
+        assert_eq!(
+            extract_expression_path_from_str("page.title | upper"),
+            vec!["page", "title"]
+        );
+    }
+
+    #[test]
+    fn test_extract_expression_path_with_function_call() {
+        assert_eq!(
+            extract_expression_path_from_str("items.count()"),
+            vec!["items", "count"]
+        );
+    }
+
+    #[test]
+    fn test_extract_expression_path_with_bracket() {
+        assert_eq!(
+            extract_expression_path_from_str("items[0].name"),
+            vec!["items"]
+        );
+    }
+
+    #[test]
+    fn test_extract_expression_path_empty() {
+        assert!(extract_expression_path_from_str("").is_empty());
+    }
+
+    #[test]
+    fn test_extract_expression_path_non_identifier_start() {
+        assert!(extract_expression_path_from_str("42 + foo").is_empty());
     }
 
     #[test]
@@ -568,7 +776,7 @@ mod tests {
             kind: "UndefinedError".into(),
             short_msg: "variable `foo` is undefined".into(),
             detail: "detail here".into(),
-            context_summary: Some("title : string\npage : map (3 keys)".into()),
+            context_summary: Some("title : string\npage : map (3 keys)\n  base_url : string".into()),
         };
 
         let html = te.to_error_html("index.html", None);
