@@ -1302,6 +1302,23 @@ url = "https://cms.example.com/api"
     }
 
     #[test]
+    fn test_env_escape_mixed_with_real_var() {
+        unsafe { std::env::set_var("EIGEN_ESC_HOST", "example.com") };
+        let input = r#"Use $${API_KEY} for auth at ${EIGEN_ESC_HOST}"#;
+        let result = interpolate_env_vars(input).unwrap();
+        assert_eq!(result, r#"Use ${API_KEY} for auth at example.com"#);
+        unsafe { std::env::remove_var("EIGEN_ESC_HOST") };
+    }
+
+    #[test]
+    fn test_env_escape_missing_var_no_error() {
+        // $${NONEXISTENT} should NOT trigger the "missing env var" error.
+        let input = r#"token = "$${NONEXISTENT}""#;
+        let result = interpolate_env_vars(input).unwrap();
+        assert_eq!(result, r#"token = "${NONEXISTENT}""#);
+    }
+
+    #[test]
     fn test_missing_base_url() {
         let toml_str = r#"
 [site]
