@@ -231,15 +231,40 @@ fn interpolate_value(value: &Value, item: &Value, item_as: &str) -> Result<Value
 
 /// Replace `${VAR_NAME}` patterns with environment variable values.
 /// Unresolved patterns are left as-is (no error).
+/// `$${VAR_NAME}` is an escape sequence that produces a literal `${VAR_NAME}`.
 fn interpolate_env_in_string(s: &str) -> String {
-    let mut result = s.to_string();
-    for cap in ENV_VAR_RE.captures_iter(s) {
-        let full_match = &cap[0];
-        let var_name = &cap[1];
+    // Phase 1: shelter escaped $${...} patterns behind sentinels.
+    static ESCAPED_ENV_RE: LazyLock<Regex> =
+        LazyLock::new(|| Regex::new(r"\$\$\{([A-Za-z_][A-Za-z0-9_]*)\}").unwrap());
+
+    let mut sheltered: Vec<String> = Vec::new();
+    let working = ESCAPED_ENV_RE.replace_all(s, |caps: &regex::Captures| {
+        let var_name = caps[1].to_string();
+        sheltered.push(var_name);
+        format!("\x00EIGEN_ESC_{}\x00", sheltered.len() - 1)
+    }).into_owned();
+
+    // Phase 2: normal env var substitution on the sheltered string.
+    let captures: Vec<(String, String)> = ENV_VAR_RE
+        .captures_iter(&working)
+        .map(|cap| (cap[0].to_string(), cap[1].to_string()))
+        .collect();
+
+    let mut result = working;
+    for (full_match, var_name) in &captures {
         if let Ok(val) = std::env::var(var_name) {
-            result = result.replace(full_match, &val);
+            result = result.replace(full_match.as_str(), &val);
         }
     }
+
+    // Phase 3: restore sentinels to literal ${VAR_NAME}.
+    for (i, var_name) in sheltered.iter().enumerate() {
+        result = result.replace(
+            &format!("\x00EIGEN_ESC_{}\x00", i),
+            &format!("${{{}}}", var_name),
+        );
+    }
+
     result
 }
 
@@ -1183,6 +1208,13 @@ mod tests {
             result.body.unwrap()["key"],
             "${DEFINITELY_NOT_SET_EIGEN_TEST}"
         );
+    }
+
+    #[test]
+    fn test_interpolate_env_escape_in_string() {
+        let input = "Use $${API_KEY} here";
+        let result = interpolate_env_in_string(input);
+        assert_eq!(result, "Use ${API_KEY} here");
     }
 
     // --- verify_no_remaining_interpolation body tests ---
