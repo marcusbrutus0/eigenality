@@ -966,4 +966,171 @@ mod tests {
         assert!(posters[0].contains("alpha"));
         assert!(posters[1].contains("beta"));
     }
+
+    /// End-to-end test with a real video: generates a video, runs the full
+    /// optimize_and_rewrite pipeline, parses the output HTML structurally,
+    /// and verifies every generated file exists on disk and is non-empty.
+    #[tokio::test]
+    async fn test_e2e_real_video_output_verified() {
+        use super::super::videos::{check_ffmpeg, VideoCache};
+
+        if check_ffmpeg().await.is_none() {
+            eprintln!("skipping test_e2e_real_video_output_verified: ffmpeg not found");
+            return;
+        }
+
+        let tmp = tempfile::TempDir::new().unwrap();
+        let dist_dir = tmp.path().join("dist");
+        std::fs::create_dir_all(dist_dir.join("videos")).unwrap();
+
+        // Generate a 160x120 test video with audio.
+        let src_video = dist_dir.join("videos/demo.mp4");
+        let ffout = tokio::process::Command::new("ffmpeg")
+            .args([
+                "-y", "-f", "lavfi", "-i",
+                "testsrc=duration=1:size=160x120:rate=10",
+                "-f", "lavfi", "-i", "anullsrc=r=44100:cl=stereo",
+                "-t", "1",
+                "-c:v", "libx264", "-pix_fmt", "yuv420p",
+                "-c:a", "aac",
+            ])
+            .arg(&src_video)
+            .output()
+            .await
+            .unwrap();
+        assert!(ffout.status.success(), "failed to generate test video");
+        assert!(src_video.metadata().unwrap().len() > 0);
+
+        let config = VideoOptimConfig {
+            optimize: true,
+            format: "vp9".into(),
+            quality: 50,
+            heights: vec![60, 120, 480],
+            exclude: vec![],
+            poster_quality: 80,
+        };
+        let cache = VideoCache::open(tmp.path()).unwrap();
+
+        let input_html = r#"<html><body><video src="/videos/demo.mp4" controls class="hero"></video></body></html>"#;
+
+        let output_html = optimize_and_rewrite_videos(input_html, &config, &cache, &dist_dir)
+            .await
+            .unwrap();
+
+        // --- Parse output HTML structurally ---
+        let doc = scraper::Html::parse_document(&output_html);
+        let video_sel = scraper::Selector::parse("video").unwrap();
+        let source_sel = scraper::Selector::parse("source").unwrap();
+
+        let videos: Vec<_> = doc.select(&video_sel).collect();
+        assert_eq!(videos.len(), 1, "expected exactly 1 <video> element");
+
+        let video = videos[0];
+
+        // <video> must NOT have src attribute (moved to <source> children).
+        assert!(
+            video.value().attr("src").is_none(),
+            "src attribute should be removed from <video>"
+        );
+
+        // poster attribute present and points to a .webp file.
+        let poster = video.value().attr("poster")
+            .expect("<video> must have poster attribute");
+        assert!(poster.ends_with(".webp"), "poster should be webp: {poster}");
+
+        // preload="none" set.
+        assert_eq!(
+            video.value().attr("preload"),
+            Some("none"),
+            "preload should be 'none'"
+        );
+
+        // Original attributes preserved.
+        assert_eq!(video.value().attr("controls"), Some(""));
+        assert_eq!(video.value().attr("class"), Some("hero"));
+
+        // --- Verify <source> children ---
+        let sources: Vec<_> = video.select(&source_sel).collect();
+        // 60p + 120p (source height, 480 skipped) VP9 + 1 original = 3 sources.
+        assert_eq!(
+            sources.len(), 3,
+            "expected 3 <source> elements (2 VP9 + 1 fallback), got {}",
+            sources.len()
+        );
+
+        // First two should be VP9 webm, highest resolution first.
+        let src0 = sources[0].value().attr("src").unwrap();
+        let type0 = sources[0].value().attr("type").unwrap();
+        assert!(src0.ends_with(".webm"), "first source should be webm: {src0}");
+        assert!(src0.contains("120p"), "first VP9 source should be 120p (highest): {src0}");
+        assert!(type0.contains("vp9"), "first source type should mention vp9: {type0}");
+
+        let src1 = sources[1].value().attr("src").unwrap();
+        let type1 = sources[1].value().attr("type").unwrap();
+        assert!(src1.ends_with(".webm"), "second source should be webm: {src1}");
+        assert!(src1.contains("60p"), "second VP9 source should be 60p: {src1}");
+        assert!(type1.contains("vp9"), "second source type should mention vp9: {type1}");
+
+        // Last source is original mp4 fallback.
+        let src2 = sources[2].value().attr("src").unwrap();
+        let type2 = sources[2].value().attr("type").unwrap();
+        assert!(src2.ends_with(".mp4"), "fallback source should be mp4: {src2}");
+        assert_eq!(type2, "video/mp4", "fallback type should be video/mp4: {type2}");
+
+        // --- Verify all referenced files exist on disk and are non-empty ---
+        for (i, source) in sources.iter().enumerate() {
+            let src_url = source.value().attr("src").unwrap();
+            let file_path = dist_dir.join(src_url.trim_start_matches('/'));
+            assert!(
+                file_path.exists(),
+                "source[{i}] file does not exist on disk: {}",
+                file_path.display()
+            );
+            let size = file_path.metadata().unwrap().len();
+            assert!(
+                size > 0,
+                "source[{i}] file is empty: {} ({size} bytes)",
+                file_path.display()
+            );
+        }
+
+        // Poster file exists and is non-empty.
+        let poster_path = dist_dir.join(poster.trim_start_matches('/'));
+        assert!(
+            poster_path.exists(),
+            "poster file does not exist: {}",
+            poster_path.display()
+        );
+        let poster_size = poster_path.metadata().unwrap().len();
+        assert!(
+            poster_size > 0,
+            "poster file is empty: {} ({poster_size} bytes)",
+            poster_path.display()
+        );
+
+        // --- Verify VP9 files are valid by probing with ffprobe ---
+        for source in &sources[..2] {
+            let src_url = source.value().attr("src").unwrap();
+            let file_path = dist_dir.join(src_url.trim_start_matches('/'));
+            let probe = tokio::process::Command::new("ffprobe")
+                .args(["-v", "quiet", "-print_format", "json", "-show_streams", "-select_streams", "v:0"])
+                .arg(&file_path)
+                .output()
+                .await
+                .unwrap();
+            assert!(
+                probe.status.success(),
+                "ffprobe failed on {}: {}",
+                file_path.display(),
+                String::from_utf8_lossy(&probe.stderr)
+            );
+            let json: serde_json::Value = serde_json::from_slice(&probe.stdout).unwrap();
+            let codec = json["streams"][0]["codec_name"].as_str().unwrap_or("");
+            assert_eq!(
+                codec, "vp9",
+                "expected vp9 codec in {}, got: {codec}",
+                file_path.display()
+            );
+        }
+    }
 }
