@@ -36,6 +36,7 @@
               dolt
               cargo-dist
               uv
+              ffmpeg
             ];
 
             buildInputs = [
