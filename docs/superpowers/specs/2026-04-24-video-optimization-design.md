@@ -30,8 +30,7 @@ In `site.toml` under `[assets.videos]`:
 ```toml
 [assets.videos]
 optimize = true              # Master switch (default: true)
-format = "vp9"               # Target codec (default: "vp9")
-quality = 30                 # CRF value for VP9, 0-63, lower=better (default: 30)
+quality = 30                 # VP9 CRF value, 0-63, lower=better (default: 30)
 heights = [480, 720, 1080]   # Resolution tiers in pixels (default: [480, 720, 1080])
 exclude = []                 # Glob patterns to exclude (default: [])
 poster_quality = 80          # WebP quality for poster frames, 1-100 (default: 80)
