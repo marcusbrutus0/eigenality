@@ -28,7 +28,12 @@ pub fn run_page_checks(
 ) -> Vec<Finding> {
     let mut findings = Vec::new();
     findings.extend(seo::page_checks(html, page_path, template_path));
-    findings.extend(performance::page_checks(html, page_path, template_path, config));
+    findings.extend(performance::page_checks(
+        html,
+        page_path,
+        template_path,
+        config,
+    ));
     findings.extend(accessibility::page_checks(html, page_path, template_path));
     findings.extend(best_practices::page_checks(html, page_path, template_path));
     findings

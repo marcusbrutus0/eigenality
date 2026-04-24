@@ -226,7 +226,9 @@ pub fn page_checks(html: &str, page_path: &str, template_path: &str) -> Vec<Find
             message: format!("{page_path}: missing <meta name=\"twitter:card\">"),
             fix: Fix {
                 file: fix_file.clone(),
-                instruction: "Add <meta name=\"twitter:card\" content=\"summary_large_image\"> inside <head>".into(),
+                instruction:
+                    "Add <meta name=\"twitter:card\" content=\"summary_large_image\"> inside <head>"
+                        .into(),
             },
         });
     }
@@ -273,7 +275,8 @@ pub fn page_checks(html: &str, page_path: &str, template_path: &str) -> Vec<Find
             message: format!("{page_path}: multiple <h1> tags found ({count})"),
             fix: Fix {
                 file: fix_file,
-                instruction: "Use exactly one <h1> element per page; demote extras to <h2> or lower".into(),
+                instruction:
+                    "Use exactly one <h1> element per page; demote extras to <h2> or lower".into(),
             },
         });
     }
@@ -414,7 +417,10 @@ mod tests {
     #[test]
     fn good_html_no_findings() {
         let findings = page_checks(GOOD_HTML, "/page.html", "templates/page.html");
-        assert!(findings.is_empty(), "expected no findings, got: {findings:?}");
+        assert!(
+            findings.is_empty(),
+            "expected no findings, got: {findings:?}"
+        );
     }
 
     #[test]
@@ -476,7 +482,8 @@ mod tests {
     #[test]
     fn missing_og_tags_partial() {
         // Has og:title but missing og:description and og:image.
-        let html = "<html><head><meta property=\"og:title\" content=\"T\"></head><body></body></html>";
+        let html =
+            "<html><head><meta property=\"og:title\" content=\"T\"></head><body></body></html>";
         let findings = page_checks(html, "/p", "t.html");
         let og = findings.iter().find(|f| f.id == "seo/og-tags").unwrap();
         assert!(og.message.contains("og:description"));

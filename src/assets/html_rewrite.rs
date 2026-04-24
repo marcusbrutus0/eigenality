@@ -547,16 +547,15 @@ pub fn rewrite_css_background_images(
     // Extract background-image URLs using regex (lol_html operates on HTML,
     // not CSS — we use regex to find CSS url() references).
     let bg_re = regex::Regex::new(
-        r#"(?i)background(?:-image)?\s*:[^;]*url\(\s*['"]?([^'")\s]+)['"]?\s*\)"#
-    ).unwrap();
+        r#"(?i)background(?:-image)?\s*:[^;]*url\(\s*['"]?([^'")\s]+)['"]?\s*\)"#,
+    )
+    .unwrap();
 
     // Collect unique local image URLs referenced in CSS.
     let mut css_images: Vec<String> = Vec::new();
     for cap in bg_re.captures_iter(html) {
         let url = cap[1].to_string();
-        if !url.starts_with("http://")
-            && !url.starts_with("https://")
-            && !url.starts_with("data:")
+        if !url.starts_with("http://") && !url.starts_with("https://") && !url.starts_with("data:")
         {
             let check_path = url.trim_start_matches('/');
             if !is_excluded(check_path, &config.exclude) && !css_images.contains(&url) {
@@ -695,12 +694,12 @@ mod tests {
                 ImageVariant {
                     url_path: "/assets/photo-480w.webp".to_string(),
                     width: 480,
-                    mime_type: "image/webp".to_string()
+                    mime_type: "image/webp".to_string(),
                 },
                 ImageVariant {
                     url_path: "/assets/photo-800w.webp".to_string(),
                     width: 800,
-                    mime_type: "image/webp".to_string()
+                    mime_type: "image/webp".to_string(),
                 },
             ],
         );
@@ -710,12 +709,12 @@ mod tests {
                 ImageVariant {
                     url_path: "/assets/photo-480w.jpg".to_string(),
                     width: 480,
-                    mime_type: "image/jpeg".to_string()
+                    mime_type: "image/jpeg".to_string(),
                 },
                 ImageVariant {
                     url_path: "/assets/photo-800w.jpg".to_string(),
                     width: 800,
-                    mime_type: "image/jpeg".to_string()
+                    mime_type: "image/jpeg".to_string(),
                 },
             ],
         );
@@ -793,7 +792,8 @@ mod tests {
 
         let cache = ImageCache::open(tmp.path()).unwrap();
 
-        let html = r#"<html><body><img src="/assets/hero.jpg" alt="Hero" class="main"></body></html>"#;
+        let html =
+            r#"<html><body><img src="/assets/hero.jpg" alt="Hero" class="main"></body></html>"#;
 
         let result = optimize_and_rewrite_images(html, &config, &cache, &dist_dir, None).unwrap();
 
@@ -1172,8 +1172,7 @@ mod tests {
 
     #[test]
     fn test_rewrite_svg_gets_lazy() {
-        let html =
-            r#"<img src="/first.jpg" alt="First"><img src="/icon.svg" alt="SVG icon">"#;
+        let html = r#"<img src="/first.jpg" alt="First"><img src="/icon.svg" alt="SVG icon">"#;
         let map: VariantMap = HashMap::new();
         let result = rewrite_img_to_picture(html, &map, None).unwrap();
         // SVG (no variants) still gets lazy loading.
@@ -1193,7 +1192,8 @@ mod tests {
 
     #[test]
     fn test_rewrite_empty_variant_map_still_applies_lazy() {
-        let html = r#"<img src="/a.jpg" alt="A"><img src="/b.jpg" alt="B"><img src="/c.jpg" alt="C">"#;
+        let html =
+            r#"<img src="/a.jpg" alt="A"><img src="/b.jpg" alt="B"><img src="/c.jpg" alt="C">"#;
         let map: VariantMap = HashMap::new();
         let result = rewrite_img_to_picture(html, &map, None).unwrap();
         // Even with empty variant_map, lazy loading should be applied.
@@ -1227,8 +1227,7 @@ mod tests {
         // Two images: first has variants, second does not.
         let html = r#"<html><body><img src="/assets/hero.jpg" alt="Hero"><img src="/assets/other.jpg" alt="Other"></body></html>"#;
 
-        let result =
-            optimize_and_rewrite_images(html, &config, &cache, &dist_dir, None).unwrap();
+        let result = optimize_and_rewrite_images(html, &config, &cache, &dist_dir, None).unwrap();
 
         // First image (hero.jpg) is wrapped in <picture> and is eager.
         assert!(result.contains("<picture>"));
@@ -1256,14 +1255,9 @@ mod tests {
 
         let html = r#"<img src="/assets/a.jpg" alt="A"><img src="/assets/hero.jpg" alt="Hero"><img src="/assets/c.jpg" alt="C">"#;
 
-        let result = optimize_and_rewrite_images(
-            html,
-            &config,
-            &cache,
-            &dist_dir,
-            Some("/assets/hero.jpg"),
-        )
-        .unwrap();
+        let result =
+            optimize_and_rewrite_images(html, &config, &cache, &dist_dir, Some("/assets/hero.jpg"))
+                .unwrap();
 
         // /assets/a.jpg: first qualifying image, eager.
         // /assets/hero.jpg: matches hero_image, eager.

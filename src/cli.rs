@@ -2,7 +2,11 @@ use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 
 #[derive(Parser, Debug)]
-#[command(name = "eigen", version, about = "A static site generator with HTMX support")]
+#[command(
+    name = "eigen",
+    version,
+    about = "A static site generator with HTMX support"
+)]
 pub struct Cli {
     #[command(subcommand)]
     pub command: Command,

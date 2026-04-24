@@ -32,8 +32,9 @@ pub fn rewrite_html(
     let output = lol_html::rewrite_str(
         html,
         lol_html::RewriteStrSettings {
-            element_content_handlers: vec![
-                lol_html::element!("link[rel='stylesheet']", move |el| {
+            element_content_handlers: vec![lol_html::element!(
+                "link[rel='stylesheet']",
+                move |el| {
                     let href = match el.get_attribute("href") {
                         Some(h) => h,
                         None => return Ok(()),
@@ -68,8 +69,8 @@ pub fn rewrite_html(
                     }
 
                     Ok(())
-                }),
-            ],
+                }
+            )],
             ..lol_html::RewriteStrSettings::new()
         },
     )
@@ -93,8 +94,9 @@ pub fn extract_stylesheet_hrefs(html: &str, exclude: &[String]) -> Vec<String> {
     let _ = lol_html::rewrite_str(
         html,
         lol_html::RewriteStrSettings {
-            element_content_handlers: vec![
-                lol_html::element!("link[rel='stylesheet']", move |el| {
+            element_content_handlers: vec![lol_html::element!(
+                "link[rel='stylesheet']",
+                move |el| {
                     // Skip if has media attribute (already non-blocking).
                     if el.get_attribute("media").is_some() {
                         return Ok(());
@@ -121,8 +123,8 @@ pub fn extract_stylesheet_hrefs(html: &str, exclude: &[String]) -> Vec<String> {
 
                     hrefs_clone.borrow_mut().push(href);
                     Ok(())
-                }),
-            ],
+                }
+            )],
             ..lol_html::RewriteStrSettings::new()
         },
     );
@@ -177,7 +179,8 @@ mod tests {
 
     #[test]
     fn test_extract_preserves_non_stylesheet_links() {
-        let html = r#"<link rel="icon" href="/favicon.ico"><link rel="stylesheet" href="/css/style.css">"#;
+        let html =
+            r#"<link rel="icon" href="/favicon.ico"><link rel="stylesheet" href="/css/style.css">"#;
         let hrefs = extract_stylesheet_hrefs(html, &[]);
         assert_eq!(hrefs, vec!["/css/style.css"]);
     }
@@ -192,7 +195,8 @@ mod tests {
             "body { color: red; }",
             &["/css/style.css".to_string()],
             true,
-        ).unwrap();
+        )
+        .unwrap();
 
         assert!(result.contains("<style>body { color: red; }</style>"));
         assert!(result.contains(r#"rel="preload""#));
@@ -212,7 +216,8 @@ mod tests {
             "body { color: red; }",
             &["/css/style.css".to_string()],
             false,
-        ).unwrap();
+        )
+        .unwrap();
 
         assert!(result.contains("<style>body { color: red; }</style>"));
         // No preload link, no noscript fallback.
@@ -231,7 +236,8 @@ mod tests {
             ".a { color: red; } .b { color: blue; }",
             &["/css/reset.css".to_string(), "/css/main.css".to_string()],
             true,
-        ).unwrap();
+        )
+        .unwrap();
 
         // Should have exactly one <style> block.
         assert_eq!(result.matches("<style>").count(), 1);
@@ -250,7 +256,8 @@ mod tests {
             "body { color: red; }",
             &["/css/style.css".to_string()],
             true,
-        ).unwrap();
+        )
+        .unwrap();
 
         // Favicon link should be untouched.
         assert!(result.contains(r#"<link rel="icon" href="/favicon.ico">"#));
@@ -264,9 +271,13 @@ mod tests {
             "body { color: red; }",
             &["/css/style.css".to_string()],
             true,
-        ).unwrap();
+        )
+        .unwrap();
 
-        assert!(result.contains(r#"<noscript><link rel="stylesheet" href="/css/style.css"></noscript>"#));
+        assert!(
+            result
+                .contains(r#"<noscript><link rel="stylesheet" href="/css/style.css"></noscript>"#)
+        );
     }
 
     #[test]
@@ -280,7 +291,8 @@ mod tests {
             "body { color: red; }",
             &["/css/local.css".to_string()],
             true,
-        ).unwrap();
+        )
+        .unwrap();
 
         // External link should remain unchanged.
         assert!(result.contains(r#"href="https://cdn.example.com/lib.css""#));

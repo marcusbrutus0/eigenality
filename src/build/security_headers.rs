@@ -254,7 +254,10 @@ csp = "default-src 'self'"
         write(project_root, &dist_dir, &config).unwrap();
 
         let result = std::fs::read_to_string(dist_dir.join("_headers")).unwrap();
-        assert_eq!(result, custom_content, "static file must be copied verbatim");
+        assert_eq!(
+            result, custom_content,
+            "static file must be copied verbatim"
+        );
         assert!(
             !result.contains("Content-Security-Policy"),
             "generated CSP must not appear when static file wins"

@@ -369,6 +369,9 @@ pub struct AssetsConfig {
     /// Image optimization configuration.
     #[serde(default)]
     pub images: ImageOptimConfig,
+    /// Video optimization configuration.
+    #[serde(default)]
+    pub videos: VideoOptimConfig,
 }
 
 impl Default for AssetsConfig {
@@ -378,6 +381,7 @@ impl Default for AssetsConfig {
             cdn_skip_hosts: Vec::new(),
             cdn_allow_hosts: Vec::new(),
             images: ImageOptimConfig::default(),
+            videos: VideoOptimConfig::default(),
         }
     }
 }
@@ -436,10 +440,55 @@ fn default_image_widths() -> Vec<u32> {
 }
 
 fn default_image_exclude() -> Vec<String> {
-    vec![
-        "**/*.svg".to_string(),
-        "**/*.gif".to_string(),
-    ]
+    vec!["**/*.svg".to_string(), "**/*.gif".to_string()]
+}
+
+/// Video optimization configuration.
+///
+/// Controls VP9/WebM transcoding, compression quality, and responsive
+/// video generation. Videos are transcoded to VP9 at the configured
+/// heights. A poster image is extracted from the first frame.
+/// Requires `ffmpeg` on PATH at build time.
+#[derive(Debug, Clone, Deserialize)]
+pub struct VideoOptimConfig {
+    /// Master switch — set to `false` to disable all video optimization.
+    #[serde(default = "default_true")]
+    pub optimize: bool,
+    /// CRF quality value for VP9 (0–63, lower = better quality).
+    #[serde(default = "default_video_quality")]
+    pub quality: u8,
+    /// Responsive heights to generate. Each source video is resized to
+    /// these heights (only if the original is taller).
+    #[serde(default = "default_video_heights")]
+    pub heights: Vec<u32>,
+    /// Glob patterns for files/paths to exclude from optimization.
+    #[serde(default)]
+    pub exclude: Vec<String>,
+    /// WebP quality (1–100) for the poster image extracted from the first frame.
+    #[serde(default = "default_poster_quality")]
+    pub poster_quality: u8,
+}
+
+impl Default for VideoOptimConfig {
+    fn default() -> Self {
+        Self {
+            optimize: true,
+            quality: default_video_quality(),
+            heights: default_video_heights(),
+            exclude: Vec::new(),
+            poster_quality: default_poster_quality(),
+        }
+    }
+}
+
+fn default_video_quality() -> u8 {
+    30
+}
+fn default_video_heights() -> Vec<u32> {
+    vec![480, 720, 1080]
+}
+fn default_poster_quality() -> u8 {
+    80
 }
 
 /// Configuration for critical CSS inlining.
@@ -664,7 +713,6 @@ impl Default for ViewTransitionsConfig {
 #[derive(Debug, Clone, Deserialize)]
 pub struct FeedConfig {
     // -- Data source (inline DataQuery-like fields) --
-
     /// Local file in `_data/`, e.g. `"posts.json"`.
     pub file: Option<String>,
     /// Source name from `[sources.*]`.
@@ -678,7 +726,6 @@ pub struct FeedConfig {
     pub sort: Option<String>,
 
     // -- Feed metadata --
-
     /// Feed title. Defaults to `site.name` at generation time.
     pub title: Option<String>,
     /// Output path relative to `dist/`. Defaults to `"feed.xml"`.
@@ -691,7 +738,6 @@ pub struct FeedConfig {
     pub limit: usize,
 
     // -- Entry field mapping --
-
     /// Field on each item for the entry `<title>`. Defaults to `"title"`.
     #[serde(default = "default_title_field")]
     pub title_field: String,
@@ -844,8 +890,7 @@ pub fn load_config(project_root: &Path) -> Result<SiteConfig> {
     let interpolated = interpolate_env_vars(&raw)
         .wrap_err("Failed to interpolate environment variables in site.toml")?;
 
-    let config: SiteConfig = toml::from_str(&interpolated)
-        .wrap_err("Failed to parse site.toml")?;
+    let config: SiteConfig = toml::from_str(&interpolated).wrap_err("Failed to parse site.toml")?;
 
     validate_config(&config)?;
 
@@ -918,10 +963,7 @@ pub fn interpolate_env_vars(input: &str) -> Result<String> {
     }
 
     if !errors.is_empty() {
-        bail!(
-            "Missing environment variable(s): {}",
-            errors.join(", ")
-        );
+        bail!("Missing environment variable(s): {}", errors.join(", "));
     }
 
     Ok(restore_sheltered(result, &sheltered))
@@ -980,8 +1022,7 @@ fn validate_feed_configs(config: &SiteConfig) -> Result<()> {
         if let Some(ref source_name) = feed.source
             && !config.sources.contains_key(source_name)
         {
-            let available: Vec<&str> = config.sources.keys()
-                .map(|s| s.as_str()).collect();
+            let available: Vec<&str> = config.sources.keys().map(|s| s.as_str()).collect();
             bail!(
                 "Feed '{}' references source '{}', but it is not \
                  defined in site.toml [sources.*].\n\
@@ -1003,10 +1044,7 @@ fn validate_feed_configs(config: &SiteConfig) -> Result<()> {
 
         // Limit must be > 0.
         if feed.limit == 0 {
-            bail!(
-                "Feed '{}' has `limit = 0`. Must be at least 1.",
-                name,
-            );
+            bail!("Feed '{}' has `limit = 0`. Must be at least 1.", name,);
         }
 
         // slug_field must not be empty.
@@ -1068,7 +1106,9 @@ fn validate_security_headers_config(config: &SiteConfig) -> Result<()> {
                  Omit the key or set it to None to suppress the CSP header."
             );
         }
-        let analytics_active = config.analytics.as_ref()
+        let analytics_active = config
+            .analytics
+            .as_ref()
             .is_some_and(|a| a.google.is_some() || a.umami.is_some());
         if analytics_active {
             tracing::warn!(
@@ -1459,7 +1499,13 @@ exclude = ["static/favicons/*", "**/*.svg", "**/*.gif", "logo.png"]
         assert_eq!(config.assets.images.quality, 60);
         assert_eq!(config.assets.images.widths, vec![320, 640, 1024]);
         assert_eq!(config.assets.images.exclude.len(), 4);
-        assert!(config.assets.images.exclude.contains(&"static/favicons/*".to_string()));
+        assert!(
+            config
+                .assets
+                .images
+                .exclude
+                .contains(&"static/favicons/*".to_string())
+        );
     }
 
     #[test]
@@ -1630,8 +1676,20 @@ base_url = "https://example.com"
         let config = parse_toml(toml_str).unwrap();
         assert!(!config.build.content_hash.enabled);
         assert_eq!(config.build.content_hash.exclude.len(), 6);
-        assert!(config.build.content_hash.exclude.contains(&"favicon.ico".to_string()));
-        assert!(config.build.content_hash.exclude.contains(&"CNAME".to_string()));
+        assert!(
+            config
+                .build
+                .content_hash
+                .exclude
+                .contains(&"favicon.ico".to_string())
+        );
+        assert!(
+            config
+                .build
+                .content_hash
+                .exclude
+                .contains(&"CNAME".to_string())
+        );
     }
 
     #[test]
@@ -1664,7 +1722,13 @@ exclude = ["favicon.ico", "sw.js", "manifest.json"]
         let config = parse_toml(toml_str).unwrap();
         assert!(config.build.content_hash.enabled);
         assert_eq!(config.build.content_hash.exclude.len(), 3);
-        assert!(config.build.content_hash.exclude.contains(&"sw.js".to_string()));
+        assert!(
+            config
+                .build
+                .content_hash
+                .exclude
+                .contains(&"sw.js".to_string())
+        );
     }
 
     // --- Bundling config tests ---
@@ -1783,8 +1847,14 @@ twitter_card = "summary"
 "#;
         let config = parse_toml(toml_str).unwrap();
         assert_eq!(config.site.seo.title.as_deref(), Some("My Custom Title"));
-        assert_eq!(config.site.seo.description.as_deref(), Some("A description of the site"));
-        assert_eq!(config.site.seo.image.as_deref(), Some("/assets/default-share.jpg"));
+        assert_eq!(
+            config.site.seo.description.as_deref(),
+            Some("A description of the site")
+        );
+        assert_eq!(
+            config.site.seo.image.as_deref(),
+            Some("/assets/default-share.jpg")
+        );
         assert_eq!(config.site.seo.og_type, "article");
         assert_eq!(config.site.seo.twitter_site.as_deref(), Some("@mysite"));
         assert_eq!(config.site.seo.twitter_card, "summary");
@@ -1803,7 +1873,10 @@ twitter_site = "@partial"
 "#;
         let config = parse_toml(toml_str).unwrap();
         assert!(config.site.seo.title.is_none());
-        assert_eq!(config.site.seo.description.as_deref(), Some("Only description set"));
+        assert_eq!(
+            config.site.seo.description.as_deref(),
+            Some("Only description set")
+        );
         assert!(config.site.seo.image.is_none());
         assert_eq!(config.site.seo.og_type, "website");
         assert_eq!(config.site.seo.twitter_site.as_deref(), Some("@partial"));
@@ -2081,11 +2154,17 @@ disallow = ["/"]
 "#;
         let config = parse_toml(toml_str).unwrap();
         assert!(config.robots.sitemap);
-        assert_eq!(config.robots.extra_sitemaps, vec!["https://example.com/news-sitemap.xml"]);
+        assert_eq!(
+            config.robots.extra_sitemaps,
+            vec!["https://example.com/news-sitemap.xml"]
+        );
         assert_eq!(config.robots.rules.len(), 2);
         assert_eq!(config.robots.rules[0].user_agent, "*");
         assert_eq!(config.robots.rules[0].allow, vec!["/"]);
-        assert_eq!(config.robots.rules[0].disallow, vec!["/admin/", "/private/"]);
+        assert_eq!(
+            config.robots.rules[0].disallow,
+            vec!["/admin/", "/private/"]
+        );
         assert_eq!(config.robots.rules[1].user_agent, "BadBot");
         assert!(config.robots.rules[1].allow.is_empty());
         assert_eq!(config.robots.rules[1].disallow, vec!["/"]);
@@ -2471,19 +2550,13 @@ base_url = "https://example.com"
 
     #[test]
     fn test_redirect_valid_external_from() {
-        let config = config_with_redirects(vec![valid_rule(
-            "https://old.com/*",
-            "/new",
-        )]);
+        let config = config_with_redirects(vec![valid_rule("https://old.com/*", "/new")]);
         assert!(validate_redirect_rules(&config).is_ok());
     }
 
     #[test]
     fn test_redirect_valid_external_to() {
-        let config = config_with_redirects(vec![valid_rule(
-            "/old",
-            "https://new.com",
-        )]);
+        let config = config_with_redirects(vec![valid_rule("/old", "https://new.com")]);
         assert!(validate_redirect_rules(&config).is_ok());
     }
 
@@ -2543,7 +2616,10 @@ tag = "production"
         let umami = config.analytics.unwrap().umami.unwrap();
         assert_eq!(umami.website_id, "abc-123");
         assert_eq!(umami.host_url, "https://analytics.example.com");
-        assert_eq!(umami.domains.as_deref(), Some("example.com,www.example.com"));
+        assert_eq!(
+            umami.domains.as_deref(),
+            Some("example.com,www.example.com")
+        );
         assert!(!umami.auto_track);
         assert_eq!(umami.tag.as_deref(), Some("production"));
     }
@@ -2590,7 +2666,10 @@ tracking_id = ""
 "#;
         let err = load_config_from_str(toml_str).unwrap_err();
         let msg = format!("{err}");
-        assert!(msg.contains("tracking_id"), "error should mention tracking_id: {msg}");
+        assert!(
+            msg.contains("tracking_id"),
+            "error should mention tracking_id: {msg}"
+        );
     }
 
     #[test]
@@ -2605,7 +2684,10 @@ website_id = ""
 "#;
         let err = load_config_from_str(toml_str).unwrap_err();
         let msg = format!("{err}");
-        assert!(msg.contains("website_id"), "error should mention website_id: {msg}");
+        assert!(
+            msg.contains("website_id"),
+            "error should mention website_id: {msg}"
+        );
     }
 
     #[test]
@@ -2621,6 +2703,38 @@ host_url = ""
 "#;
         let err = load_config_from_str(toml_str).unwrap_err();
         let msg = format!("{err}");
-        assert!(msg.contains("host_url"), "error should mention host_url: {msg}");
+        assert!(
+            msg.contains("host_url"),
+            "error should mention host_url: {msg}"
+        );
+    }
+
+    #[test]
+    fn test_video_optim_config_defaults() {
+        let config = VideoOptimConfig::default();
+        assert!(config.optimize);
+        assert_eq!(config.quality, 30);
+        assert_eq!(config.heights, vec![480, 720, 1080]);
+        assert!(config.exclude.is_empty());
+        assert_eq!(config.poster_quality, 80);
+    }
+
+    #[test]
+    fn test_assets_config_has_videos() {
+        let config = AssetsConfig::default();
+        assert!(config.videos.optimize);
+    }
+
+    #[test]
+    fn test_video_config_deserialize_partial() {
+        let toml_str = r#"
+            optimize = false
+            quality = 25
+        "#;
+        let config: VideoOptimConfig = toml::from_str(toml_str).unwrap();
+        assert!(!config.optimize);
+        assert_eq!(config.quality, 25);
+        assert_eq!(config.heights, vec![480, 720, 1080]);
+        assert_eq!(config.poster_quality, 80);
     }
 }

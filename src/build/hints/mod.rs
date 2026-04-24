@@ -52,17 +52,11 @@ pub fn inject_resource_hints(
     let mut hints: Vec<ResourceHint> = Vec::new();
 
     // 1. Hero image preload.
-    if let Some(hero_src) =
-        preload::resolve_hero_image(html, hero_image, config.auto_detect_hero)
-    {
+    if let Some(hero_src) = preload::resolve_hero_image(html, hero_image, config.auto_detect_hero) {
         // Check if there's already a preload hint for this image.
         if !has_existing_preload(html, &hero_src) {
-            let hero_preload = preload::build_hero_preload(
-                &hero_src,
-                html,
-                dist_dir,
-                &config.hero_image_sizes,
-            );
+            let hero_preload =
+                preload::build_hero_preload(&hero_src, html, dist_dir, &config.hero_image_sizes);
             hints.push(ResourceHint::HeroPreload(hero_preload));
         }
     }
@@ -110,17 +104,14 @@ fn has_existing_preload(html: &str, href: &str) -> bool {
     let _ = lol_html::rewrite_str(
         html,
         lol_html::RewriteStrSettings {
-            element_content_handlers: vec![lol_html::element!(
-                "link[rel='preload']",
-                move |el| {
-                    if let Some(existing_href) = el.get_attribute("href") {
-                        if existing_href == href_owned {
-                            *found_clone.borrow_mut() = true;
-                        }
+            element_content_handlers: vec![lol_html::element!("link[rel='preload']", move |el| {
+                if let Some(existing_href) = el.get_attribute("href") {
+                    if existing_href == href_owned {
+                        *found_clone.borrow_mut() = true;
                     }
-                    Ok(())
                 }
-            )],
+                Ok(())
+            })],
             ..lol_html::RewriteStrSettings::new()
         },
     );
@@ -221,8 +212,7 @@ mod tests {
 
     #[test]
     fn test_inject_hero_from_frontmatter() {
-        let html =
-            r#"<html><head><title>T</title></head><body><p>No img</p></body></html>"#;
+        let html = r#"<html><head><title>T</title></head><body><p>No img</p></body></html>"#;
         let config = test_config();
         let dir = tempfile::tempdir().unwrap();
         let result = inject_resource_hints(
@@ -449,15 +439,11 @@ mod tests {
         let hints = vec![ResourceHint::HeroPreload(preload::HeroPreload {
             href: "/hero.jpg".to_string(),
             mime_type: "image/avif".to_string(),
-            imagesrcset: Some(
-                "/hero-480w.avif 480w, /hero-768w.avif 768w".to_string(),
-            ),
+            imagesrcset: Some("/hero-480w.avif 480w, /hero-768w.avif 768w".to_string()),
             imagesizes: Some("100vw".to_string()),
         })];
         let html = hints_to_html(&hints);
-        assert!(html.contains(
-            r#"imagesrcset="/hero-480w.avif 480w, /hero-768w.avif 768w""#
-        ));
+        assert!(html.contains(r#"imagesrcset="/hero-480w.avif 480w, /hero-768w.avif 768w""#));
         assert!(html.contains(r#"imagesizes="100vw""#));
         assert!(html.contains(r#"type="image/avif""#));
     }
@@ -491,8 +477,7 @@ mod tests {
     #[test]
     fn test_inject_into_head() {
         let html = r#"<html><head><title>T</title></head></html>"#;
-        let hint =
-            r#"<link rel="preload" as="image" href="/hero.jpg" type="image/jpeg">"#;
+        let hint = r#"<link rel="preload" as="image" href="/hero.jpg" type="image/jpeg">"#;
         let result = inject_into_head(html, hint).unwrap();
         assert!(result.contains(hint));
         // Hint should be before <title>
@@ -503,8 +488,7 @@ mod tests {
 
     #[test]
     fn test_has_existing_preload() {
-        let html =
-            r#"<head><link rel="preload" as="image" href="/hero.jpg"></head>"#;
+        let html = r#"<head><link rel="preload" as="image" href="/hero.jpg"></head>"#;
         assert!(has_existing_preload(html, "/hero.jpg"));
         assert!(!has_existing_preload(html, "/other.jpg"));
     }

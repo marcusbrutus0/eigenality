@@ -20,9 +20,8 @@ use crate::config::CriticalCssConfig;
 
 /// Matches `@import` directives in CSS (both `url()` and string forms).
 static IMPORT_RE: LazyLock<regex::Regex> = LazyLock::new(|| {
-    regex::Regex::new(
-        r#"@import\s+(?:url\(\s*['"]?([^'")]+)['"]?\s*\)|['"]([^'"]+)['"]);?"#
-    ).expect("import regex is valid")
+    regex::Regex::new(r#"@import\s+(?:url\(\s*['"]?([^'")]+)['"]?\s*\)|['"]([^'"]+)['"]);?"#)
+        .expect("import regex is valid")
 });
 
 /// Cache for parsed stylesheets, keyed by href.
@@ -215,9 +214,7 @@ fn resolve_imports(
     let captures: Vec<_> = IMPORT_RE.captures_iter(css).collect();
 
     for cap in captures {
-        let import_path_str = cap.get(1).or(cap.get(2))
-            .map(|m| m.as_str())
-            .unwrap_or("");
+        let import_path_str = cap.get(1).or(cap.get(2)).map(|m| m.as_str()).unwrap_or("");
 
         // Skip external imports.
         if import_path_str.starts_with("http://") || import_path_str.starts_with("https://") {
@@ -238,24 +235,21 @@ fn resolve_imports(
         if import_path.exists() {
             match std::fs::read_to_string(&import_path) {
                 Ok(imported_css) => {
-                    let resolved = resolve_imports(
-                        &imported_css, &import_path, dist_dir, depth + 1
-                    )?;
+                    let resolved =
+                        resolve_imports(&imported_css, &import_path, dist_dir, depth + 1)?;
                     if let Some(full_match) = cap.get(0) {
                         result = result.replace(full_match.as_str(), &resolved);
                     }
                 }
                 Err(e) => {
-                    tracing::warn!(
-                        "Failed to read @import '{}': {e}",
-                        import_path.display(),
-                    );
+                    tracing::warn!("Failed to read @import '{}': {e}", import_path.display(),);
                 }
             }
         } else {
             tracing::warn!(
                 "File not found for @import '{}' in {}",
-                import_path_str, css_path.display()
+                import_path_str,
+                css_path.display()
             );
         }
     }
@@ -289,7 +283,10 @@ mod tests {
 
     #[test]
     fn test_inline_critical_css_no_links() {
-        let config = CriticalCssConfig { enabled: true, ..Default::default() };
+        let config = CriticalCssConfig {
+            enabled: true,
+            ..Default::default()
+        };
         let mut cache = StylesheetCache::new();
         let html = "<html><head><title>No CSS</title></head><body><p>Hi</p></body></html>";
         let result = inline_critical_css(html, &config, Path::new("/tmp"), &mut cache, None);
@@ -299,7 +296,10 @@ mod tests {
     #[test]
     fn test_inline_critical_css_file_not_found() {
         let tmp = TempDir::new().unwrap();
-        let config = CriticalCssConfig { enabled: true, ..Default::default() };
+        let config = CriticalCssConfig {
+            enabled: true,
+            ..Default::default()
+        };
         let mut cache = StylesheetCache::new();
         let html = r#"<html><head><link rel="stylesheet" href="/css/missing.css"></head></html>"#;
         let result = inline_critical_css(html, &config, tmp.path(), &mut cache, None);
@@ -312,12 +312,19 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let dist = tmp.path();
 
-        write_file(dist, "css/style.css", r#"
+        write_file(
+            dist,
+            "css/style.css",
+            r#"
             .hero { color: red; }
             .unused { color: green; }
-        "#);
+        "#,
+        );
 
-        let config = CriticalCssConfig { enabled: true, ..Default::default() };
+        let config = CriticalCssConfig {
+            enabled: true,
+            ..Default::default()
+        };
         let mut cache = StylesheetCache::new();
         let html = r#"<html><head><link rel="stylesheet" href="/css/style.css"></head><body><div class="hero">Hello</div></body></html>"#;
 
@@ -403,13 +410,20 @@ mod tests {
         let dist = tmp.path();
 
         write_file(dist, "css/base.css", ".base { margin: 0; }");
-        write_file(dist, "css/style.css", r#"
+        write_file(
+            dist,
+            "css/style.css",
+            r#"
             @import "base.css";
             .hero { color: red; }
             .unused { color: green; }
-        "#);
+        "#,
+        );
 
-        let config = CriticalCssConfig { enabled: true, ..Default::default() };
+        let config = CriticalCssConfig {
+            enabled: true,
+            ..Default::default()
+        };
         let mut cache = StylesheetCache::new();
         let html = r#"<html><head><link rel="stylesheet" href="/css/style.css"></head><body><div class="hero base">Hello</div></body></html>"#;
 
@@ -431,13 +445,15 @@ mod tests {
         let mut cache = StylesheetCache::new();
 
         // First load.
-        let css1 = cache.get_or_load("/css/style.css", dist, None)
+        let css1 = cache
+            .get_or_load("/css/style.css", dist, None)
             .map(|s| s.to_string());
         assert!(css1.is_some());
 
         // Second load should hit cache (even if file is deleted).
         fs::remove_file(dist.join("css/style.css")).unwrap();
-        let css2 = cache.get_or_load("/css/style.css", dist, None)
+        let css2 = cache
+            .get_or_load("/css/style.css", dist, None)
             .map(|s| s.to_string());
         assert!(css2.is_some());
         assert_eq!(css1, css2);
@@ -457,10 +473,7 @@ mod tests {
         fs::write(hashed_dir.join("style.abc123.css"), css).unwrap();
 
         let mut manifest = AssetManifest::new();
-        manifest.insert(
-            "/css/style.css".into(),
-            "/css/style.abc123.css".into(),
-        );
+        manifest.insert("/css/style.css".into(), "/css/style.abc123.css".into());
 
         let mut cache = StylesheetCache::new();
         let result = cache.get_or_load("/css/style.css", dist, Some(&manifest));

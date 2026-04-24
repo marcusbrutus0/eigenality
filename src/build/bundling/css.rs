@@ -18,8 +18,7 @@ use lightningcss::stylesheet::{ParserOptions, PrinterOptions, StyleSheet};
 use lightningcss::traits::ToCss;
 
 use crate::build::critical_css::extract::{
-    collect_global_deps, selector_matches, strip_pseudo_for_matching,
-    GlobalDependencies,
+    GlobalDependencies, collect_global_deps, selector_matches, strip_pseudo_for_matching,
 };
 
 /// Read and merge multiple CSS files into a single string.
@@ -32,10 +31,7 @@ use crate::build::critical_css::extract::{
 /// is needed.
 ///
 /// Missing files are skipped with a warning logged.
-pub fn merge_css_files(
-    hrefs: &[String],
-    dist_dir: &Path,
-) -> Result<String> {
+pub fn merge_css_files(hrefs: &[String], dist_dir: &Path) -> Result<String> {
     let mut merged = String::new();
     let mut files_merged = 0u32;
 
@@ -48,7 +44,8 @@ pub fn merge_css_files(
             Err(e) => {
                 tracing::warn!(
                     "CSS bundling: file '{}' not found, skipping: {}",
-                    file_path.display(), e
+                    file_path.display(),
+                    e
                 );
                 continue;
             }
@@ -71,7 +68,10 @@ pub fn merge_css_files(
     }
 
     if files_merged == 0 && !hrefs.is_empty() {
-        tracing::warn!("CSS bundling: all {} CSS file(s) failed to load", hrefs.len());
+        tracing::warn!(
+            "CSS bundling: all {} CSS file(s) failed to load",
+            hrefs.len()
+        );
     }
 
     Ok(merged)
@@ -79,9 +79,8 @@ pub fn merge_css_files(
 
 /// Matches `@import` directives in CSS (both `url()` and string forms).
 static IMPORT_RE: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
-    regex::Regex::new(
-        r#"@import\s+(?:url\(\s*['"]?([^'")]+)['"]?\s*\)|['"]([^'"]+)['"]);?"#
-    ).expect("import regex is valid")
+    regex::Regex::new(r#"@import\s+(?:url\(\s*['"]?([^'")]+)['"]?\s*\)|['"]([^'"]+)['"]);?"#)
+        .expect("import regex is valid")
 });
 
 /// Recursively resolve `@import` directives in CSS content.
@@ -89,12 +88,7 @@ static IMPORT_RE: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|
 /// This is equivalent to the `resolve_imports` in `critical_css/mod.rs`
 /// but without manifest-based path resolution (bundling runs before
 /// content hashing, so all files are at their original paths).
-fn resolve_imports(
-    css: &str,
-    css_path: &Path,
-    dist_dir: &Path,
-    depth: usize,
-) -> String {
+fn resolve_imports(css: &str, css_path: &Path, dist_dir: &Path, depth: usize) -> String {
     const MAX_IMPORT_DEPTH: usize = 10;
 
     if depth > MAX_IMPORT_DEPTH {
@@ -111,9 +105,7 @@ fn resolve_imports(
     let captures: Vec<_> = IMPORT_RE.captures_iter(css).collect();
 
     for cap in captures {
-        let import_path_str = cap.get(1).or(cap.get(2))
-            .map(|m| m.as_str())
-            .unwrap_or("");
+        let import_path_str = cap.get(1).or(cap.get(2)).map(|m| m.as_str()).unwrap_or("");
 
         // Skip external imports.
         if import_path_str.starts_with("http://") || import_path_str.starts_with("https://") {
@@ -134,24 +126,21 @@ fn resolve_imports(
         if import_path.exists() {
             match std::fs::read_to_string(&import_path) {
                 Ok(imported_css) => {
-                    let resolved = resolve_imports(
-                        &imported_css, &import_path, dist_dir, depth + 1
-                    );
+                    let resolved =
+                        resolve_imports(&imported_css, &import_path, dist_dir, depth + 1);
                     if let Some(full_match) = cap.get(0) {
                         result = result.replace(full_match.as_str(), &resolved);
                     }
                 }
                 Err(e) => {
-                    tracing::warn!(
-                        "Failed to read @import '{}': {e}",
-                        import_path.display(),
-                    );
+                    tracing::warn!("Failed to read @import '{}': {e}", import_path.display(),);
                 }
             }
         } else {
             tracing::warn!(
                 "File not found for @import '{}' in {}",
-                import_path_str, css_path.display()
+                import_path_str,
+                css_path.display()
             );
         }
     }
@@ -172,24 +161,19 @@ fn resolve_imports(
 /// 5. Serialize the surviving rules to a string.
 ///
 /// Returns the tree-shaken CSS string.
-pub fn tree_shake_css(
-    merged_css: &str,
-    html_files: &[PathBuf],
-    minify: bool,
-) -> Result<String> {
+pub fn tree_shake_css(merged_css: &str, html_files: &[PathBuf], minify: bool) -> Result<String> {
     // Step 1: Parse all HTML files into DOMs.
     let documents: Vec<scraper::Html> = html_files
         .iter()
-        .filter_map(|path| {
-            match std::fs::read_to_string(path) {
-                Ok(html) => Some(scraper::Html::parse_document(&html)),
-                Err(e) => {
-                    tracing::warn!(
-                        "Tree-shaking: failed to read HTML '{}': {}",
-                        path.display(), e
-                    );
-                    None
-                }
+        .filter_map(|path| match std::fs::read_to_string(path) {
+            Ok(html) => Some(scraper::Html::parse_document(&html)),
+            Err(e) => {
+                tracing::warn!(
+                    "Tree-shaking: failed to read HTML '{}': {}",
+                    path.display(),
+                    e
+                );
+                None
             }
         })
         .collect();
@@ -294,19 +278,29 @@ fn walk_rules(
         match rule {
             CssRule::Style(style_rule) => {
                 handle_style_rule(
-                    style_rule, documents, matched_rules,
-                    global_deps, custom_prop_rules, minify,
+                    style_rule,
+                    documents,
+                    matched_rules,
+                    global_deps,
+                    custom_prop_rules,
+                    minify,
                 );
             }
             CssRule::Media(media_rule) => {
                 let mut media_matched: Vec<String> = Vec::new();
                 walk_rules(
-                    &media_rule.rules.0, documents, &mut media_matched,
-                    global_deps, font_face_rules, keyframe_rules,
-                    custom_prop_rules, minify,
+                    &media_rule.rules.0,
+                    documents,
+                    &mut media_matched,
+                    global_deps,
+                    font_face_rules,
+                    keyframe_rules,
+                    custom_prop_rules,
+                    minify,
                 );
                 if !media_matched.is_empty() {
-                    let query = media_rule.query
+                    let query = media_rule
+                        .query
                         .to_css_string(printer(minify))
                         .unwrap_or_default();
                     let inner = media_matched.join("\n");
@@ -316,12 +310,18 @@ fn walk_rules(
             CssRule::Supports(supports_rule) => {
                 let mut supports_matched: Vec<String> = Vec::new();
                 walk_rules(
-                    &supports_rule.rules.0, documents, &mut supports_matched,
-                    global_deps, font_face_rules, keyframe_rules,
-                    custom_prop_rules, minify,
+                    &supports_rule.rules.0,
+                    documents,
+                    &mut supports_matched,
+                    global_deps,
+                    font_face_rules,
+                    keyframe_rules,
+                    custom_prop_rules,
+                    minify,
                 );
                 if !supports_matched.is_empty() {
-                    let condition = supports_rule.condition
+                    let condition = supports_rule
+                        .condition
                         .to_css_string(printer(minify))
                         .unwrap_or_default();
                     let inner = supports_matched.join("\n");
@@ -331,12 +331,19 @@ fn walk_rules(
             CssRule::LayerBlock(layer_rule) => {
                 let mut layer_matched: Vec<String> = Vec::new();
                 walk_rules(
-                    &layer_rule.rules.0, documents, &mut layer_matched,
-                    global_deps, font_face_rules, keyframe_rules,
-                    custom_prop_rules, minify,
+                    &layer_rule.rules.0,
+                    documents,
+                    &mut layer_matched,
+                    global_deps,
+                    font_face_rules,
+                    keyframe_rules,
+                    custom_prop_rules,
+                    minify,
                 );
                 if !layer_matched.is_empty() {
-                    let name = layer_rule.name.as_ref()
+                    let name = layer_rule
+                        .name
+                        .as_ref()
                         .and_then(|n| n.to_css_string(printer(minify)).ok())
                         .unwrap_or_default();
                     let inner = layer_matched.join("\n");
@@ -387,7 +394,8 @@ fn handle_style_rule(
     custom_prop_rules: &mut Vec<(String, String)>,
     minify: bool,
 ) {
-    let selector_list = style_rule.selectors
+    let selector_list = style_rule
+        .selectors
         .to_css_string(printer(minify))
         .unwrap_or_default();
 
@@ -482,7 +490,8 @@ mod tests {
         let result = merge_css_files(
             &["/css/reset.css".to_string(), "/css/style.css".to_string()],
             dist,
-        ).unwrap();
+        )
+        .unwrap();
 
         assert!(result.contains("/* Source: /css/reset.css */"));
         assert!(result.contains("/* Source: /css/style.css */"));
@@ -498,7 +507,11 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let dist = tmp.path();
         write_file(dist, "css/base.css", ".base { margin: 0; }");
-        write_file(dist, "css/style.css", "@import \"base.css\";\n.main { color: red; }");
+        write_file(
+            dist,
+            "css/style.css",
+            "@import \"base.css\";\n.main { color: red; }",
+        );
 
         let result = merge_css_files(&["/css/style.css".to_string()], dist).unwrap();
 
@@ -515,9 +528,13 @@ mod tests {
         write_file(dist, "css/exists.css", ".ok { color: green; }");
 
         let result = merge_css_files(
-            &["/css/missing.css".to_string(), "/css/exists.css".to_string()],
+            &[
+                "/css/missing.css".to_string(),
+                "/css/exists.css".to_string(),
+            ],
             dist,
-        ).unwrap();
+        )
+        .unwrap();
 
         // Missing file skipped, existing file included.
         assert!(!result.contains("missing"));
@@ -530,7 +547,11 @@ mod tests {
     fn test_tree_shake_removes_unused() {
         let tmp = TempDir::new().unwrap();
         let dist = tmp.path();
-        write_file(dist, "page.html", r#"<html><body><div class="used">Hello</div></body></html>"#);
+        write_file(
+            dist,
+            "page.html",
+            r#"<html><body><div class="used">Hello</div></body></html>"#,
+        );
 
         let css = ".used { color: red; } .unused { color: blue; }";
         let html_files = vec![dist.join("page.html")];
@@ -544,7 +565,11 @@ mod tests {
     fn test_tree_shake_keeps_used() {
         let tmp = TempDir::new().unwrap();
         let dist = tmp.path();
-        write_file(dist, "page.html", r#"<html><body><p class="hero">Hi</p></body></html>"#);
+        write_file(
+            dist,
+            "page.html",
+            r#"<html><body><p class="hero">Hi</p></body></html>"#,
+        );
 
         let css = ".hero { color: red; }";
         let html_files = vec![dist.join("page.html")];
@@ -558,7 +583,11 @@ mod tests {
     fn test_tree_shake_keeps_pseudo() {
         let tmp = TempDir::new().unwrap();
         let dist = tmp.path();
-        write_file(dist, "page.html", r#"<html><body><a class="link">Click</a></body></html>"#);
+        write_file(
+            dist,
+            "page.html",
+            r#"<html><body><a class="link">Click</a></body></html>"#,
+        );
 
         let css = ".link { color: blue; } .link:hover { color: red; }";
         let html_files = vec![dist.join("page.html")];
@@ -573,7 +602,11 @@ mod tests {
     fn test_tree_shake_media_query() {
         let tmp = TempDir::new().unwrap();
         let dist = tmp.path();
-        write_file(dist, "page.html", r#"<html><body><div class="card">Card</div></body></html>"#);
+        write_file(
+            dist,
+            "page.html",
+            r#"<html><body><div class="card">Card</div></body></html>"#,
+        );
 
         let css = r#"
             @media (max-width: 768px) {
@@ -593,7 +626,11 @@ mod tests {
     fn test_tree_shake_font_face() {
         let tmp = TempDir::new().unwrap();
         let dist = tmp.path();
-        write_file(dist, "page.html", r#"<html><body><h1 class="heading">Title</h1></body></html>"#);
+        write_file(
+            dist,
+            "page.html",
+            r#"<html><body><h1 class="heading">Title</h1></body></html>"#,
+        );
 
         let css = r#"
             @font-face {
@@ -616,7 +653,11 @@ mod tests {
     fn test_tree_shake_keyframes() {
         let tmp = TempDir::new().unwrap();
         let dist = tmp.path();
-        write_file(dist, "page.html", r#"<html><body><div class="spinner">Loading</div></body></html>"#);
+        write_file(
+            dist,
+            "page.html",
+            r#"<html><body><div class="spinner">Loading</div></body></html>"#,
+        );
 
         let css = r#"
             @keyframes spin {
@@ -663,7 +704,10 @@ mod tests {
 
         // Mobile-first base classes must be kept.
         assert!(result.contains(".flex"), "base .flex class was removed");
-        assert!(result.contains(".flex-col"), "base .flex-col class was removed");
+        assert!(
+            result.contains(".flex-col"),
+            "base .flex-col class was removed"
+        );
         assert!(result.contains(".hidden"), "base .hidden class was removed");
 
         // Desktop responsive classes inside @media must also be kept.
@@ -688,7 +732,11 @@ mod tests {
     fn test_tree_shake_empty_result() {
         let tmp = TempDir::new().unwrap();
         let dist = tmp.path();
-        write_file(dist, "page.html", "<html><body><div>No matching classes</div></body></html>");
+        write_file(
+            dist,
+            "page.html",
+            "<html><body><div>No matching classes</div></body></html>",
+        );
 
         let css = ".missing-a { color: red; } .missing-b { color: blue; }";
         let html_files = vec![dist.join("page.html")];
@@ -701,8 +749,16 @@ mod tests {
     fn test_tree_shake_multiple_docs() {
         let tmp = TempDir::new().unwrap();
         let dist = tmp.path();
-        write_file(dist, "a.html", r#"<html><body><div class="a-only">A</div></body></html>"#);
-        write_file(dist, "b.html", r#"<html><body><div class="b-only">B</div></body></html>"#);
+        write_file(
+            dist,
+            "a.html",
+            r#"<html><body><div class="a-only">A</div></body></html>"#,
+        );
+        write_file(
+            dist,
+            "b.html",
+            r#"<html><body><div class="b-only">B</div></body></html>"#,
+        );
 
         let css = ".a-only { color: red; } .b-only { color: blue; } .neither { color: green; }";
         let html_files = vec![dist.join("a.html"), dist.join("b.html")];

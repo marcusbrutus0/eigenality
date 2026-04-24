@@ -42,16 +42,16 @@ fn has_existing_json_ld(html: &str) -> bool {
 /// Determine which schema types to generate from page-level and site-level config.
 ///
 /// Returns an empty vec if no schemas should be generated.
-fn resolve_schema_types(
-    schema: &SchemaConfig,
-    site_schema: &SiteSchemaConfig,
-) -> Vec<String> {
+fn resolve_schema_types(schema: &SchemaConfig, site_schema: &SiteSchemaConfig) -> Vec<String> {
     match schema {
         Some(SchemaConfigValue::TypeName(t)) => vec![t.clone()],
         Some(SchemaConfigValue::TypeList(types)) => types.clone(),
-        Some(SchemaConfigValue::Full(full)) => {
-            full.types.to_vec().into_iter().map(|s| s.to_string()).collect()
-        }
+        Some(SchemaConfigValue::Full(full)) => full
+            .types
+            .to_vec()
+            .into_iter()
+            .map(|s| s.to_string())
+            .collect(),
         None => {
             // Fall back to site-level default_types.
             site_schema.default_types.clone()
@@ -97,7 +97,9 @@ fn build_article_schema(
     obj.insert("@type".into(), "Article".into());
 
     // Headline: seo.title > site.seo.title > site.name
-    let headline = seo.title.as_deref()
+    let headline = seo
+        .title
+        .as_deref()
         .or(site_config.seo.title.as_deref())
         .unwrap_or(&site_config.name);
     obj.insert("headline".into(), headline.into());
@@ -107,15 +109,16 @@ fn build_article_schema(
     obj.insert("url".into(), url.into());
 
     // Description (optional)
-    let description = seo.description.as_deref()
+    let description = seo
+        .description
+        .as_deref()
         .or(site_config.seo.description.as_deref());
     if let Some(desc) = description {
         obj.insert("description".into(), desc.into());
     }
 
     // Image (optional, must be absolute)
-    let image = seo.image.as_deref()
-        .or(site_config.seo.image.as_deref());
+    let image = seo.image.as_deref().or(site_config.seo.image.as_deref());
     if let Some(img) = image {
         let abs_img = make_absolute_url(img, &site_config.base_url);
         obj.insert("image".into(), abs_img.into());
@@ -139,20 +142,27 @@ fn build_article_schema(
     }
 
     // Author (optional)
-    let author_name = full.and_then(|f| f.author.as_deref())
+    let author_name = full
+        .and_then(|f| f.author.as_deref())
         .or(site_config.schema.author.as_deref());
     if let Some(name) = author_name {
-        obj.insert("author".into(), serde_json::json!({
-            "@type": "Person",
-            "name": name,
-        }));
+        obj.insert(
+            "author".into(),
+            serde_json::json!({
+                "@type": "Person",
+                "name": name,
+            }),
+        );
     }
 
     // Publisher (always present -- site.name)
-    obj.insert("publisher".into(), serde_json::json!({
-        "@type": "Organization",
-        "name": site_config.name,
-    }));
+    obj.insert(
+        "publisher".into(),
+        serde_json::json!({
+            "@type": "Organization",
+            "name": site_config.name,
+        }),
+    );
 
     serde_json::Value::Object(obj)
 }
@@ -179,9 +189,7 @@ fn build_breadcrumb_schema(
     // Extract breadcrumb name overrides.
     let empty = HashMap::new();
     let name_overrides: &HashMap<String, String> = match schema {
-        Some(SchemaConfigValue::Full(f)) => {
-            f.breadcrumb_names.as_ref().unwrap_or(&empty)
-        }
+        Some(SchemaConfigValue::Full(f)) => f.breadcrumb_names.as_ref().unwrap_or(&empty),
         _ => &empty,
     };
 
@@ -202,7 +210,8 @@ fn build_breadcrumb_schema(
         accumulated_path.push('/');
         accumulated_path.push_str(segment);
 
-        let display_name = name_overrides.get(*segment)
+        let display_name = name_overrides
+            .get(*segment)
             .map(|s| s.as_str())
             .unwrap_or_else(|| {
                 // Strip .html extension for the last segment.
@@ -257,10 +266,7 @@ fn inject_into_head(html: &str, script_html: &str) -> Result<String, String> {
         html,
         lol_html::RewriteStrSettings {
             element_content_handlers: vec![lol_html::element!("head", move |el| {
-                el.append(
-                    &script_owned,
-                    lol_html::html_content::ContentType::Html,
-                );
+                el.append(&script_owned, lol_html::html_content::ContentType::Html);
                 Ok(())
             })],
             ..lol_html::RewriteStrSettings::new()
@@ -289,7 +295,10 @@ pub fn inject_json_ld(
 
     // 2. Check for existing JSON-LD.
     if has_existing_json_ld(html) {
-        tracing::debug!("Existing JSON-LD found, skipping injection for {}", current_url);
+        tracing::debug!(
+            "Existing JSON-LD found, skipping injection for {}",
+            current_url
+        );
         return html.to_string();
     }
 
@@ -320,7 +329,8 @@ pub fn inject_json_ld(
                 Err(e) => {
                     tracing::warn!(
                         "Failed to serialize JSON-LD for type '{}': {}",
-                        type_name, e,
+                        type_name,
+                        e,
                     );
                 }
             }
@@ -355,7 +365,12 @@ pub fn resolve_schema_expressions(
             Some(SchemaConfigValue::Full(SchemaFullConfig {
                 types: full.types.clone(),
                 author: resolve_field(&full.author, env, ctx, "schema.author"),
-                date_published: resolve_field(&full.date_published, env, ctx, "schema.date_published"),
+                date_published: resolve_field(
+                    &full.date_published,
+                    env,
+                    ctx,
+                    "schema.date_published",
+                ),
                 date_modified: resolve_field(&full.date_modified, env, ctx, "schema.date_modified"),
                 breadcrumb_names: full.breadcrumb_names.clone(), // No expression resolution for map values.
             }))
@@ -391,7 +406,9 @@ fn resolve_field(
         Err(err) => {
             tracing::warn!(
                 "Failed to resolve '{}' expression '{}': {}",
-                field_name, value, err,
+                field_name,
+                value,
+                err,
             );
             None
         }
@@ -401,7 +418,7 @@ fn resolve_field(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{SiteSeoConfig, SiteSchemaConfig};
+    use crate::config::{SiteSchemaConfig, SiteSeoConfig};
     use crate::frontmatter::SchemaTypes;
 
     fn test_site(name: &str, base_url: &str) -> SiteMeta {
@@ -455,9 +472,10 @@ mod tests {
 
     #[test]
     fn test_resolve_schema_types_from_frontmatter_list() {
-        let schema: SchemaConfig = Some(SchemaConfigValue::TypeList(
-            vec!["Article".into(), "BreadcrumbList".into()],
-        ));
+        let schema: SchemaConfig = Some(SchemaConfigValue::TypeList(vec![
+            "Article".into(),
+            "BreadcrumbList".into(),
+        ]));
         let site = SiteSchemaConfig::default();
         let types = resolve_schema_types(&schema, &site);
         assert_eq!(types, vec!["Article", "BreadcrumbList"]);
@@ -548,7 +566,11 @@ mod tests {
     #[test]
     fn test_build_article_schema_auto_populates_from_seo() {
         let schema: SchemaConfig = Some(SchemaConfigValue::TypeName("Article".into()));
-        let seo = test_seo(Some("SEO Title"), Some("SEO Desc"), Some("https://cdn.example.com/img.jpg"));
+        let seo = test_seo(
+            Some("SEO Title"),
+            Some("SEO Desc"),
+            Some("https://cdn.example.com/img.jpg"),
+        );
         let site = test_site("My Site", "https://example.com");
 
         let value = build_article_schema(&schema, &seo, &site, "/page.html");
@@ -585,7 +607,10 @@ mod tests {
         assert_eq!(items[2]["position"], 3);
 
         assert_eq!(items[3]["name"], "my-article");
-        assert_eq!(items[3]["item"], "https://example.com/blog/posts/my-article.html");
+        assert_eq!(
+            items[3]["item"],
+            "https://example.com/blog/posts/my-article.html"
+        );
         assert_eq!(items[3]["position"], 4);
     }
 
@@ -699,9 +724,10 @@ mod tests {
         let mut site = test_site("My Site", "https://example.com");
         site.seo.description = Some("A great site".into());
         let seo = test_seo(Some("My Post"), None, None);
-        let schema: SchemaConfig = Some(SchemaConfigValue::TypeList(
-            vec!["Article".into(), "WebSite".into()],
-        ));
+        let schema: SchemaConfig = Some(SchemaConfigValue::TypeList(vec![
+            "Article".into(),
+            "WebSite".into(),
+        ]));
 
         let result = inject_json_ld(html, &schema, &seo, &site, "/page.html");
 

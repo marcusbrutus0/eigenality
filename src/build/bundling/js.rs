@@ -22,10 +22,7 @@ use eyre::Result;
 /// declarations from leaking into the global scope.
 ///
 /// Missing files are skipped with a warning logged.
-pub fn merge_js_files(
-    srcs: &[String],
-    dist_dir: &Path,
-) -> Result<String> {
+pub fn merge_js_files(srcs: &[String], dist_dir: &Path) -> Result<String> {
     let mut merged = String::new();
     let mut files_merged = 0u32;
 
@@ -38,7 +35,8 @@ pub fn merge_js_files(
             Err(e) => {
                 tracing::warn!(
                     "JS bundling: file '{}' not found, skipping: {}",
-                    file_path.display(), e
+                    file_path.display(),
+                    e
                 );
                 continue;
             }
@@ -105,7 +103,8 @@ mod tests {
         let result = merge_js_files(
             &["/js/utils.js".to_string(), "/js/app.js".to_string()],
             dist,
-        ).unwrap();
+        )
+        .unwrap();
 
         // Both files should be wrapped in IIFEs.
         assert_eq!(result.matches(";(function(){").count(), 2);
@@ -128,7 +127,8 @@ mod tests {
         let result = merge_js_files(
             &["/js/missing.js".to_string(), "/js/exists.js".to_string()],
             dist,
-        ).unwrap();
+        )
+        .unwrap();
 
         // Missing file is skipped, existing file is included.
         assert!(!result.contains("missing.js"));

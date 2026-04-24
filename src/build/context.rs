@@ -76,7 +76,9 @@ pub fn build_page_context(
             tracing::debug!(
                 "Frontmatter data key '{}' overrides global data from _data/. \
                  The global data for '{}' will not be available in this template: {}.",
-                k, k, page_meta.current_path
+                k,
+                k,
+                page_meta.current_path
             );
         }
         ctx.insert(k.clone(), Value::from_serialize(v));
@@ -104,7 +106,7 @@ pub fn build_page_context(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{BuildConfig, SiteSchemaConfig, SiteMeta, SiteSeoConfig};
+    use crate::config::{BuildConfig, SiteMeta, SiteSchemaConfig, SiteSeoConfig};
     use std::collections::HashMap;
 
     fn test_config() -> SiteConfig {

@@ -125,9 +125,7 @@ impl AuditReport {
         let mut by_category: BTreeMap<Category, usize> = BTreeMap::new();
         let mut total = 0;
 
-        let all_findings = site_findings
-            .iter()
-            .chain(page_findings.values().flatten());
+        let all_findings = site_findings.iter().chain(page_findings.values().flatten());
 
         for f in all_findings {
             total += 1;
@@ -172,13 +170,9 @@ pub fn run_audit(
             Err(_) => continue,
         };
 
-        let template_path = page
-            .template_path
-            .as_deref()
-            .unwrap_or("(unknown)");
+        let template_path = page.template_path.as_deref().unwrap_or("(unknown)");
 
-        let mut findings =
-            checks::run_page_checks(&html, &page.url_path, template_path, config);
+        let mut findings = checks::run_page_checks(&html, &page.url_path, template_path, config);
         findings.retain(|f| !ignore_ids.contains(&f.id));
 
         if !findings.is_empty() {
@@ -236,7 +230,8 @@ mod tests {
         let report = run_audit(&config, dist, &pages).unwrap();
 
         // With ignore list covering all site findings.
-        let all_site_ids: Vec<String> = report.site_findings
+        let all_site_ids: Vec<String> = report
+            .site_findings
             .iter()
             .map(|f| f.id.to_string())
             .collect();

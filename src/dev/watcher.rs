@@ -31,10 +31,7 @@ pub enum RebuildScope {
 ///
 /// Sends a `RebuildScope` on `rebuild_tx` whenever relevant files change.
 /// This function blocks forever (or until the sender is dropped).
-pub fn watch(
-    project_root: &Path,
-    rebuild_tx: broadcast::Sender<RebuildScope>,
-) -> Result<()> {
+pub fn watch(project_root: &Path, rebuild_tx: broadcast::Sender<RebuildScope>) -> Result<()> {
     let templates_dir = project_root.join("templates");
     let data_dir = project_root.join("_data");
     let static_dir = project_root.join("static");
@@ -43,7 +40,10 @@ pub fn watch(
     let (tx, rx) = mpsc::channel();
 
     let mut watcher = notify::recommended_watcher(move |res: notify::Result<notify::Event>| {
-        if let Ok(event) = res && !event.kind.is_other() && !event.kind.is_access() {
+        if let Ok(event) = res
+            && !event.kind.is_other()
+            && !event.kind.is_access()
+        {
             let _ = tx.send(event);
         }
     })?;
@@ -80,7 +80,6 @@ pub fn watch(
                         Err(mpsc::RecvTimeoutError::Disconnected) => return Ok(()),
                     }
                 }
-
 
                 // Classify the scope.
                 let scope = classify_changes(&all_paths, project_root);

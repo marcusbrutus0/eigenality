@@ -410,7 +410,8 @@ mod tests {
 
     #[test]
     fn test_frontmatter_line_count_multiline() {
-        let content = "---\ncollection:\n  source: api\n  path: /posts\nslug_field: id\n---\n<div>tmpl</div>";
+        let content =
+            "---\ncollection:\n  source: api\n  path: /posts\nslug_field: id\n---\n<div>tmpl</div>";
         // 6 newlines before the body
         assert_eq!(frontmatter_line_count(content), 6);
     }

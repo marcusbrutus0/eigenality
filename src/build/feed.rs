@@ -266,9 +266,7 @@ fn format_atom_date(value: &serde_json::Value, build_time: &str) -> String {
 
     // Try date-only (YYYY-MM-DD) -> midnight UTC.
     if let Ok(date) = chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d") {
-        let dt = date
-            .and_hms_opt(0, 0, 0)
-            .expect("midnight is always valid");
+        let dt = date.and_hms_opt(0, 0, 0).expect("midnight is always valid");
         return chrono::DateTime::<chrono::Utc>::from_naive_utc_and_offset(dt, chrono::Utc)
             .to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
     }
@@ -288,7 +286,10 @@ mod tests {
     use crate::build::rate_limit::RateLimiterPool;
 
     fn no_op_pool() -> Arc<RateLimiterPool> {
-        Arc::new(RateLimiterPool::new(None, &std::collections::HashMap::new()))
+        Arc::new(RateLimiterPool::new(
+            None,
+            &std::collections::HashMap::new(),
+        ))
     }
 
     fn test_feed_config() -> FeedConfig {
@@ -403,8 +404,12 @@ mod tests {
             "date": "2026-03-17T12:00:00Z"
         });
 
-        let entry =
-            render_entry(&item, &config, "https://example.com", "2026-01-01T00:00:00Z");
+        let entry = render_entry(
+            &item,
+            &config,
+            "https://example.com",
+            "2026-01-01T00:00:00Z",
+        );
         assert!(entry.is_some());
         let xml = entry.unwrap();
         assert!(xml.contains("<title>Hello World</title>"));
@@ -418,8 +423,12 @@ mod tests {
         config.link_prefix = Some("blog".into());
         let item = json!({"title": "Post", "slug": "my-post", "date": "2026-03-17"});
 
-        let entry =
-            render_entry(&item, &config, "https://example.com", "2026-01-01T00:00:00Z");
+        let entry = render_entry(
+            &item,
+            &config,
+            "https://example.com",
+            "2026-01-01T00:00:00Z",
+        );
         let xml = entry.unwrap();
         assert!(xml.contains("https://example.com/blog/my-post.html"));
     }
@@ -435,8 +444,12 @@ mod tests {
             "excerpt": "A short summary."
         });
 
-        let entry =
-            render_entry(&item, &config, "https://example.com", "2026-01-01T00:00:00Z");
+        let entry = render_entry(
+            &item,
+            &config,
+            "https://example.com",
+            "2026-01-01T00:00:00Z",
+        );
         let xml = entry.unwrap();
         assert!(xml.contains("<summary>A short summary.</summary>"));
     }
@@ -446,8 +459,12 @@ mod tests {
         let config = test_feed_config();
         let item = json!({"slug": "no-title", "date": "2026-03-17"});
 
-        let entry =
-            render_entry(&item, &config, "https://example.com", "2026-01-01T00:00:00Z");
+        let entry = render_entry(
+            &item,
+            &config,
+            "https://example.com",
+            "2026-01-01T00:00:00Z",
+        );
         assert!(entry.is_none());
     }
 
@@ -456,8 +473,12 @@ mod tests {
         let config = test_feed_config();
         let item = json!({"title": "No Slug", "date": "2026-03-17"});
 
-        let entry =
-            render_entry(&item, &config, "https://example.com", "2026-01-01T00:00:00Z");
+        let entry = render_entry(
+            &item,
+            &config,
+            "https://example.com",
+            "2026-01-01T00:00:00Z",
+        );
         assert!(entry.is_none());
     }
 
@@ -470,8 +491,12 @@ mod tests {
             "date": "2026-03-17"
         });
 
-        let entry =
-            render_entry(&item, &config, "https://example.com", "2026-01-01T00:00:00Z");
+        let entry = render_entry(
+            &item,
+            &config,
+            "https://example.com",
+            "2026-01-01T00:00:00Z",
+        );
         let xml = entry.unwrap();
         assert!(xml.contains("Tom &amp; Jerry &lt;Show&gt;"));
     }
@@ -488,8 +513,12 @@ mod tests {
             "publishedAt": "2026-03-17T10:00:00Z"
         });
 
-        let entry =
-            render_entry(&item, &config, "https://example.com", "2026-01-01T00:00:00Z");
+        let entry = render_entry(
+            &item,
+            &config,
+            "https://example.com",
+            "2026-01-01T00:00:00Z",
+        );
         let xml = entry.unwrap();
         assert!(xml.contains("<title>Release v1.0</title>"));
         assert!(xml.contains("https://example.com/v1-0.html"));
@@ -501,8 +530,12 @@ mod tests {
         let config = test_feed_config();
         let item = json!({"title": "Post", "slug": 42, "date": "2026-03-17"});
 
-        let entry =
-            render_entry(&item, &config, "https://example.com", "2026-01-01T00:00:00Z");
+        let entry = render_entry(
+            &item,
+            &config,
+            "https://example.com",
+            "2026-01-01T00:00:00Z",
+        );
         let xml = entry.unwrap();
         assert!(xml.contains("https://example.com/42.html"));
     }

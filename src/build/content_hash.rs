@@ -218,7 +218,10 @@ pub fn build_manifest(
         // The file in dist/ has the same relative path.
         let dist_path = dist_dir.join(rel_path);
         if !dist_path.exists() {
-            tracing::warn!("Content hash: expected file not found in dist: {}", dist_path.display());
+            tracing::warn!(
+                "Content hash: expected file not found in dist: {}",
+                dist_path.display()
+            );
             continue;
         }
 
@@ -226,7 +229,11 @@ pub fn build_manifest(
         let data = match std::fs::read(&dist_path) {
             Ok(d) => d,
             Err(e) => {
-                tracing::warn!("Content hash: failed to read {}: {}", dist_path.display(), e);
+                tracing::warn!(
+                    "Content hash: failed to read {}: {}",
+                    dist_path.display(),
+                    e
+                );
                 continue;
             }
         };
@@ -277,10 +284,7 @@ pub fn build_manifest(
 ///
 /// These files exist only in dist/ (no static/ counterpart). The returned
 /// manifest is used alongside the main manifest during reference rewriting.
-pub fn hash_additional_files(
-    dist_dir: &Path,
-    relative_paths: &[String],
-) -> Result<AssetManifest> {
+pub fn hash_additional_files(dist_dir: &Path, relative_paths: &[String]) -> Result<AssetManifest> {
     let mut manifest = AssetManifest::with_capacity(relative_paths.len());
 
     for rel_path in relative_paths {
@@ -295,33 +299,31 @@ pub fn hash_additional_files(
         }
 
         let data = std::fs::read(&file_path)
-            .wrap_err_with(|| format!(
-                "Failed to read generated file '{}'",
-                file_path.display()
-            ))?;
+            .wrap_err_with(|| format!("Failed to read generated file '{}'", file_path.display()))?;
 
         let hash = content_hash(&data);
 
         let filename = file_path
             .file_name()
             .and_then(|f| f.to_str())
-            .ok_or_else(|| eyre::eyre!(
-                "Invalid filename: {}", file_path.display()
-            ))?;
+            .ok_or_else(|| eyre::eyre!("Invalid filename: {}", file_path.display()))?;
 
         let hashed_name = hashed_filename(filename, &hash);
         let hashed_path = file_path.with_file_name(&hashed_name);
 
         // Rename the file.
-        std::fs::rename(&file_path, &hashed_path)
-            .wrap_err_with(|| format!(
+        std::fs::rename(&file_path, &hashed_path).wrap_err_with(|| {
+            format!(
                 "Failed to rename '{}' to '{}'",
-                file_path.display(), hashed_path.display()
-            ))?;
+                file_path.display(),
+                hashed_path.display()
+            )
+        })?;
 
         // Build URL paths with leading slash.
         let original_url = format!("/{rel_path}");
-        let hashed_rel = rel_path.rsplit_once('/')
+        let hashed_rel = rel_path
+            .rsplit_once('/')
             .map(|(dir, _)| format!("{dir}/{hashed_name}"))
             .unwrap_or(hashed_name.clone());
         let hashed_url = format!("/{hashed_rel}");
@@ -387,10 +389,7 @@ pub fn rewrite_references(
         }
 
         let path = entry.path();
-        let ext = path
-            .extension()
-            .and_then(|e| e.to_str())
-            .unwrap_or("");
+        let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
 
         // Only process text files that may contain asset references.
         if ext != "html" && ext != "css" && ext != "js" {
@@ -411,10 +410,7 @@ pub fn rewrite_references(
 
         if let Some(rewritten) = rewrite_file_content(&content, &all_pairs) {
             std::fs::write(path, rewritten).wrap_err_with(|| {
-                format!(
-                    "Content hash rewrite: failed to write {}",
-                    path.display(),
-                )
+                format!("Content hash rewrite: failed to write {}", path.display(),)
             })?;
         }
     }
@@ -632,7 +628,10 @@ mod tests {
         let config = hash_config();
         let manifest = build_manifest(&dist_dir, &static_dir, &config).unwrap();
 
-        assert!(manifest.is_empty(), "excluded files should not be in manifest");
+        assert!(
+            manifest.is_empty(),
+            "excluded files should not be in manifest"
+        );
         // Files should still be at their original names.
         assert!(dist_dir.join("favicon.ico").exists());
         assert!(dist_dir.join("robots.txt").exists());
@@ -837,7 +836,11 @@ mod tests {
         let tmp = tempfile::TempDir::new().unwrap();
         let dist = tmp.path();
 
-        write_file(dist, "css/style.css", r#"body { background: url('/images/bg.png'); }"#);
+        write_file(
+            dist,
+            "css/style.css",
+            r#"body { background: url('/images/bg.png'); }"#,
+        );
 
         let mut m = AssetManifest::new();
         m.insert("/images/bg.png".into(), "/images/bg.abc123.png".into());
@@ -887,10 +890,17 @@ mod tests {
         let tmp = tempfile::TempDir::new().unwrap();
         let dist = tmp.path();
 
-        write_file(dist, "_fragments/about.html", r#"<img src="/images/photo.jpg">"#);
+        write_file(
+            dist,
+            "_fragments/about.html",
+            r#"<img src="/images/photo.jpg">"#,
+        );
 
         let mut m = AssetManifest::new();
-        m.insert("/images/photo.jpg".into(), "/images/photo.abc123.jpg".into());
+        m.insert(
+            "/images/photo.jpg".into(),
+            "/images/photo.abc123.jpg".into(),
+        );
 
         rewrite_references(dist, &m, None).unwrap();
 
@@ -929,7 +939,8 @@ mod tests {
         let hash = content_hash(&data);
         assert_eq!(hash.len(), 16, "hash must be exactly 16 chars");
         assert!(
-            hash.chars().all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()),
+            hash.chars()
+                .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()),
             "hash must be all lowercase hex, got: {hash}"
         );
     }
@@ -968,7 +979,9 @@ mod tests {
     #[hegel::test]
     fn prop_rewrite_file_content_idempotence(tc: hegel::TestCase) {
         let key: String = tc.draw(generators::from_regex(r"/[a-z]{1,8}\.[a-z]{1,4}"));
-        let value: String = tc.draw(generators::from_regex(r"/[a-z]{1,8}\.[0-9a-f]{8}\.[a-z]{1,4}"));
+        let value: String = tc.draw(generators::from_regex(
+            r"/[a-z]{1,8}\.[0-9a-f]{8}\.[a-z]{1,4}",
+        ));
         tc.assume(key != value);
         tc.assume(!value.contains(&key));
 
@@ -1086,9 +1099,21 @@ mod tests {
 
         // Verify HTML was rewritten.
         let result = std::fs::read_to_string(dist_dir.join("index.html")).unwrap();
-        assert!(result.contains(css_hashed), "CSS reference should be rewritten");
-        assert!(result.contains(js_hashed), "JS reference should be rewritten");
-        assert!(!result.contains(r#"href="/css/style.css""#), "original CSS ref should be gone");
-        assert!(!result.contains(r#"src="/js/app.js""#), "original JS ref should be gone");
+        assert!(
+            result.contains(css_hashed),
+            "CSS reference should be rewritten"
+        );
+        assert!(
+            result.contains(js_hashed),
+            "JS reference should be rewritten"
+        );
+        assert!(
+            !result.contains(r#"href="/css/style.css""#),
+            "original CSS ref should be gone"
+        );
+        assert!(
+            !result.contains(r#"src="/js/app.js""#),
+            "original JS ref should be gone"
+        );
     }
 }

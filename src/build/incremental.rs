@@ -12,9 +12,9 @@ use std::collections::HashMap;
 use std::path::Path;
 
 use eyre::{Result, WrapErr};
+use hex;
 use sha2::{Digest, Sha256};
 use walkdir::WalkDir;
-use hex;
 
 use crate::build::content_hash::AssetManifest;
 
@@ -224,7 +224,9 @@ pub fn compute_content_manifest_hash(manifest: &AssetManifest) -> String {
 /// Returns `None` on any I/O or parse error — a missing or corrupt manifest
 /// is treated as a first run.
 pub fn load_manifest(project_root: &Path) -> Option<BuildManifest> {
-    let path = project_root.join(".eigen_cache").join("build_manifest.json");
+    let path = project_root
+        .join(".eigen_cache")
+        .join("build_manifest.json");
     let text = std::fs::read_to_string(&path).ok()?;
     serde_json::from_str(&text).ok()
 }
@@ -236,11 +238,10 @@ pub fn load_manifest(project_root: &Path) -> Option<BuildManifest> {
 /// surprising and wasteful).
 pub fn save_manifest(project_root: &Path, manifest: &BuildManifest) -> Result<()> {
     let dir = project_root.join(".eigen_cache");
-    std::fs::create_dir_all(&dir)
-        .wrap_err("Failed to create .eigen_cache directory")?;
+    std::fs::create_dir_all(&dir).wrap_err("Failed to create .eigen_cache directory")?;
     let path = dir.join("build_manifest.json");
-    let json = serde_json::to_string_pretty(manifest)
-        .wrap_err("Failed to serialize build manifest")?;
+    let json =
+        serde_json::to_string_pretty(manifest).wrap_err("Failed to serialize build manifest")?;
     std::fs::write(&path, json)
         .wrap_err_with(|| format!("Failed to write build manifest to {}", path.display()))?;
     Ok(())
@@ -322,8 +323,9 @@ pub fn delete_orphan_outputs(
         for rel_file in &prev_record.output_files {
             let abs_path = dist_dir.join(rel_file);
             if abs_path.exists() {
-                std::fs::remove_file(&abs_path)
-                    .wrap_err_with(|| format!("Failed to delete orphan output {}", abs_path.display()))?;
+                std::fs::remove_file(&abs_path).wrap_err_with(|| {
+                    format!("Failed to delete orphan output {}", abs_path.display())
+                })?;
                 deleted += 1;
                 tracing::debug!("Deleted orphan output: {}", abs_path.display());
             }
@@ -430,9 +432,15 @@ mod tests {
     #[test]
     fn test_content_manifest_hash_deterministic() {
         let mut m = AssetManifest::new();
-        m.insert("/css/style.css".to_string(), "/css/style.abc123.css".to_string());
+        m.insert(
+            "/css/style.css".to_string(),
+            "/css/style.abc123.css".to_string(),
+        );
         m.insert("/js/app.js".to_string(), "/js/app.def456.js".to_string());
-        m.insert("/img/logo.png".to_string(), "/img/logo.ghi789.png".to_string());
+        m.insert(
+            "/img/logo.png".to_string(),
+            "/img/logo.ghi789.png".to_string(),
+        );
 
         let h1 = compute_content_manifest_hash(&m);
         let h2 = compute_content_manifest_hash(&m);
@@ -519,8 +527,12 @@ mod tests {
         let rec = sample_record(vec!["index.html".to_string()]);
         let data = HashMap::from([("posts".to_string(), "dhash".to_string())]);
         assert!(!page_changed(
-            Some(&rec), "thash", "fmhash", &data,
-            &["index.html".to_string()], tmp.path(),
+            Some(&rec),
+            "thash",
+            "fmhash",
+            &data,
+            &["index.html".to_string()],
+            tmp.path(),
         ));
     }
 
@@ -528,7 +540,14 @@ mod tests {
     fn test_page_changed_no_prev_record() {
         let tmp = TempDir::new().unwrap();
         let data = HashMap::new();
-        assert!(page_changed(None, "thash", "fmhash", &data, &[], tmp.path()));
+        assert!(page_changed(
+            None,
+            "thash",
+            "fmhash",
+            &data,
+            &[],
+            tmp.path()
+        ));
     }
 
     #[test]
@@ -538,8 +557,12 @@ mod tests {
         let rec = sample_record(vec!["index.html".to_string()]);
         let data = HashMap::from([("posts".to_string(), "dhash".to_string())]);
         assert!(page_changed(
-            Some(&rec), "CHANGED", "fmhash", &data,
-            &["index.html".to_string()], tmp.path(),
+            Some(&rec),
+            "CHANGED",
+            "fmhash",
+            &data,
+            &["index.html".to_string()],
+            tmp.path(),
         ));
     }
 
@@ -550,8 +573,12 @@ mod tests {
         let rec = sample_record(vec!["index.html".to_string()]);
         let data = HashMap::from([("posts".to_string(), "dhash".to_string())]);
         assert!(page_changed(
-            Some(&rec), "thash", "CHANGED", &data,
-            &["index.html".to_string()], tmp.path(),
+            Some(&rec),
+            "thash",
+            "CHANGED",
+            &data,
+            &["index.html".to_string()],
+            tmp.path(),
         ));
     }
 
@@ -562,8 +589,12 @@ mod tests {
         let rec = sample_record(vec!["index.html".to_string()]);
         let data = HashMap::from([("posts".to_string(), "CHANGED".to_string())]);
         assert!(page_changed(
-            Some(&rec), "thash", "fmhash", &data,
-            &["index.html".to_string()], tmp.path(),
+            Some(&rec),
+            "thash",
+            "fmhash",
+            &data,
+            &["index.html".to_string()],
+            tmp.path(),
         ));
     }
 
@@ -574,8 +605,12 @@ mod tests {
         let rec = sample_record(vec!["index.html".to_string()]);
         let data = HashMap::from([("posts".to_string(), "dhash".to_string())]);
         assert!(page_changed(
-            Some(&rec), "thash", "fmhash", &data,
-            &["index.html".to_string()], tmp.path(),
+            Some(&rec),
+            "thash",
+            "fmhash",
+            &data,
+            &["index.html".to_string()],
+            tmp.path(),
         ));
     }
 
@@ -586,16 +621,19 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let mut m = BuildManifest::new_empty();
         m.config_hash = "config123".to_string();
-        m.pages.insert("/".to_string(), PageRecord {
-            template_path: "index.html".to_string(),
-            template_hash: "t".to_string(),
-            frontmatter_hash: "f".to_string(),
-            data_hashes: HashMap::new(),
-            output_files: vec!["index.html".to_string()],
-            url_path: "/".to_string(),
-            is_index: true,
-            is_dynamic: false,
-        });
+        m.pages.insert(
+            "/".to_string(),
+            PageRecord {
+                template_path: "index.html".to_string(),
+                template_hash: "t".to_string(),
+                frontmatter_hash: "f".to_string(),
+                data_hashes: HashMap::new(),
+                output_files: vec!["index.html".to_string()],
+                url_path: "/".to_string(),
+                is_index: true,
+                is_dynamic: false,
+            },
+        );
 
         save_manifest(tmp.path(), &m).unwrap();
         let loaded = load_manifest(tmp.path()).expect("should load manifest");
@@ -759,8 +797,17 @@ mod tests {
 
         let deleted = delete_orphan_outputs(&prev, &current, &dist).unwrap();
         assert_eq!(deleted, 1);
-        assert!(!dist.join("posts/old-post/index.html").exists(), "removed slug output must be deleted");
-        assert!(dist.join("posts/kept-post/index.html").exists(), "active slug output must be kept");
-        assert!(!current.pages.contains_key("/posts/old-post/index.html"), "removed slug must not be in current manifest");
+        assert!(
+            !dist.join("posts/old-post/index.html").exists(),
+            "removed slug output must be deleted"
+        );
+        assert!(
+            dist.join("posts/kept-post/index.html").exists(),
+            "active slug output must be kept"
+        );
+        assert!(
+            !current.pages.contains_key("/posts/old-post/index.html"),
+            "removed slug must not be in current manifest"
+        );
     }
 }

@@ -50,9 +50,7 @@ pub fn setup_environment(
     // is author-controlled (not user input), so HTML escaping is unnecessary
     // and causes issues with URLs containing `/` being escaped to `&#x2f;`.
     // Authors can use the `|e` filter explicitly if needed.
-    env.set_auto_escape_callback(|_name: &str| {
-        minijinja::AutoEscape::None
-    });
+    env.set_auto_escape_callback(|_name: &str| minijinja::AutoEscape::None);
 
     let templates_dir = project_root.join("templates");
 
@@ -85,9 +83,11 @@ pub fn setup_environment(
     }
 
     // 3. Set up the template loader using the collected map.
-    env.set_loader(move |name: &str| -> Result<Option<String>, minijinja::Error> {
-        Ok(template_map.get(name).cloned())
-    });
+    env.set_loader(
+        move |name: &str| -> Result<Option<String>, minijinja::Error> {
+            Ok(template_map.get(name).cloned())
+        },
+    );
 
     // 4. Register custom filters.
     filters::register_filters(&mut env, config);
@@ -116,7 +116,8 @@ fn collect_underscore_templates(templates_dir: &Path) -> Result<Vec<(String, Str
     }
 
     for entry in WalkDir::new(templates_dir).into_iter() {
-        let entry = entry.wrap_err("Failed to read entry while collecting layout/partial templates")?;
+        let entry =
+            entry.wrap_err("Failed to read entry while collecting layout/partial templates")?;
 
         if !entry.file_type().is_file() {
             continue;
@@ -137,14 +138,12 @@ fn collect_underscore_templates(templates_dir: &Path) -> Result<Vec<(String, Str
         // We want files that are _-prefixed themselves OR inside a _-prefixed dir.
         // The discovery phase already skipped these. We identify them by checking
         // if any component of the relative path starts with `_`.
-        let is_underscore = rel_path
-            .components()
-            .any(|c| {
-                c.as_os_str()
-                    .to_str()
-                    .map(|s| s.starts_with('_'))
-                    .unwrap_or(false)
-            });
+        let is_underscore = rel_path.components().any(|c| {
+            c.as_os_str()
+                .to_str()
+                .map(|s| s.starts_with('_'))
+                .unwrap_or(false)
+        });
 
         if !is_underscore {
             continue;
@@ -168,11 +167,11 @@ fn collect_underscore_templates(templates_dir: &Path) -> Result<Vec<(String, Str
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{BuildConfig, SiteSchemaConfig, SiteMeta, SiteSeoConfig};
+    use crate::config::{BuildConfig, SiteMeta, SiteSchemaConfig, SiteSeoConfig};
     use crate::discovery::{PageDef, PageType};
     use crate::frontmatter::Frontmatter;
-    use std::path::PathBuf;
     use std::fs;
+    use std::path::PathBuf;
     use tempfile::TempDir;
 
     fn test_config() -> SiteConfig {
@@ -215,7 +214,11 @@ mod tests {
         let tpl = tmp.path().join("templates");
         fs::create_dir_all(&tpl).unwrap();
 
-        write(tmp.path(), "templates/_base.html", "<!DOCTYPE html>{% block body %}{% endblock %}");
+        write(
+            tmp.path(),
+            "templates/_base.html",
+            "<!DOCTYPE html>{% block body %}{% endblock %}",
+        );
         write(tmp.path(), "templates/_partials/nav.html", "<nav>nav</nav>");
         write(tmp.path(), "templates/index.html", "<h1>Home</h1>");
 
@@ -232,8 +235,11 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let root = tmp.path();
 
-        write(root, "templates/_base.html",
-              "<!DOCTYPE html><html><body>{% block content %}{% endblock %}</body></html>");
+        write(
+            root,
+            "templates/_base.html",
+            "<!DOCTYPE html><html><body>{% block content %}{% endblock %}</body></html>",
+        );
         write(root, "templates/_partials/nav.html", "<nav>nav</nav>");
 
         let config = test_config();
@@ -245,7 +251,8 @@ mod tests {
             frontmatter: Frontmatter::default(),
             raw_frontmatter: String::new(),
             frontmatter_line_count: 0,
-            template_body: r#"{% extends "_base.html" %}{% block content %}<h1>Hi</h1>{% endblock %}"#.into(),
+            template_body:
+                r#"{% extends "_base.html" %}{% block content %}<h1>Hi</h1>{% endblock %}"#.into(),
         }];
 
         let env = setup_environment(root, &config, &pages, None, None, false, None).unwrap();
@@ -293,12 +300,11 @@ mod tests {
         struct TestPlugin;
 
         impl Plugin for TestPlugin {
-            fn name(&self) -> &str { "test_ext" }
+            fn name(&self) -> &str {
+                "test_ext"
+            }
 
-            fn register_template_extensions(
-                &self,
-                env: &mut Environment<'_>,
-            ) -> eyre::Result<()> {
+            fn register_template_extensions(&self, env: &mut Environment<'_>) -> eyre::Result<()> {
                 env.add_function("plugin_hello", || -> String {
                     "hello from plugin".to_string()
                 });
@@ -325,7 +331,8 @@ mod tests {
             template_body: "{{ plugin_hello() }}".into(),
         }];
 
-        let env = setup_environment(root, &config, &pages, Some(&registry), None, false, None).unwrap();
+        let env =
+            setup_environment(root, &config, &pages, Some(&registry), None, false, None).unwrap();
         let tmpl = env.get_template("test.html").unwrap();
         let result = tmpl.render(minijinja::context! {}).unwrap();
         assert_eq!(result, "hello from plugin");

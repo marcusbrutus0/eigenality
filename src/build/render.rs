@@ -6,8 +6,8 @@
 use eyre::{Result, WrapErr, bail};
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
-use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU32, Ordering};
 
 use futures::stream::{self, StreamExt};
 use tokio::sync::Mutex as AsyncMutex;
@@ -15,10 +15,13 @@ use tokio::sync::Mutex as AsyncMutex;
 use crate::assets;
 use crate::assets::cache::AssetCache;
 use crate::assets::images::ImageCache;
+use crate::assets::videos::VideoCache;
+use crate::assets::{check_asset_cache, download_missing_assets, store_and_rewrite_assets};
+use crate::build::source_asset::{
+    check_source_asset_cache, download_source_assets, store_source_assets_and_rewrite,
+};
 use crate::config::SiteConfig;
 use crate::data::{self, DataFetcher};
-use crate::assets::{check_asset_cache, download_missing_assets, store_and_rewrite_assets};
-use crate::build::source_asset::{check_source_asset_cache, download_source_assets, store_source_assets_and_rewrite};
 use crate::discovery::{self, PageDef, PageType};
 use crate::plugins::registry::{self, PluginRegistry};
 use crate::template;
@@ -27,12 +30,12 @@ use crate::template::errors::TemplateError;
 use super::analytics;
 use super::bundling;
 use super::content_hash;
-use super::incremental;
 use super::context::{self, PageMeta};
 use super::critical_css;
 use super::feed;
 use super::fragments;
 use super::hints;
+use super::incremental;
 use super::json_ld;
 use super::minify;
 use super::not_found;
@@ -78,6 +81,8 @@ pub(crate) struct BuildContext {
     pub asset_client: reqwest::Client,
     pub plugin_registry: Arc<PluginRegistry>,
     pub image_cache: Arc<ImageCache>,
+    pub video_cache: Arc<VideoCache>,
+    pub ffmpeg_available: bool,
     pub css_cache: Arc<AsyncMutex<critical_css::StylesheetCache>>,
     pub manifest: Arc<content_hash::AssetManifest>,
     pub source_asset_collector: SourceAssetCollector,
@@ -156,10 +161,7 @@ pub async fn build(project_root: &Path, dev: bool, fresh: bool, full: bool) -> R
     let manifest = Arc::new(manifest);
 
     if !manifest.is_empty() {
-        tracing::info!(
-            "Content hashing: {} assets fingerprinted.",
-            manifest.len(),
-        );
+        tracing::info!("Content hashing: {} assets fingerprinted.", manifest.len(),);
     }
     tracing::info!("Copying static assets... ✓");
 
@@ -170,7 +172,12 @@ pub async fn build(project_root: &Path, dev: bool, fresh: bool, full: bool) -> R
         let layout_hash = incremental::compute_layout_hash(project_root)?;
         let global_data_hash = incremental::compute_global_data_hash(project_root)?;
         let content_manifest_hash = incremental::compute_content_manifest_hash(&manifest);
-        Some((config_hash, layout_hash, global_data_hash, content_manifest_hash))
+        Some((
+            config_hash,
+            layout_hash,
+            global_data_hash,
+            content_manifest_hash,
+        ))
     } else {
         None
     };
@@ -246,20 +253,26 @@ pub async fn build(project_root: &Path, dev: bool, fresh: bool, full: bool) -> R
 
     // Data fetcher.
     let data_cache = data::open_data_cache(project_root, fresh);
-    let rate_limiter = Arc::new(RateLimiterPool::new(config.build.rate_limit, &config.sources));
-    let fetcher = DataFetcher::new(&config.sources, project_root, data_cache, Arc::clone(&rate_limiter));
+    let rate_limiter = Arc::new(RateLimiterPool::new(
+        config.build.rate_limit,
+        &config.sources,
+    ));
+    let fetcher = DataFetcher::new(
+        &config.sources,
+        project_root,
+        data_cache,
+        Arc::clone(&rate_limiter),
+    );
 
     // Asset localization.
-    let asset_cache = AssetCache::open(project_root)
-        .wrap_err("Failed to open asset cache")?;
+    let asset_cache = AssetCache::open(project_root).wrap_err("Failed to open asset cache")?;
     let asset_client = reqwest::Client::new();
     if config.assets.localize {
         tracing::info!("Asset localization enabled.");
     }
 
     // Image optimization.
-    let image_cache = ImageCache::open(project_root)
-        .wrap_err("Failed to open image cache")?;
+    let image_cache = ImageCache::open(project_root).wrap_err("Failed to open image cache")?;
     if config.assets.images.optimize {
         tracing::info!(
             "Image optimization enabled (formats: [{}], widths: {:?}, quality: {}).",
@@ -268,6 +281,24 @@ pub async fn build(project_root: &Path, dev: bool, fresh: bool, full: bool) -> R
             config.assets.images.quality,
         );
     }
+
+    // Video optimization.
+    let video_cache = VideoCache::open(project_root)
+        .wrap_err("Failed to open video cache")?;
+    let ffmpeg_available = if config.assets.videos.optimize {
+        match crate::assets::videos::check_ffmpeg().await {
+            Some(version) => {
+                tracing::info!("Video optimization enabled ({}).", version);
+                true
+            }
+            None => {
+                tracing::warn!("ffmpeg not found on PATH, video optimization disabled.");
+                false
+            }
+        }
+    } else {
+        false
+    };
 
     if config.build.minify {
         tracing::info!("HTML minification enabled (CSS + JS).");
@@ -314,6 +345,8 @@ pub async fn build(project_root: &Path, dev: bool, fresh: bool, full: bool) -> R
         asset_client,
         plugin_registry: Arc::new(plugin_registry),
         image_cache: Arc::new(image_cache),
+        video_cache: Arc::new(video_cache),
+        ffmpeg_available,
         css_cache: Arc::new(AsyncMutex::new(css_cache)),
         manifest: manifest.clone(),
         source_asset_collector,
@@ -336,9 +369,7 @@ pub async fn build(project_root: &Path, dev: bool, fresh: bool, full: bool) -> R
                         let rp = render_static_page(page, &ctx).await?;
                         Ok(vec![rp])
                     }
-                    PageType::Dynamic { .. } => {
-                        render_dynamic_page(page, &ctx).await
-                    }
+                    PageType::Dynamic { .. } => render_dynamic_page(page, &ctx).await,
                 }
             }
         })
@@ -384,7 +415,8 @@ pub async fn build(project_root: &Path, dev: bool, fresh: bool, full: bool) -> R
             &mut fetcher,
             Some(&ctx.plugin_registry),
             &build_time,
-        ).await?;
+        )
+        .await?;
         drop(fetcher);
         tracing::info!("Generating {} feed(s)... done", feed_count);
     }
@@ -395,13 +427,13 @@ pub async fn build(project_root: &Path, dev: bool, fresh: bool, full: bool) -> R
     // Phase 2.5: CSS/JS bundling and tree-shaking.
     let bundled_files = if ctx.config.build.bundling.enabled {
         let files = bundling::bundle_assets(
-            &dist_dir, &ctx.config.build.bundling, ctx.config.build.minify,
-        ).wrap_err("CSS/JS bundling failed")?;
+            &dist_dir,
+            &ctx.config.build.bundling,
+            ctx.config.build.minify,
+        )
+        .wrap_err("CSS/JS bundling failed")?;
         if !files.is_empty() {
-            tracing::info!(
-                "Bundling: {} file(s) generated.",
-                files.len(),
-            );
+            tracing::info!("Bundling: {} file(s) generated.", files.len(),);
         }
         files
     } else {
@@ -412,19 +444,16 @@ pub async fn build(project_root: &Path, dev: bool, fresh: bool, full: bool) -> R
     if ctx.config.build.content_hash.enabled {
         // Hash bundled files (generated, not from static/).
         let bundle_manifest = if !bundled_files.is_empty() {
-            Some(content_hash::hash_additional_files(
-                &dist_dir, &bundled_files,
-            ).wrap_err("Failed to hash bundled files")?)
+            Some(
+                content_hash::hash_additional_files(&dist_dir, &bundled_files)
+                    .wrap_err("Failed to hash bundled files")?,
+            )
         } else {
             None
         };
 
         if !manifest.is_empty() || bundle_manifest.is_some() {
-            content_hash::rewrite_references(
-                &dist_dir,
-                &manifest,
-                bundle_manifest.as_ref(),
-            )?;
+            content_hash::rewrite_references(&dist_dir, &manifest, bundle_manifest.as_ref())?;
             tracing::info!("Asset references rewritten.");
         }
     }
@@ -453,10 +482,7 @@ pub async fn build(project_root: &Path, dev: bool, fresh: bool, full: bool) -> R
             .wrap_err("Failed to save build manifest")?;
     }
 
-    eprintln!(
-        "Built {} page(s) in dist/.",
-        rendered_pages.len(),
-    );
+    eprintln!("Built {} page(s) in dist/.", rendered_pages.len(),);
     Ok(())
 }
 
@@ -553,8 +579,15 @@ async fn finalize_page_html(input: FinalizeInput<'_>, ctx: &BuildContext) -> Res
     };
 
     // Phase 2: download without holding the lock.
-    let asset_results = download_missing_assets(&ctx.asset_client, asset_to_download, &ctx.rate_limiter).await;
-    let src_results = download_source_assets(&ctx.asset_client, &config.sources, src_to_download, &ctx.rate_limiter).await;
+    let asset_results =
+        download_missing_assets(&ctx.asset_client, asset_to_download, &ctx.rate_limiter).await;
+    let src_results = download_source_assets(
+        &ctx.asset_client,
+        &config.sources,
+        src_to_download,
+        &ctx.rate_limiter,
+    )
+    .await;
 
     // Phase 3: store and rewrite — reacquire lock.
     let full_html = {
@@ -565,7 +598,8 @@ async fn finalize_page_html(input: FinalizeInput<'_>, ctx: &BuildContext) -> Res
             asset_results,
             asset_already_cached,
             &dist_assets_dir,
-        ).await
+        )
+        .await
         .wrap_err_with(|| format!("Failed to localize assets for {}", input.label))?;
         store_source_assets_and_rewrite(
             &html,
@@ -573,7 +607,8 @@ async fn finalize_page_html(input: FinalizeInput<'_>, ctx: &BuildContext) -> Res
             src_results,
             src_already_cached,
             &dist_assets_dir,
-        ).await
+        )
+        .await
         .wrap_err_with(|| format!("Failed to resolve source assets for {}", input.label))?
     };
 
@@ -584,19 +619,38 @@ async fn finalize_page_html(input: FinalizeInput<'_>, ctx: &BuildContext) -> Res
         &ctx.image_cache,
         dist_dir,
         input.page.frontmatter.hero_image.as_deref(),
-    ).wrap_err_with(|| format!("Failed to optimize images for {}", input.label))?;
+    )
+    .wrap_err_with(|| format!("Failed to optimize images for {}", input.label))?;
     let full_html = assets::rewrite_css_background_images(
         &full_html,
         &config.assets.images,
         &ctx.image_cache,
         dist_dir,
-    ).wrap_err_with(|| format!("Failed to optimize CSS background images for {}", input.label))?;
+    )
+    .wrap_err_with(|| {
+        format!(
+            "Failed to optimize CSS background images for {}",
+            input.label
+        )
+    })?;
 
-    let full_html = ctx.plugin_registry.post_render_html(
-        full_html,
-        input.url_path,
-        dist_dir,
-    ).wrap_err_with(|| format!("Plugin post_render_html failed for {}", input.label))?;
+    // Video optimization: transcode + rewrite <video> → multi-<source>.
+    let full_html = if ctx.ffmpeg_available && ctx.config.assets.videos.optimize {
+        assets::optimize_and_rewrite_videos(
+            &full_html,
+            &ctx.config.assets.videos,
+            &ctx.video_cache,
+            dist_dir,
+        ).await
+        .wrap_err_with(|| format!("Failed to optimize videos for {}", input.label))?
+    } else {
+        full_html
+    };
+
+    let full_html = ctx
+        .plugin_registry
+        .post_render_html(full_html, input.url_path, dist_dir)
+        .wrap_err_with(|| format!("Plugin post_render_html failed for {}", input.label))?;
 
     // Critical CSS inlining (after plugins, before minify).
     let full_html = if config.build.critical_css.enabled {
@@ -606,7 +660,11 @@ async fn finalize_page_html(input: FinalizeInput<'_>, ctx: &BuildContext) -> Res
             &config.build.critical_css,
             dist_dir,
             &mut css_cache,
-            if ctx.manifest.is_empty() { None } else { Some(ctx.manifest.as_ref()) },
+            if ctx.manifest.is_empty() {
+                None
+            } else {
+                Some(ctx.manifest.as_ref())
+            },
         );
         drop(css_cache);
         result
@@ -669,10 +727,12 @@ async fn finalize_page_html(input: FinalizeInput<'_>, ctx: &BuildContext) -> Res
 
     let full_path = dist_dir.join(input.output_path);
     if let Some(parent) = full_path.parent() {
-        tokio::fs::create_dir_all(parent).await
+        tokio::fs::create_dir_all(parent)
+            .await
             .wrap_err_with(|| format!("Failed to create output dir {}", parent.display()))?;
     }
-    tokio::fs::write(&full_path, &full_html).await
+    tokio::fs::write(&full_path, &full_html)
+        .await
         .wrap_err_with(|| format!("Failed to write {}", full_path.display()))?;
 
     // Extract and write fragments (also localize assets + optimize images in fragments).
@@ -687,13 +747,17 @@ async fn finalize_page_html(input: FinalizeInput<'_>, ctx: &BuildContext) -> Res
                 dist_dir,
                 &input.source_asset_urls,
                 &ctx.rate_limiter,
-            ).await?;
-            let optimized_frags = optimize_fragment_images(
+            )
+            .await?;
+            let optimized_frags = optimize_fragment_assets(
                 &localized_frags,
                 &config.assets.images,
                 &ctx.image_cache,
+                &config.assets.videos,
+                &ctx.video_cache,
+                ctx.ffmpeg_available,
                 dist_dir,
-            )?;
+            ).await?;
             let optimized_frags = if config.build.minify {
                 minify_fragments(&optimized_frags)
             } else {
@@ -719,15 +783,13 @@ async fn finalize_page_html(input: FinalizeInput<'_>, ctx: &BuildContext) -> Res
 /// 2. Build template context.
 /// 3. Render template → full HTML string.
 /// 4. Post-render pipeline: write to disk, fragments, optimizations.
-async fn render_static_page(
-    page: &PageDef,
-    ctx: &BuildContext,
-) -> Result<RenderedPage> {
+async fn render_static_page(page: &PageDef, ctx: &BuildContext) -> Result<RenderedPage> {
     let tmpl_name = page.template_path.to_string_lossy().to_string();
     let config = &*ctx.config;
 
     // 1. Resolve data queries — releases fetcher mutex before each HTTP request.
-    ctx.data_query_count.fetch_add(page.frontmatter.data.len() as u32, Ordering::Relaxed);
+    ctx.data_query_count
+        .fetch_add(page.frontmatter.data.len() as u32, Ordering::Relaxed);
     let page_data = data::resolve_page_data_unlocked(
         &page.frontmatter,
         &ctx.fetcher,
@@ -738,9 +800,12 @@ async fn render_static_page(
 
     let stem = page.template_path.file_stem().unwrap_or_default();
     let output_path = if config.build.clean_urls && stem != "index" && stem != "404" {
-        page.output_dir.join(page.template_path.file_stem().unwrap_or_default()).join("index.html")
+        page.output_dir
+            .join(page.template_path.file_stem().unwrap_or_default())
+            .join("index.html")
     } else {
-        page.output_dir.join(page.template_path.file_name().unwrap_or_default())
+        page.output_dir
+            .join(page.template_path.file_name().unwrap_or_default())
     };
 
     let url_path = format!("/{}", output_path.to_string_lossy().replace('\\', "/"));
@@ -752,7 +817,8 @@ async fn render_static_page(
     }
 
     // 2. Build context.
-    let is_index = output_path.file_name()
+    let is_index = output_path
+        .file_name()
         .and_then(|f| f.to_str())
         .map(|f| f == "index.html")
         .unwrap_or(false);
@@ -761,8 +827,7 @@ async fn render_static_page(
     let output_files = vec![output_path.to_string_lossy().replace('\\', "/")];
     let template_hash = {
         let tmpl_path = ctx.project_root.join("templates").join(&tmpl_name);
-        let body = std::fs::read_to_string(&tmpl_path)
-            .unwrap_or_default();
+        let body = std::fs::read_to_string(&tmpl_path).unwrap_or_default();
         incremental::sha256_str(&body)
     };
     let frontmatter_hash = incremental::sha256_str(&page.raw_frontmatter);
@@ -802,9 +867,12 @@ async fn render_static_page(
     let tpl_ctx = context::build_page_context(config, &ctx.global_data, &page_data, meta, None);
 
     let resolved_seo = seo::resolve_seo_expressions(&page.frontmatter.seo, &ctx.env, &tpl_ctx);
-    let resolved_schema = json_ld::resolve_schema_expressions(&page.frontmatter.schema, &ctx.env, &tpl_ctx);
+    let resolved_schema =
+        json_ld::resolve_schema_expressions(&page.frontmatter.schema, &ctx.env, &tpl_ctx);
 
-    let tmpl = ctx.env.get_template(&tmpl_name)
+    let tmpl = ctx
+        .env
+        .get_template(&tmpl_name)
         .wrap_err_with(|| format!("Template '{}' not found in environment", tmpl_name))?;
 
     // 3. Render.
@@ -812,13 +880,16 @@ async fn render_static_page(
         Ok(html) => html,
         Err(err) => {
             let te = TemplateError::from_minijinja(
-                &err, &tmpl_name,
-                page.frontmatter_line_count, Some(&tpl_ctx),
+                &err,
+                &tmpl_name,
+                page.frontmatter_line_count,
+                Some(&tpl_ctx),
             );
             eprintln!("{}", te.format_console(&tmpl_name, None));
             return Err(eyre::eyre!(
                 "Failed to render template '{}': {}",
-                tmpl_name, te.short_msg
+                tmpl_name,
+                te.short_msg
             ));
         }
     };
@@ -832,37 +903,45 @@ async fn render_static_page(
 
     // Drain source asset requests immediately so concurrent pages don't steal them.
     let source_requests = ctx.source_asset_collector.drain();
-    let source_asset_urls: HashSet<String> = source_requests.iter().map(|r| r.url.clone()).collect();
+    let source_asset_urls: HashSet<String> =
+        source_requests.iter().map(|r| r.url.clone()).collect();
 
     tracing::debug!("  Static: {} → {}", tmpl_name, output_path.display());
 
     // 4. Post-render pipeline.
-    finalize_page_html(FinalizeInput {
-        rendered: &rendered,
-        output_path: &output_path,
-        url_path: &url_path,
-        label: &format!("template '{}'", tmpl_name),
-        page,
-        resolved_seo,
-        resolved_schema,
-        source_requests,
-        source_asset_urls,
-        block_names,
-    }, ctx).await?;
+    finalize_page_html(
+        FinalizeInput {
+            rendered: &rendered,
+            output_path: &output_path,
+            url_path: &url_path,
+            label: &format!("template '{}'", tmpl_name),
+            page,
+            resolved_seo,
+            resolved_schema,
+            source_requests,
+            source_asset_urls,
+            block_names,
+        },
+        ctx,
+    )
+    .await?;
 
     // Record this page in the current manifest.
     {
         let mut cur = ctx.current_manifest.lock().await;
-        cur.pages.insert(url_path.clone(), incremental::PageRecord {
-            template_path: tmpl_name.clone(),
-            template_hash,
-            frontmatter_hash,
-            data_hashes,
-            output_files,
-            url_path: url_path.clone(),
-            is_index,
-            is_dynamic: false,
-        });
+        cur.pages.insert(
+            url_path.clone(),
+            incremental::PageRecord {
+                template_path: tmpl_name.clone(),
+                template_hash,
+                frontmatter_hash,
+                data_hashes,
+                output_files,
+                url_path: url_path.clone(),
+                is_index,
+                is_dynamic: false,
+            },
+        );
     }
 
     Ok(RenderedPage {
@@ -880,10 +959,7 @@ async fn render_static_page(
 /// 3. Phase 2 (concurrent): resolve item data + render all items via `buffer_unordered`.
 /// 4. Drain `SourceAssetCollector` once after all renders complete.
 /// 5. Sequentially finalize each rendered item (write files, process assets).
-async fn render_dynamic_page(
-    page: &PageDef,
-    ctx: &BuildContext,
-) -> Result<Vec<RenderedPage>> {
+async fn render_dynamic_page(page: &PageDef, ctx: &BuildContext) -> Result<Vec<RenderedPage>> {
     let tmpl_name = page.template_path.to_string_lossy().to_string();
     let item_as = &page.frontmatter.item_as;
     let slug_field = &page.frontmatter.slug_field;
@@ -932,14 +1008,18 @@ async fn render_dynamic_page(
             Some(_) => {
                 tracing::warn!(
                     "Item {} in '{}' has non-string/number slug field '{}', skipping.",
-                    idx, tmpl_name, slug_field,
+                    idx,
+                    tmpl_name,
+                    slug_field,
                 );
                 continue;
             }
             None => {
                 tracing::warn!(
                     "Item {} in '{}' is missing slug field '{}', skipping.",
-                    idx, tmpl_name, slug_field,
+                    idx,
+                    tmpl_name,
+                    slug_field,
                 );
                 continue;
             }
@@ -949,7 +1029,8 @@ async fn render_dynamic_page(
         if slug.is_empty() {
             tracing::warn!(
                 "Item {} in '{}' has empty slug after sanitization, skipping.",
-                idx, tmpl_name,
+                idx,
+                tmpl_name,
             );
             continue;
         }
@@ -1043,7 +1124,10 @@ async fn render_dynamic_page(
             let data_hashes: HashMap<String, String> = {
                 let item_serialized = serde_json::to_string(&p1.item).unwrap_or_default();
                 let mut h = HashMap::new();
-                h.insert("_item".to_string(), incremental::sha256_str(&item_serialized));
+                h.insert(
+                    "_item".to_string(),
+                    incremental::sha256_str(&item_serialized),
+                );
                 for (k, v) in &item_data {
                     let s = serde_json::to_string(v).unwrap_or_default();
                     h.insert(k.clone(), incremental::sha256_str(&s));
@@ -1084,7 +1168,12 @@ async fn render_dynamic_page(
                 format!("Template '{}' not found in environment", tmpl_name_ref)
             })?;
 
-            let meta = PageMeta::new(&p1.url_path, &p1.output_path, &ctx_ref.config, &ctx_ref.build_time);
+            let meta = PageMeta::new(
+                &p1.url_path,
+                &p1.output_path,
+                &ctx_ref.config,
+                &ctx_ref.build_time,
+            );
 
             let tpl_ctx = context::build_page_context(
                 &ctx_ref.config,
@@ -1094,11 +1183,8 @@ async fn render_dynamic_page(
                 Some((item_as, &p1.item)),
             );
 
-            let resolved_seo = seo::resolve_seo_expressions(
-                &page_ref.frontmatter.seo,
-                &ctx_ref.env,
-                &tpl_ctx,
-            );
+            let resolved_seo =
+                seo::resolve_seo_expressions(&page_ref.frontmatter.seo, &ctx_ref.env, &tpl_ctx);
 
             let resolved_schema = json_ld::resolve_schema_expressions(
                 &page_ref.frontmatter.schema,
@@ -1110,13 +1196,17 @@ async fn render_dynamic_page(
                 Ok(html) => html,
                 Err(err) => {
                     let te = TemplateError::from_minijinja(
-                        &err, tmpl_name_ref,
-                        page_ref.frontmatter_line_count, Some(&tpl_ctx),
+                        &err,
+                        tmpl_name_ref,
+                        page_ref.frontmatter_line_count,
+                        Some(&tpl_ctx),
                     );
                     eprintln!("{}", te.format_console(tmpl_name_ref, Some(&p1.slug)));
                     return Err(eyre::eyre!(
                         "Failed to render template '{}' for item with slug '{}': {}",
-                        tmpl_name_ref, p1.slug, te.short_msg
+                        tmpl_name_ref,
+                        p1.slug,
+                        te.short_msg
                     ));
                 }
             };
@@ -1204,16 +1294,19 @@ async fn render_dynamic_page(
         // Record the rendered page in the current manifest.
         {
             let mut cur = ctx.current_manifest.lock().await;
-            cur.pages.insert(p2.url_path.clone(), incremental::PageRecord {
-                template_path: tmpl_name.clone(),
-                template_hash: p2.template_hash,
-                frontmatter_hash: p2.frontmatter_hash,
-                data_hashes: p2.data_hashes,
-                output_files: p2.output_files,
-                url_path: p2.url_path.clone(),
-                is_index: false,
-                is_dynamic: true,
-            });
+            cur.pages.insert(
+                p2.url_path.clone(),
+                incremental::PageRecord {
+                    template_path: tmpl_name.clone(),
+                    template_hash: p2.template_hash,
+                    frontmatter_hash: p2.frontmatter_hash,
+                    data_hashes: p2.data_hashes,
+                    output_files: p2.output_files,
+                    url_path: p2.url_path.clone(),
+                    is_index: false,
+                    is_dynamic: true,
+                },
+            );
         }
 
         rendered_pages.push(RenderedPage {
@@ -1229,7 +1322,9 @@ async fn render_dynamic_page(
         let mut cur = ctx.current_manifest.lock().await;
         cur.dynamic_templates.insert(
             tmpl_name.clone(),
-            incremental::DynamicTemplateRecord { slugs: rendered_slugs },
+            incremental::DynamicTemplateRecord {
+                slugs: rendered_slugs,
+            },
         );
     }
 
@@ -1274,7 +1369,8 @@ async fn localize_fragments(
                 download_results,
                 already_cached,
                 &dist_assets_dir,
-            ).await?
+            )
+            .await?
         };
         result.push(fragments::Fragment {
             block_name: frag.block_name.clone(),
@@ -1299,10 +1395,13 @@ fn minify_fragments(frags: &[fragments::Fragment]) -> Vec<fragments::Fragment> {
 ///
 /// Since the full page has already been through optimization (and all image
 /// variants are cached), this should be fast — no new encoding.
-fn optimize_fragment_images(
+async fn optimize_fragment_assets(
     frags: &[fragments::Fragment],
     image_config: &crate::config::ImageOptimConfig,
     image_cache: &ImageCache,
+    video_config: &crate::config::VideoOptimConfig,
+    video_cache: &VideoCache,
+    ffmpeg_available: bool,
     dist_dir: &Path,
 ) -> Result<Vec<fragments::Fragment>> {
     let mut result = Vec::with_capacity(frags.len());
@@ -1320,6 +1419,16 @@ fn optimize_fragment_images(
             image_cache,
             dist_dir,
         )?;
+        let optimized_html = if ffmpeg_available && video_config.optimize {
+            assets::optimize_and_rewrite_videos(
+                &optimized_html,
+                video_config,
+                video_cache,
+                dist_dir,
+            ).await?
+        } else {
+            optimized_html
+        };
         result.push(fragments::Fragment {
             block_name: frag.block_name.clone(),
             html: optimized_html,
@@ -1567,7 +1676,11 @@ fragments = false
 "#,
         );
 
-        write(root, "templates/_base.html", "<html>{% block content %}{% endblock %}</html>");
+        write(
+            root,
+            "templates/_base.html",
+            "<html>{% block content %}{% endblock %}</html>",
+        );
 
         write(
             root,
@@ -1684,7 +1797,11 @@ fragments = false
 "#,
         );
 
-        write(root, "templates/_base.html", "<html>{% block content %}{% endblock %}</html>");
+        write(
+            root,
+            "templates/_base.html",
+            "<html>{% block content %}{% endblock %}</html>",
+        );
         write(
             root,
             "templates/index.html",
@@ -1731,7 +1848,11 @@ fragments = false
 "#,
         );
 
-        write(root, "templates/_base.html", "<html>{% block content %}{% endblock %}</html>");
+        write(
+            root,
+            "templates/_base.html",
+            "<html>{% block content %}{% endblock %}</html>",
+        );
 
         write(
             root,
@@ -1775,7 +1896,11 @@ fragments = false
 "#,
         );
 
-        write(root, "templates/_base.html", "<html>{% block content %}{% endblock %}</html>");
+        write(
+            root,
+            "templates/_base.html",
+            "<html>{% block content %}{% endblock %}</html>",
+        );
 
         write(
             root,
@@ -1809,7 +1934,11 @@ fragments = false
 "#,
         );
 
-        write(root, "templates/_base.html", "<html>{% block content %}{% endblock %}</html>");
+        write(
+            root,
+            "templates/_base.html",
+            "<html>{% block content %}{% endblock %}</html>",
+        );
 
         write(
             root,
@@ -1857,7 +1986,11 @@ fragments = false
 "#,
         );
 
-        write(root, "templates/_base.html", "<html>{% block content %}{% endblock %}</html>");
+        write(
+            root,
+            "templates/_base.html",
+            "<html>{% block content %}{% endblock %}</html>",
+        );
 
         write(
             root,
@@ -2014,8 +2147,16 @@ minify = false
 enabled = false
 "#,
         );
-        write(root, "templates/_base.html", "<html>{% block content %}{% endblock %}</html>");
-        write(root, "templates/index.html", "{% extends \"_base.html\" %}{% block content %}hi{% endblock %}");
+        write(
+            root,
+            "templates/_base.html",
+            "<html>{% block content %}{% endblock %}</html>",
+        );
+        write(
+            root,
+            "templates/index.html",
+            "{% extends \"_base.html\" %}{% block content %}hi{% endblock %}",
+        );
 
         build(root, false, false, false).await.unwrap();
         assert!(!root.join("dist/sitemap.xml").exists());
@@ -2042,9 +2183,21 @@ enabled = true
 clean_urls = true
 "#,
         );
-        write(root, "templates/_base.html", "<html>{% block content %}{% endblock %}</html>");
-        write(root, "templates/index.html", "{% extends \"_base.html\" %}{% block content %}hi{% endblock %}");
-        write(root, "templates/about.html", "{% extends \"_base.html\" %}{% block content %}about{% endblock %}");
+        write(
+            root,
+            "templates/_base.html",
+            "<html>{% block content %}{% endblock %}</html>",
+        );
+        write(
+            root,
+            "templates/index.html",
+            "{% extends \"_base.html\" %}{% block content %}hi{% endblock %}",
+        );
+        write(
+            root,
+            "templates/about.html",
+            "{% extends \"_base.html\" %}{% block content %}about{% endblock %}",
+        );
 
         build(root, false, false, false).await.unwrap();
 
@@ -2085,8 +2238,16 @@ minify = false
 enabled = true
 "#,
         );
-        write(root, "templates/_base.html", "<html>{% block content %}{% endblock %}</html>");
-        write(root, "templates/index.html", "{% extends \"_base.html\" %}{% block content %}hi{% endblock %}");
+        write(
+            root,
+            "templates/_base.html",
+            "<html>{% block content %}{% endblock %}</html>",
+        );
+        write(
+            root,
+            "templates/index.html",
+            "{% extends \"_base.html\" %}{% block content %}hi{% endblock %}",
+        );
 
         build(root, false, false, false).await.unwrap();
 
@@ -2115,9 +2276,21 @@ minify = false
 enabled = true
 "#,
         );
-        write(root, "templates/_base.html", "<html>{% block content %}{% endblock %}</html>");
-        write(root, "templates/index.html", "{% extends \"_base.html\" %}{% block content %}hi{% endblock %}");
-        write(root, "static/robots.txt", "User-agent: *\nDisallow: /secret/\n");
+        write(
+            root,
+            "templates/_base.html",
+            "<html>{% block content %}{% endblock %}</html>",
+        );
+        write(
+            root,
+            "templates/index.html",
+            "{% extends \"_base.html\" %}{% block content %}hi{% endblock %}",
+        );
+        write(
+            root,
+            "static/robots.txt",
+            "User-agent: *\nDisallow: /secret/\n",
+        );
 
         build(root, false, false, false).await.unwrap();
 
@@ -2152,8 +2325,16 @@ allow = ["/"]
 disallow = ["/admin/"]
 "#,
         );
-        write(root, "templates/_base.html", "<html>{% block content %}{% endblock %}</html>");
-        write(root, "templates/index.html", "{% extends \"_base.html\" %}{% block content %}hi{% endblock %}");
+        write(
+            root,
+            "templates/_base.html",
+            "<html>{% block content %}{% endblock %}</html>",
+        );
+        write(
+            root,
+            "templates/index.html",
+            "{% extends \"_base.html\" %}{% block content %}hi{% endblock %}",
+        );
 
         build(root, false, false, false).await.unwrap();
 
@@ -2187,9 +2368,21 @@ user_agent = "*"
 disallow = ["/from-config/"]
 "#,
         );
-        write(root, "templates/_base.html", "<html>{% block content %}{% endblock %}</html>");
-        write(root, "templates/index.html", "{% extends \"_base.html\" %}{% block content %}hi{% endblock %}");
-        write(root, "static/robots.txt", "User-agent: *\nDisallow: /from-static/\n");
+        write(
+            root,
+            "templates/_base.html",
+            "<html>{% block content %}{% endblock %}</html>",
+        );
+        write(
+            root,
+            "templates/index.html",
+            "{% extends \"_base.html\" %}{% block content %}hi{% endblock %}",
+        );
+        write(
+            root,
+            "static/robots.txt",
+            "User-agent: *\nDisallow: /from-static/\n",
+        );
 
         build(root, false, false, false).await.unwrap();
 
@@ -2216,8 +2409,16 @@ base_url = "https://test.com"
 minify = false
 "#,
         );
-        write(root, "templates/_base.html", "<html>{% block content %}{% endblock %}</html>");
-        write(root, "templates/index.html", "{% extends \"_base.html\" %}{% block content %}hi{% endblock %}");
+        write(
+            root,
+            "templates/_base.html",
+            "<html>{% block content %}{% endblock %}</html>",
+        );
+        write(
+            root,
+            "templates/index.html",
+            "{% extends \"_base.html\" %}{% block content %}hi{% endblock %}",
+        );
         write(root, "static/robots.txt", "User-agent: *\nDisallow: /\n");
 
         build(root, false, false, false).await.unwrap();
@@ -2392,7 +2593,11 @@ fragments = false
 "#,
         );
 
-        write(root, "templates/_base.html", "<html>{% block content %}{% endblock %}</html>");
+        write(
+            root,
+            "templates/_base.html",
+            "<html>{% block content %}{% endblock %}</html>",
+        );
 
         write(
             root,
@@ -2420,7 +2625,11 @@ item_as: post
             let path = root.join(format!("dist/post-{}.html", i));
             assert!(path.exists(), "dist/post-{}.html missing", i);
             let html = fs::read_to_string(&path).unwrap();
-            assert!(html.contains(&format!("Post {}", i)), "wrong content in post-{}", i);
+            assert!(
+                html.contains(&format!("Post {}", i)),
+                "wrong content in post-{}",
+                i
+            );
         }
     }
 
@@ -2444,7 +2653,11 @@ fragments = false
 "#,
         );
 
-        write(root, "templates/_base.html", "<html>{% block content %}{% endblock %}</html>");
+        write(
+            root,
+            "templates/_base.html",
+            "<html>{% block content %}{% endblock %}</html>",
+        );
 
         write(
             root,

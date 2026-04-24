@@ -15,7 +15,12 @@ use walkdir::WalkDir;
 /// When `clean` is `false`, an existing `dist/` is left intact (only created
 /// if missing). This allows incremental builds to call `copy_static_assets`
 /// before deciding whether a full wipe is needed.
-pub fn setup_output_dir(project_root: &Path, fragments_enabled: bool, fragment_dir: &str, clean: bool) -> Result<()> {
+pub fn setup_output_dir(
+    project_root: &Path,
+    fragments_enabled: bool,
+    fragment_dir: &str,
+    clean: bool,
+) -> Result<()> {
     let dist = project_root.join("dist");
 
     if clean {
@@ -27,8 +32,7 @@ pub fn setup_output_dir(project_root: &Path, fragments_enabled: bool, fragment_d
     }
 
     // Recreate (or create fresh) dist/.
-    std::fs::create_dir_all(&dist)
-        .wrap_err("Failed to create dist/ directory")?;
+    std::fs::create_dir_all(&dist).wrap_err("Failed to create dist/ directory")?;
 
     // Create fragments directory if enabled.
     if fragments_enabled {
@@ -76,13 +80,17 @@ pub fn copy_static_assets(
             }
             // Ensure parent directory exists.
             if let Some(parent) = dst_path.parent() {
-                std::fs::create_dir_all(parent)
-                    .wrap_err_with(|| format!("Failed to create parent dir for {}", dst_path.display()))?;
-            }
-            std::fs::copy(src_path, &dst_path)
-                .wrap_err_with(|| {
-                    format!("Failed to copy {} → {}", src_path.display(), dst_path.display())
+                std::fs::create_dir_all(parent).wrap_err_with(|| {
+                    format!("Failed to create parent dir for {}", dst_path.display())
                 })?;
+            }
+            std::fs::copy(src_path, &dst_path).wrap_err_with(|| {
+                format!(
+                    "Failed to copy {} → {}",
+                    src_path.display(),
+                    dst_path.display()
+                )
+            })?;
         }
     }
 

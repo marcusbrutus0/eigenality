@@ -139,18 +139,15 @@ fn resolve_seo(
     let twitter_site = site_config.seo.twitter_site.clone();
 
     // Canonical URL: frontmatter override > auto-derived.
-    let canonical_url = frontmatter_seo
-        .canonical_url
-        .clone()
-        .unwrap_or_else(|| {
-            // Strip index.html for cleaner canonical URLs.
-            let clean_path = if current_url.ends_with("/index.html") {
-                &current_url[..current_url.len() - "index.html".len()]
-            } else {
-                current_url
-            };
-            make_absolute_url(clean_path, &site_config.base_url)
-        });
+    let canonical_url = frontmatter_seo.canonical_url.clone().unwrap_or_else(|| {
+        // Strip index.html for cleaner canonical URLs.
+        let clean_path = if current_url.ends_with("/index.html") {
+            &current_url[..current_url.len() - "index.html".len()]
+        } else {
+            current_url
+        };
+        make_absolute_url(clean_path, &site_config.base_url)
+    });
 
     ResolvedSeo {
         title,
@@ -231,13 +228,7 @@ fn has_canonical_link(html: &str) -> bool {
 ///
 /// `attr` is the HTML attribute name: `"property"` for OG tags,
 /// `"name"` for Twitter tags.
-fn push_meta(
-    out: &mut String,
-    existing: &HashSet<String>,
-    attr: &str,
-    name: &str,
-    content: &str,
-) {
+fn push_meta(out: &mut String, existing: &HashSet<String>, attr: &str, name: &str, content: &str) {
     use std::fmt::Write;
     if !existing.contains(name) {
         let _ = write!(
@@ -273,10 +264,22 @@ fn generate_meta_html(
     }
     push_meta(&mut out, existing, "property", "og:url", &seo.canonical_url);
     push_meta(&mut out, existing, "property", "og:type", &seo.og_type);
-    push_meta(&mut out, existing, "property", "og:site_name", &seo.site_name);
+    push_meta(
+        &mut out,
+        existing,
+        "property",
+        "og:site_name",
+        &seo.site_name,
+    );
 
     // Twitter Card tags.
-    push_meta(&mut out, existing, "name", "twitter:card", &seo.twitter_card);
+    push_meta(
+        &mut out,
+        existing,
+        "name",
+        "twitter:card",
+        &seo.twitter_card,
+    );
     push_meta(&mut out, existing, "name", "twitter:title", &seo.title);
     if let Some(ref desc) = seo.description {
         push_meta(&mut out, existing, "name", "twitter:description", desc);
@@ -314,10 +317,7 @@ fn inject_into_head(html: &str, meta_html: &str) -> Result<String, String> {
         html,
         lol_html::RewriteStrSettings {
             element_content_handlers: vec![lol_html::element!("head", move |el| {
-                el.append(
-                    &meta_owned,
-                    lol_html::html_content::ContentType::Html,
-                );
+                el.append(&meta_owned, lol_html::html_content::ContentType::Html);
                 Ok(())
             })],
             ..lol_html::RewriteStrSettings::new()
@@ -446,11 +446,7 @@ mod tests {
     }
 
     /// Build a SiteMeta with custom SEO defaults.
-    fn test_site_with_seo(
-        name: &str,
-        base_url: &str,
-        seo: SiteSeoConfig,
-    ) -> SiteMeta {
+    fn test_site_with_seo(name: &str, base_url: &str, seo: SiteSeoConfig) -> SiteMeta {
         SiteMeta {
             name: name.to_string(),
             base_url: base_url.to_string(),
@@ -464,7 +460,10 @@ mod tests {
 
     #[test]
     fn test_escape_attr_special_chars() {
-        assert_eq!(escape_attr(r#"He said "hello""#), r#"He said &quot;hello&quot;"#);
+        assert_eq!(
+            escape_attr(r#"He said "hello""#),
+            r#"He said &quot;hello&quot;"#
+        );
         assert_eq!(escape_attr("A & B"), "A &amp; B");
         assert_eq!(escape_attr("<tag>"), "&lt;tag&gt;");
         assert_eq!(escape_attr("plain text"), "plain text");
@@ -521,11 +520,15 @@ mod tests {
 
     #[test]
     fn test_resolve_seo_frontmatter_overrides() {
-        let site = test_site_with_seo("My Site", "https://example.com", SiteSeoConfig {
-            title: Some("Site Default Title".into()),
-            description: Some("Site default desc".into()),
-            ..SiteSeoConfig::default()
-        });
+        let site = test_site_with_seo(
+            "My Site",
+            "https://example.com",
+            SiteSeoConfig {
+                title: Some("Site Default Title".into()),
+                description: Some("Site default desc".into()),
+                ..SiteSeoConfig::default()
+            },
+        );
         let seo = SeoMeta {
             title: Some("Page Title".into()),
             description: Some("Page description".into()),
@@ -539,16 +542,23 @@ mod tests {
 
     #[test]
     fn test_resolve_seo_site_defaults_fill_gaps() {
-        let site = test_site_with_seo("My Site", "https://example.com", SiteSeoConfig {
-            description: Some("Site description".into()),
-            image: Some("/assets/default-share.jpg".into()),
-            ..SiteSeoConfig::default()
-        });
+        let site = test_site_with_seo(
+            "My Site",
+            "https://example.com",
+            SiteSeoConfig {
+                description: Some("Site description".into()),
+                image: Some("/assets/default-share.jpg".into()),
+                ..SiteSeoConfig::default()
+            },
+        );
         let seo = SeoMeta::default(); // no frontmatter overrides
         let resolved = resolve_seo(&seo, &site, "/page.html");
 
         assert_eq!(resolved.description.as_deref(), Some("Site description"));
-        assert_eq!(resolved.image.as_deref(), Some("https://example.com/assets/default-share.jpg"));
+        assert_eq!(
+            resolved.image.as_deref(),
+            Some("https://example.com/assets/default-share.jpg")
+        );
     }
 
     #[test]
@@ -569,7 +579,10 @@ mod tests {
         };
         let resolved = resolve_seo(&seo, &site, "/syndicated.html");
 
-        assert_eq!(resolved.canonical_url, "https://original-source.com/article");
+        assert_eq!(
+            resolved.canonical_url,
+            "https://original-source.com/article"
+        );
     }
 
     #[test]
@@ -593,7 +606,10 @@ mod tests {
         };
         let resolved = resolve_seo(&seo, &site, "/page.html");
 
-        assert_eq!(resolved.image.as_deref(), Some("https://cdn.example.com/photo.jpg"));
+        assert_eq!(
+            resolved.image.as_deref(),
+            Some("https://cdn.example.com/photo.jpg")
+        );
     }
 
     #[test]
@@ -605,7 +621,10 @@ mod tests {
         };
         let resolved = resolve_seo(&seo, &site, "/page.html");
 
-        assert_eq!(resolved.image.as_deref(), Some("https://example.com/assets/hero.jpg"));
+        assert_eq!(
+            resolved.image.as_deref(),
+            Some("https://example.com/assets/hero.jpg")
+        );
     }
 
     #[test]
@@ -618,7 +637,10 @@ mod tests {
         let resolved = resolve_seo(&seo, &site, "/about.html");
 
         // No double slash.
-        assert_eq!(resolved.image.as_deref(), Some("https://example.com/assets/hero.jpg"));
+        assert_eq!(
+            resolved.image.as_deref(),
+            Some("https://example.com/assets/hero.jpg")
+        );
         assert_eq!(resolved.canonical_url, "https://example.com/about.html");
     }
 
@@ -647,7 +669,8 @@ mod tests {
 
     #[test]
     fn test_detect_existing_og_tags() {
-        let html = r#"<html><head><meta property="og:title" content="Test"></head><body></body></html>"#;
+        let html =
+            r#"<html><head><meta property="og:title" content="Test"></head><body></body></html>"#;
         let tags = detect_existing_tags(html);
         assert!(tags.contains("og:title"));
         assert!(!tags.contains("og:description"));
@@ -698,14 +721,20 @@ mod tests {
 
         assert!(html.contains(r#"<meta property="og:title" content="My Page">"#));
         assert!(html.contains(r#"<meta property="og:description" content="A description">"#));
-        assert!(html.contains(r#"<meta property="og:image" content="https://example.com/img.jpg">"#));
-        assert!(html.contains(r#"<meta property="og:url" content="https://example.com/page.html">"#));
+        assert!(
+            html.contains(r#"<meta property="og:image" content="https://example.com/img.jpg">"#)
+        );
+        assert!(
+            html.contains(r#"<meta property="og:url" content="https://example.com/page.html">"#)
+        );
         assert!(html.contains(r#"<meta property="og:type" content="website">"#));
         assert!(html.contains(r#"<meta property="og:site_name" content="My Site">"#));
         assert!(html.contains(r#"<meta name="twitter:card" content="summary_large_image">"#));
         assert!(html.contains(r#"<meta name="twitter:title" content="My Page">"#));
         assert!(html.contains(r#"<meta name="twitter:description" content="A description">"#));
-        assert!(html.contains(r#"<meta name="twitter:image" content="https://example.com/img.jpg">"#));
+        assert!(
+            html.contains(r#"<meta name="twitter:image" content="https://example.com/img.jpg">"#)
+        );
         assert!(html.contains(r#"<meta name="twitter:site" content="@mysite">"#));
         assert!(html.contains(r#"<link rel="canonical" href="https://example.com/page.html">"#));
     }
@@ -913,9 +942,7 @@ mod tests {
     #[test]
     fn test_resolve_seo_expressions_empty_result() {
         let env = minijinja::Environment::new();
-        let ctx = minijinja::Value::from_serialize(
-            &serde_json::json!({"post": {"excerpt": ""}}),
-        );
+        let ctx = minijinja::Value::from_serialize(&serde_json::json!({"post": {"excerpt": ""}}));
         let seo = SeoMeta {
             description: Some("{{ post.excerpt }}".into()),
             ..SeoMeta::default()

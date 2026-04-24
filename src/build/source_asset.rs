@@ -104,7 +104,8 @@ pub async fn resolve_source_assets(
             None => {
                 tracing::warn!(
                     "source_asset: source '{}' not found, skipping URL: {}",
-                    source_name, url
+                    source_name,
+                    url
                 );
                 continue;
             }
@@ -123,10 +124,9 @@ pub async fn resolve_source_assets(
 
         match download::ensure_asset_with_headers(client, cache, url, &headers, pool).await {
             Ok(local_filename) => {
-                cache.copy_to_dist(url, &dist_assets_dir)
-                    .wrap_err_with(|| {
-                        format!("Failed to copy source asset to dist: {}", url)
-                    })?;
+                cache
+                    .copy_to_dist(url, &dist_assets_dir)
+                    .wrap_err_with(|| format!("Failed to copy source asset to dist: {}", url))?;
                 url_map.insert(url, format!("/assets/{}", local_filename));
             }
             Err(e) => {
@@ -164,7 +164,8 @@ pub fn check_source_asset_cache(
 ) -> (Vec<SourceAssetRequest>, HashMap<String, String>) {
     let mut seen: HashMap<&str, &str> = HashMap::new();
     for req in requests {
-        seen.entry(req.url.as_str()).or_insert(req.source_name.as_str());
+        seen.entry(req.url.as_str())
+            .or_insert(req.source_name.as_str());
     }
 
     let mut to_download: Vec<SourceAssetRequest> = Vec::new();
@@ -173,10 +174,7 @@ pub fn check_source_asset_cache(
     for (&url, &source_name) in &seen {
         if cache.has_file(url) {
             if let Some(meta) = cache.get(url) {
-                already_cached.insert(
-                    url.to_string(),
-                    format!("/assets/{}", meta.local_filename),
-                );
+                already_cached.insert(url.to_string(), format!("/assets/{}", meta.local_filename));
             }
         } else {
             to_download.push(SourceAssetRequest {
@@ -207,7 +205,8 @@ pub async fn download_source_assets(
             None => {
                 tracing::warn!(
                     "source_asset: source '{}' not found, skipping URL: {}",
-                    req.source_name, req.url
+                    req.source_name,
+                    req.url
                 );
                 continue;
             }
@@ -224,15 +223,7 @@ pub async fn download_source_assets(
         }
 
         // Pass cached_meta=None: we only reach here on a cache miss.
-        match download::download_asset_with_headers(
-            client,
-            &req.url,
-            None,
-            &headers,
-            pool,
-        )
-        .await
-        {
+        match download::download_asset_with_headers(client, &req.url, None, &headers, pool).await {
             Ok(result) => results.push((req.url, result)),
             Err(e) => tracing::warn!("Failed to download source asset {}: {:#}", req.url, e),
         }
@@ -255,7 +246,11 @@ pub async fn store_source_assets_and_rewrite(
     // Ensure already-cached assets are present in dist.
     for url in url_map.keys() {
         if let Err(e) = cache.copy_to_dist(url, dist_assets_dir) {
-            tracing::warn!("Failed to copy cached source asset to dist {}: {:#}", url, e);
+            tracing::warn!(
+                "Failed to copy cached source asset to dist {}: {:#}",
+                url,
+                e
+            );
         }
     }
 
@@ -268,9 +263,17 @@ pub async fn store_source_assets_and_rewrite(
                 last_modified,
                 content_type,
             } => {
-                match cache.store(&url, &data, &local_filename, etag, last_modified, content_type) {
+                match cache.store(
+                    &url,
+                    &data,
+                    &local_filename,
+                    etag,
+                    last_modified,
+                    content_type,
+                ) {
                     Ok(final_name) => {
-                        cache.copy_to_dist(&url, dist_assets_dir)
+                        cache
+                            .copy_to_dist(&url, dist_assets_dir)
                             .wrap_err_with(|| {
                                 format!("Failed to copy source asset to dist: {}", url)
                             })?;
@@ -281,7 +284,8 @@ pub async fn store_source_assets_and_rewrite(
             }
             DownloadResult::NotModified => {
                 if let Some(meta) = cache.get(&url).cloned() {
-                    cache.copy_to_dist(&url, dist_assets_dir)
+                    cache
+                        .copy_to_dist(&url, dist_assets_dir)
                         .wrap_err_with(|| {
                             format!("Failed to copy not-modified source asset to dist: {}", url)
                         })?;
@@ -367,8 +371,7 @@ mod tests {
     async fn resolve_source_assets_downloads_and_rewrites() {
         use std::thread;
 
-        let server =
-            tiny_http::Server::http("127.0.0.1:0").expect("failed to bind mock server");
+        let server = tiny_http::Server::http("127.0.0.1:0").expect("failed to bind mock server");
         let addr = server.server_addr().to_ip().expect("no IP address");
         let asset_url = format!("http://{}/photo.png", addr);
 
@@ -387,10 +390,9 @@ mod tests {
                     (401, b"unauthorized")
                 };
 
-                let content_type = tiny_http::Header::from_bytes(
-                    &b"Content-Type"[..],
-                    &b"image/png"[..],
-                ).expect("valid header");
+                let content_type =
+                    tiny_http::Header::from_bytes(&b"Content-Type"[..], &b"image/png"[..])
+                        .expect("valid header");
 
                 let response = tiny_http::Response::new(
                     tiny_http::StatusCode(status),
@@ -425,10 +427,7 @@ mod tests {
             },
         );
 
-        let html = format!(
-            r#"<html><body><img src="{}"></body></html>"#,
-            asset_url,
-        );
+        let html = format!(r#"<html><body><img src="{}"></body></html>"#, asset_url,);
 
         let requests = vec![SourceAssetRequest {
             source_name: "cms".into(),
@@ -437,13 +436,7 @@ mod tests {
 
         let pool = no_op_pool();
         let result = resolve_source_assets(
-            &html,
-            &requests,
-            &sources,
-            &mut cache,
-            &client,
-            &dist_dir,
-            &pool,
+            &html, &requests, &sources, &mut cache, &client, &dist_dir, &pool,
         )
         .await
         .expect("resolve should succeed");
@@ -482,17 +475,10 @@ mod tests {
         let dist_dir = tmp.path().join("dist");
 
         let pool = no_op_pool();
-        let result = resolve_source_assets(
-            html,
-            &[],
-            &sources,
-            &mut cache,
-            &client,
-            &dist_dir,
-            &pool,
-        )
-        .await
-        .expect("should succeed");
+        let result =
+            resolve_source_assets(html, &[], &sources, &mut cache, &client, &dist_dir, &pool)
+                .await
+                .expect("should succeed");
 
         assert_eq!(result, html);
     }
@@ -505,8 +491,7 @@ mod tests {
         let request_count = Arc::new(AtomicUsize::new(0));
         let count_clone = request_count.clone();
 
-        let server =
-            tiny_http::Server::http("127.0.0.1:0").expect("failed to bind mock server");
+        let server = tiny_http::Server::http("127.0.0.1:0").expect("failed to bind mock server");
         let addr = server.server_addr().to_ip().expect("no IP address");
         let asset_url = format!("http://{}/image.png", addr);
 
@@ -516,10 +501,8 @@ mod tests {
             while let Ok(Some(req)) = server.recv_timeout(std::time::Duration::from_secs(2)) {
                 count_clone.fetch_add(1, Ordering::SeqCst);
                 let body: &[u8] = b"img-data";
-                let ct = tiny_http::Header::from_bytes(
-                    &b"Content-Type"[..],
-                    &b"image/png"[..],
-                ).expect("valid header");
+                let ct = tiny_http::Header::from_bytes(&b"Content-Type"[..], &b"image/png"[..])
+                    .expect("valid header");
                 let response = tiny_http::Response::new(
                     tiny_http::StatusCode(200),
                     vec![ct],
@@ -548,26 +531,23 @@ mod tests {
             },
         );
 
-        let html = format!(
-            r#"<img src="{0}"><img src="{0}">"#,
-            asset_url,
-        );
+        let html = format!(r#"<img src="{0}"><img src="{0}">"#, asset_url,);
 
         // Two requests for the same URL.
         let requests = vec![
-            SourceAssetRequest { source_name: "api".into(), url: asset_url.clone() },
-            SourceAssetRequest { source_name: "api".into(), url: asset_url.clone() },
+            SourceAssetRequest {
+                source_name: "api".into(),
+                url: asset_url.clone(),
+            },
+            SourceAssetRequest {
+                source_name: "api".into(),
+                url: asset_url.clone(),
+            },
         ];
 
         let pool = no_op_pool();
         let result = resolve_source_assets(
-            &html,
-            &requests,
-            &sources,
-            &mut cache,
-            &client,
-            &dist_dir,
-            &pool,
+            &html, &requests, &sources, &mut cache, &client, &dist_dir, &pool,
         )
         .await
         .expect("resolve should succeed");
@@ -575,7 +555,11 @@ mod tests {
         handle.join().expect("server thread");
 
         // Only 1 HTTP request should have been made.
-        assert_eq!(request_count.load(Ordering::SeqCst), 1, "should deduplicate");
+        assert_eq!(
+            request_count.load(Ordering::SeqCst),
+            1,
+            "should deduplicate"
+        );
 
         // Both occurrences should be rewritten.
         assert!(!result.contains(&asset_url), "all URLs should be replaced");
@@ -605,8 +589,14 @@ mod tests {
         let cache = crate::assets::cache::AssetCache::open(tmp.path()).expect("cache");
         let url = "https://cms.example.com/banner.png";
         let requests = vec![
-            SourceAssetRequest { source_name: "cms".into(), url: url.into() },
-            SourceAssetRequest { source_name: "cms".into(), url: url.into() },
+            SourceAssetRequest {
+                source_name: "cms".into(),
+                url: url.into(),
+            },
+            SourceAssetRequest {
+                source_name: "cms".into(),
+                url: url.into(),
+            },
         ];
 
         let (to_download, _) = check_source_asset_cache(&cache, &requests);

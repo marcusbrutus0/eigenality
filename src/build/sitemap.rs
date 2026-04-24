@@ -48,7 +48,10 @@ pub fn generate_sitemap(
 
         xml.push_str("  <url>\n");
         xml.push_str(&format!("    <loc>{}</loc>\n", escape_xml(&url)));
-        xml.push_str(&format!("    <lastmod>{}</lastmod>\n", escape_xml(build_time)));
+        xml.push_str(&format!(
+            "    <lastmod>{}</lastmod>\n",
+            escape_xml(build_time)
+        ));
         xml.push_str(&format!("    <priority>{}</priority>\n", priority));
         xml.push_str("  </url>\n");
     }
@@ -94,7 +97,9 @@ pub(crate) fn escape_xml(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{BuildConfig, SiteSchemaConfig, SiteMeta, SiteSeoConfig, SitemapConfig, RobotsConfig};
+    use crate::config::{
+        BuildConfig, RobotsConfig, SiteMeta, SiteSchemaConfig, SiteSeoConfig, SitemapConfig,
+    };
     use std::collections::HashMap;
     use std::fs;
     use tempfile::TempDir;
@@ -161,14 +166,12 @@ mod tests {
         let dist = tmp.path().join("dist");
         fs::create_dir_all(&dist).unwrap();
 
-        let pages = vec![
-            RenderedPage {
-                url_path: "/posts/hello.html".into(),
-                is_index: false,
-                is_dynamic: true,
-                template_path: None,
-            },
-        ];
+        let pages = vec![RenderedPage {
+            url_path: "/posts/hello.html".into(),
+            is_index: false,
+            is_dynamic: true,
+            template_path: None,
+        }];
 
         let config = test_config();
         generate_sitemap(&dist, &pages, &config, "2024-01-01").unwrap();
@@ -214,14 +217,12 @@ mod tests {
         let mut config = test_config();
         config.site.base_url = "https://example.com/".into();
 
-        let pages = vec![
-            RenderedPage {
-                url_path: "/about.html".into(),
-                is_index: false,
-                is_dynamic: false,
-                template_path: None,
-            },
-        ];
+        let pages = vec![RenderedPage {
+            url_path: "/about.html".into(),
+            is_index: false,
+            is_dynamic: false,
+            template_path: None,
+        }];
 
         generate_sitemap(&dist, &pages, &config, "2024-01-01").unwrap();
 
@@ -265,9 +266,15 @@ mod tests {
 
         let xml = fs::read_to_string(dist.join("sitemap.xml")).unwrap();
         assert!(xml.contains("https://example.com/"), "root should be /");
-        assert!(xml.contains("https://example.com/about"), "about should be clean");
+        assert!(
+            xml.contains("https://example.com/about"),
+            "about should be clean"
+        );
         assert!(!xml.contains("about.html"), "should not contain .html");
-        assert!(xml.contains("https://example.com/posts/hello"), "nested should be clean");
+        assert!(
+            xml.contains("https://example.com/posts/hello"),
+            "nested should be clean"
+        );
     }
 
     #[test]
@@ -280,21 +287,22 @@ mod tests {
         config.build.clean_links = true;
         config.sitemap.clean_urls = true;
 
-        let pages = vec![
-            RenderedPage {
-                url_path: "/about.html".into(),
-                is_index: false,
-                is_dynamic: false,
-                template_path: None,
-            },
-        ];
+        let pages = vec![RenderedPage {
+            url_path: "/about.html".into(),
+            is_index: false,
+            is_dynamic: false,
+            template_path: None,
+        }];
 
         generate_sitemap(&dist, &pages, &config, "2024-01-01").unwrap();
 
         let xml = fs::read_to_string(dist.join("sitemap.xml")).unwrap();
         // clean_links produces /about (no trailing slash), not /about/ (clean_urls style).
         assert!(xml.contains("https://example.com/about"));
-        assert!(!xml.contains("/about/"), "clean_links should override clean_urls — no trailing slash");
+        assert!(
+            !xml.contains("/about/"),
+            "clean_links should override clean_urls — no trailing slash"
+        );
     }
 
     // -- Property-based tests (hegeltest) --

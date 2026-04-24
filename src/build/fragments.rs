@@ -71,7 +71,8 @@ pub fn strip_fragment_markers(html: &str) -> String {
 /// Used by view transitions to know which element IDs to add
 /// `view-transition-name` to.
 pub fn extract_block_names(html: &str) -> Vec<String> {
-    FRAG_START_RE.captures_iter(html)
+    FRAG_START_RE
+        .captures_iter(html)
         .map(|cap| cap[1].to_string())
         .collect()
 }
@@ -173,7 +174,12 @@ pub fn write_fragments(
             html.push_str(&oob_html);
         }
 
-        let frag_path = fragment_output_path(page_output_path, &fragment.block_name, content_block, fragment_dir);
+        let frag_path = fragment_output_path(
+            page_output_path,
+            &fragment.block_name,
+            content_block,
+            fragment_dir,
+        );
         let full_path = dist_dir.join(&frag_path);
 
         if let Some(parent) = full_path.parent() {
@@ -196,7 +202,8 @@ mod tests {
 
     #[test]
     fn test_extract_single_fragment() {
-        let html = "<html><body><!--FRAG:content:START--><h1>Hi</h1><!--FRAG:content:END--></body></html>";
+        let html =
+            "<html><body><!--FRAG:content:START--><h1>Hi</h1><!--FRAG:content:END--></body></html>";
         let frags = extract_fragments(html);
         assert_eq!(frags.len(), 1);
         assert_eq!(frags[0].block_name, "content");
@@ -226,7 +233,8 @@ mod tests {
 
     #[test]
     fn test_extract_multiline_fragment() {
-        let html = "<!--FRAG:content:START-->\n<h1>Title</h1>\n<p>Body</p>\n<!--FRAG:content:END-->";
+        let html =
+            "<!--FRAG:content:START-->\n<h1>Title</h1>\n<p>Body</p>\n<!--FRAG:content:END-->";
         let frags = extract_fragments(html);
         assert_eq!(frags.len(), 1);
         assert_eq!(frags[0].html, "\n<h1>Title</h1>\n<p>Body</p>\n");
@@ -255,12 +263,8 @@ mod tests {
 
     #[test]
     fn test_fragment_output_path_content_block() {
-        let path = fragment_output_path(
-            Path::new("about.html"),
-            "content",
-            "content",
-            "_fragments",
-        );
+        let path =
+            fragment_output_path(Path::new("about.html"), "content", "content", "_fragments");
         assert_eq!(path, PathBuf::from("_fragments/about.html"));
     }
 
@@ -277,23 +281,14 @@ mod tests {
 
     #[test]
     fn test_fragment_output_path_non_content_block() {
-        let path = fragment_output_path(
-            Path::new("about.html"),
-            "sidebar",
-            "content",
-            "_fragments",
-        );
+        let path =
+            fragment_output_path(Path::new("about.html"), "sidebar", "content", "_fragments");
         assert_eq!(path, PathBuf::from("_fragments/about/sidebar.html"));
     }
 
     #[test]
     fn test_fragment_output_path_custom_fragment_dir() {
-        let path = fragment_output_path(
-            Path::new("index.html"),
-            "content",
-            "content",
-            "_frags",
-        );
+        let path = fragment_output_path(Path::new("index.html"), "content", "content", "_frags");
         assert_eq!(path, PathBuf::from("_frags/index.html"));
     }
 
@@ -321,7 +316,8 @@ mod tests {
             "content",
             "_fragments",
             &[],
-        ).unwrap();
+        )
+        .unwrap();
 
         assert!(dist.join("_fragments/about.html").exists());
         assert!(dist.join("_fragments/about/sidebar.html").exists());
@@ -373,11 +369,15 @@ mod tests {
             "content",
             "_fragments",
             &["nav_header".to_string()],
-        ).unwrap();
+        )
+        .unwrap();
 
         // Content fragment should include OOB block appended.
         let content = fs::read_to_string(dist.join("_fragments/about.html")).unwrap();
-        assert_eq!(content, r#"<h1>Hi</h1><header id="nav" hx-swap-oob="outerHTML">Nav</header>"#);
+        assert_eq!(
+            content,
+            r#"<h1>Hi</h1><header id="nav" hx-swap-oob="outerHTML">Nav</header>"#
+        );
 
         // OOB block should NOT be written as a separate fragment file.
         assert!(!dist.join("_fragments/about/nav_header.html").exists());
@@ -411,14 +411,19 @@ mod tests {
         )
         .unwrap();
 
-        let doc = fs::read_to_string(dist.join("_fragments/docs/quickstart/doc_content.html")).unwrap();
+        let doc =
+            fs::read_to_string(dist.join("_fragments/docs/quickstart/doc_content.html")).unwrap();
         assert_eq!(
             doc,
             r#"<h1>Hi</h1><aside id="sidebar" hx-swap-oob="outerHTML">Side</aside>"#,
         );
 
         // OOB block should NOT be written as a separate fragment file.
-        assert!(!dist.join("_fragments/docs/quickstart/sidebar.html").exists());
+        assert!(
+            !dist
+                .join("_fragments/docs/quickstart/sidebar.html")
+                .exists()
+        );
     }
 
     #[test]

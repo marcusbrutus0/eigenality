@@ -13,7 +13,7 @@ use minijinja::Value;
 
 use crate::build::clean_link::to_clean_link;
 use crate::build::content_hash::AssetManifest;
-use crate::build::source_asset::{SourceAssetCollector, SOURCE_ASSET_PROXY_PREFIX, resolve_url};
+use crate::build::source_asset::{SOURCE_ASSET_PROXY_PREFIX, SourceAssetCollector, resolve_url};
 use crate::config::SiteConfig;
 
 /// Register all custom functions on the given environment.
@@ -121,10 +121,7 @@ pub fn register_functions(
     }
 
     // site — expose the full [site] config as a global variable.
-    env.add_global(
-        "site",
-        Value::from_serialize(&config.site),
-    );
+    env.add_global("site", Value::from_serialize(&config.site));
 }
 
 /// Compute the fragment path for a given page path and block name.
@@ -187,7 +184,10 @@ fn build_proxy_url(source_name: &str, resolved_url: &str, source_base_url: &str)
         let relative = relative.trim_start_matches('/');
         format!("/_proxy/{}/{}", source_name, relative)
     } else {
-        format!("/_proxy/{}/{}{}", source_name, SOURCE_ASSET_PROXY_PREFIX, resolved_url)
+        format!(
+            "/_proxy/{}/{}{}",
+            source_name, SOURCE_ASSET_PROXY_PREFIX, resolved_url
+        )
     }
 }
 
@@ -214,7 +214,7 @@ fn extract_host(url: &str) -> &str {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{BuildConfig, SiteSchemaConfig, SiteMeta, SiteSeoConfig};
+    use crate::config::{BuildConfig, SiteMeta, SiteSchemaConfig, SiteSeoConfig};
     use minijinja::context;
     use std::collections::HashMap;
 
@@ -361,8 +361,11 @@ mod tests {
         let config = test_config();
         register_functions(&mut env, &config, None, false, None);
 
-        env.add_template("test", r##"{{ link_to("/about.html", "#sidebar", "sidebar") }}"##)
-            .unwrap();
+        env.add_template(
+            "test",
+            r##"{{ link_to("/about.html", "#sidebar", "sidebar") }}"##,
+        )
+        .unwrap();
         let tmpl = env.get_template("test").unwrap();
         let result = tmpl.render(context! {}).unwrap();
 
@@ -392,8 +395,7 @@ mod tests {
         let config = test_config();
         register_functions(&mut env, &config, None, false, None);
 
-        env.add_template("test", "{{ current_year() }}")
-            .unwrap();
+        env.add_template("test", "{{ current_year() }}").unwrap();
         let tmpl = env.get_template("test").unwrap();
         let result = tmpl.render(context! {}).unwrap();
 
@@ -577,13 +579,17 @@ mod tests {
 
     fn make_config_with_source(name: &str, url: &str, auth: &str) -> SiteConfig {
         let mut config = test_config();
-        config.sources.insert(name.to_string(), crate::config::SourceConfig {
-            url: url.to_string(),
-            headers: std::collections::HashMap::from([
-                ("Authorization".to_string(), auth.to_string()),
-            ]),
-            rate_limit: None,
-        });
+        config.sources.insert(
+            name.to_string(),
+            crate::config::SourceConfig {
+                url: url.to_string(),
+                headers: std::collections::HashMap::from([(
+                    "Authorization".to_string(),
+                    auth.to_string(),
+                )]),
+                rate_limit: None,
+            },
+        );
         config
     }
 
@@ -592,7 +598,11 @@ mod tests {
         let mut env = Environment::new();
         let config = make_config_with_source("my_cms", "https://cms.example.com", "Bearer tok");
         register_functions(&mut env, &config, None, true, None);
-        env.add_template("test", r#"{{ source_asset("my_cms", "/uploads/photo.jpg") }}"#).unwrap();
+        env.add_template(
+            "test",
+            r#"{{ source_asset("my_cms", "/uploads/photo.jpg") }}"#,
+        )
+        .unwrap();
         let result = env.get_template("test").unwrap().render(()).unwrap();
         assert_eq!(result, "/_proxy/my_cms/uploads/photo.jpg");
     }
@@ -602,7 +612,11 @@ mod tests {
         let mut env = Environment::new();
         let config = make_config_with_source("my_cms", "https://cms.example.com", "Bearer tok");
         register_functions(&mut env, &config, None, true, None);
-        env.add_template("test", r#"{{ source_asset("my_cms", "https://cms.example.com/uploads/photo.jpg") }}"#).unwrap();
+        env.add_template(
+            "test",
+            r#"{{ source_asset("my_cms", "https://cms.example.com/uploads/photo.jpg") }}"#,
+        )
+        .unwrap();
         let result = env.get_template("test").unwrap().render(()).unwrap();
         assert_eq!(result, "/_proxy/my_cms/uploads/photo.jpg");
     }
@@ -612,9 +626,16 @@ mod tests {
         let mut env = Environment::new();
         let config = make_config_with_source("my_cms", "https://cms.example.com", "Bearer tok");
         register_functions(&mut env, &config, None, true, None);
-        env.add_template("test", r#"{{ source_asset("my_cms", "https://media.example.com/photo.jpg") }}"#).unwrap();
+        env.add_template(
+            "test",
+            r#"{{ source_asset("my_cms", "https://media.example.com/photo.jpg") }}"#,
+        )
+        .unwrap();
         let result = env.get_template("test").unwrap().render(()).unwrap();
-        assert_eq!(result, "/_proxy/my_cms/__source_asset__/https://media.example.com/photo.jpg");
+        assert_eq!(
+            result,
+            "/_proxy/my_cms/__source_asset__/https://media.example.com/photo.jpg"
+        );
     }
 
     #[test]
@@ -622,7 +643,11 @@ mod tests {
         let mut env = Environment::new();
         let config = make_config_with_source("my_cms", "https://cms.example.com", "Bearer tok");
         register_functions(&mut env, &config, None, false, None);
-        env.add_template("test", r#"{{ source_asset("my_cms", "/uploads/photo.jpg") }}"#).unwrap();
+        env.add_template(
+            "test",
+            r#"{{ source_asset("my_cms", "/uploads/photo.jpg") }}"#,
+        )
+        .unwrap();
         let result = env.get_template("test").unwrap().render(()).unwrap();
         assert_eq!(result, "https://cms.example.com/uploads/photo.jpg");
     }
@@ -632,10 +657,15 @@ mod tests {
         let mut env = Environment::new();
         let config = make_config_with_source("my_cms", "https://cms.example.com", "Bearer tok");
         register_functions(&mut env, &config, None, true, None);
-        env.add_template("test", r#"{{ source_asset("nope", "/img.jpg") }}"#).unwrap();
+        env.add_template("test", r#"{{ source_asset("nope", "/img.jpg") }}"#)
+            .unwrap();
         let err = env.get_template("test").unwrap().render(()).unwrap_err();
         let msg = err.to_string();
-        assert!(msg.contains("nope"), "Error should name the bad source: {}", msg);
+        assert!(
+            msg.contains("nope"),
+            "Error should name the bad source: {}",
+            msg
+        );
     }
 
     #[test]
@@ -643,10 +673,15 @@ mod tests {
         let mut env = Environment::new();
         let config = make_config_with_source("my_cms", "https://cms.example.com", "Bearer tok");
         register_functions(&mut env, &config, None, true, None);
-        env.add_template("test", r#"{{ source_asset("my_cms", "") }}"#).unwrap();
+        env.add_template("test", r#"{{ source_asset("my_cms", "") }}"#)
+            .unwrap();
         let err = env.get_template("test").unwrap().render(()).unwrap_err();
         let msg = err.to_string();
-        assert!(msg.contains("non-empty"), "Error should mention non-empty: {}", msg);
+        assert!(
+            msg.contains("non-empty"),
+            "Error should mention non-empty: {}",
+            msg
+        );
     }
 
     #[test]
@@ -658,8 +693,11 @@ mod tests {
             "Bearer tok",
         );
         register_functions(&mut env, &config, None, true, None);
-        env.add_template("test", r#"{{ source_asset("cms_assets", "abc123/hero.png") }}"#)
-            .unwrap();
+        env.add_template(
+            "test",
+            r#"{{ source_asset("cms_assets", "abc123/hero.png") }}"#,
+        )
+        .unwrap();
         let result = env.get_template("test").unwrap().render(()).unwrap();
         // The base path /apps/id8nxt/uploads/file must NOT appear in the proxy URL —
         // the proxy handler prepends the full source base URL.
@@ -675,8 +713,11 @@ mod tests {
             "Bearer tok",
         );
         register_functions(&mut env, &config, None, true, None);
-        env.add_template("test", r#"{{ source_asset("cms_assets", "/abc123/hero.png") }}"#)
-            .unwrap();
+        env.add_template(
+            "test",
+            r#"{{ source_asset("cms_assets", "/abc123/hero.png") }}"#,
+        )
+        .unwrap();
         let result = env.get_template("test").unwrap().render(()).unwrap();
         assert_eq!(result, "/_proxy/cms_assets/abc123/hero.png");
     }

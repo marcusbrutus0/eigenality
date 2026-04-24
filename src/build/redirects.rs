@@ -18,9 +18,8 @@ pub fn write(project_root: &Path, dist_dir: &Path, config: &SiteConfig) -> Resul
 
     if static_file.exists() {
         if config.redirects.is_empty() {
-            std::fs::copy(&static_file, &dest).wrap_err_with(|| {
-                format!("Failed to copy _redirects to {}", dest.display())
-            })?;
+            std::fs::copy(&static_file, &dest)
+                .wrap_err_with(|| format!("Failed to copy _redirects to {}", dest.display()))?;
             tracing::info!("Copying _redirects file... ✓");
         } else {
             bail!(
@@ -146,8 +145,7 @@ mod tests {
 
     #[test]
     fn test_307_308_rules() {
-        let content =
-            build_redirects_content(&[rule("/a", "/b", 307), rule("/c", "/d", 308)]);
+        let content = build_redirects_content(&[rule("/a", "/b", 307), rule("/c", "/d", 308)]);
         assert!(content.contains("/a /b 307\n"));
         assert!(content.contains("/c /d 308\n"));
     }
@@ -167,26 +165,22 @@ mod tests {
 
     #[test]
     fn test_external_from() {
-        let content =
-            build_redirects_content(&[rule("https://old.com/*", "/new", 301)]);
+        let content = build_redirects_content(&[rule("https://old.com/*", "/new", 301)]);
         assert!(content.contains("https://old.com/* /new 301\n"));
     }
 
     #[test]
     fn test_external_to() {
-        let content =
-            build_redirects_content(&[rule("/old", "https://new.com", 301)]);
+        let content = build_redirects_content(&[rule("/old", "https://new.com", 301)]);
         assert!(content.contains("/old https://new.com 301\n"));
     }
 
     #[test]
     fn test_placeholder_passthrough() {
-        let content =
-            build_redirects_content(&[rule("/posts/:slug", "/blog/:slug", 301)]);
+        let content = build_redirects_content(&[rule("/posts/:slug", "/blog/:slug", 301)]);
         assert!(content.contains("/posts/:slug /blog/:slug 301\n"));
 
-        let content2 =
-            build_redirects_content(&[rule("/old/*", "/new/:splat", 301)]);
+        let content2 = build_redirects_content(&[rule("/old/*", "/new/:splat", 301)]);
         assert!(content2.contains("/old/* /new/:splat 301\n"));
     }
 

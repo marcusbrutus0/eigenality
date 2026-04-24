@@ -88,10 +88,7 @@ pub fn discover_pages(project_root: &Path, config: &SiteConfig) -> Result<Vec<Pa
             .strip_prefix(&templates_dir)
             .wrap_err("Template path is not inside templates/ directory")?;
 
-        let filename = path
-            .file_name()
-            .and_then(|f| f.to_str())
-            .unwrap_or("");
+        let filename = path.file_name().and_then(|f| f.to_str()).unwrap_or("");
 
         // Classify: dynamic ([name].html) or static.
         let page_type = if let Some(caps) = bracket_re.captures(filename) {
@@ -104,10 +101,7 @@ pub fn discover_pages(project_root: &Path, config: &SiteConfig) -> Result<Vec<Pa
         // Output directory: parent of the template path relative to templates/.
         // e.g. templates/posts/[post].html -> output_dir = "posts"
         // e.g. templates/index.html -> output_dir = ""
-        let output_dir = rel_path
-            .parent()
-            .unwrap_or(Path::new(""))
-            .to_path_buf();
+        let output_dir = rel_path.parent().unwrap_or(Path::new("")).to_path_buf();
 
         // Read the file content and extract frontmatter.
         let content = std::fs::read_to_string(path)
@@ -160,7 +154,8 @@ pub fn discover_pages(project_root: &Path, config: &SiteConfig) -> Result<Vec<Pa
 
     tracing::debug!(
         "Found {} static page(s), {} dynamic template(s)",
-        static_count, dynamic_count
+        static_count,
+        dynamic_count
     );
 
     Ok(pages)
@@ -168,9 +163,7 @@ pub fn discover_pages(project_root: &Path, config: &SiteConfig) -> Result<Vec<Pa
 
 /// Check whether a file/directory name starts with `_`.
 fn is_underscore_prefixed(name: &std::ffi::OsStr) -> bool {
-    name.to_str()
-        .map(|s| s.starts_with('_'))
-        .unwrap_or(false)
+    name.to_str().map(|s| s.starts_with('_')).unwrap_or(false)
 }
 
 /// Validate that every `source` field referenced in any `DataQuery` within the
@@ -222,7 +215,7 @@ mod tests {
     use std::fs;
     use tempfile::TempDir;
 
-    use crate::config::{BuildConfig, SiteSchemaConfig, SiteMeta, SiteSeoConfig, SourceConfig};
+    use crate::config::{BuildConfig, SiteMeta, SiteSchemaConfig, SiteSeoConfig, SourceConfig};
 
     /// Create a minimal SiteConfig for testing.
     fn test_config() -> SiteConfig {
@@ -290,7 +283,8 @@ mod tests {
         let root = tmp.path();
         let config = test_config();
 
-        let dynamic_content = "---\ncollection:\n  source: blog_api\n  path: /posts\n---\n<h1>{{ post.title }}</h1>";
+        let dynamic_content =
+            "---\ncollection:\n  source: blog_api\n  path: /posts\n---\n<h1>{{ post.title }}</h1>";
 
         write(root, "templates/posts/[post].html", dynamic_content);
 
@@ -388,7 +382,8 @@ mod tests {
         let root = tmp.path();
         let config = test_config();
 
-        let content = "---\ndata:\n  posts:\n    source: blog_api\n    path: /posts\n---\n<h1>Posts</h1>";
+        let content =
+            "---\ndata:\n  posts:\n    source: blog_api\n    path: /posts\n---\n<h1>Posts</h1>";
 
         write(root, "templates/posts.html", content);
 

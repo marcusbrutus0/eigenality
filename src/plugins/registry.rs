@@ -36,9 +36,7 @@ impl PluginRegistry {
             let config = plugin_configs.get(plugin.name());
             plugin
                 .on_config_loaded(config, project_root)
-                .wrap_err_with(|| {
-                    format!("Plugin '{}' failed on_config_loaded", plugin.name())
-                })?;
+                .wrap_err_with(|| format!("Plugin '{}' failed on_config_loaded", plugin.name()))?;
         }
         Ok(())
     }
@@ -67,19 +65,14 @@ impl PluginRegistry {
     }
 
     /// Let all plugins register template extensions.
-    pub fn register_template_extensions(
-        &self,
-        env: &mut minijinja::Environment<'_>,
-    ) -> Result<()> {
+    pub fn register_template_extensions(&self, env: &mut minijinja::Environment<'_>) -> Result<()> {
         for plugin in &self.plugins {
-            plugin
-                .register_template_extensions(env)
-                .wrap_err_with(|| {
-                    format!(
-                        "Plugin '{}' failed register_template_extensions",
-                        plugin.name()
-                    )
-                })?;
+            plugin.register_template_extensions(env).wrap_err_with(|| {
+                format!(
+                    "Plugin '{}' failed register_template_extensions",
+                    plugin.name()
+                )
+            })?;
         }
         Ok(())
     }
@@ -106,17 +99,11 @@ impl PluginRegistry {
     }
 
     /// Call `post_build` for all plugins.
-    pub fn post_build(
-        &self,
-        dist_dir: &Path,
-        project_root: &Path,
-    ) -> Result<()> {
+    pub fn post_build(&self, dist_dir: &Path, project_root: &Path) -> Result<()> {
         for plugin in &self.plugins {
             plugin
                 .post_build(dist_dir, project_root)
-                .wrap_err_with(|| {
-                    format!("Plugin '{}' failed post_build", plugin.name())
-                })?;
+                .wrap_err_with(|| format!("Plugin '{}' failed post_build", plugin.name()))?;
         }
         Ok(())
     }
@@ -196,22 +183,14 @@ mod tests {
             if let serde_json::Value::Array(ref mut arr) = value {
                 for item in arr.iter_mut() {
                     if let Some(obj) = item.as_object_mut() {
-                        obj.insert(
-                            "plugin_touched".to_string(),
-                            serde_json::Value::Bool(true),
-                        );
+                        obj.insert("plugin_touched".to_string(), serde_json::Value::Bool(true));
                     }
                 }
             }
             Ok(value)
         }
 
-        fn post_render_html(
-            &self,
-            html: String,
-            _path: &str,
-            _dist: &Path,
-        ) -> Result<String> {
+        fn post_render_html(&self, html: String, _path: &str, _dist: &Path) -> Result<String> {
             Ok(format!("<!-- {} -->\n{}", self.prefix, html))
         }
     }
@@ -232,33 +211,26 @@ mod tests {
             _path: Option<&str>,
         ) -> Result<serde_json::Value> {
             match value {
-                serde_json::Value::Array(arr) => {
-                    Ok(serde_json::Value::Array(
-                        arr.into_iter()
-                            .map(|v| match v {
-                                serde_json::Value::Object(mut map) => {
-                                    for val in map.values_mut() {
-                                        if let serde_json::Value::String(s) = val {
-                                            *s = s.to_uppercase();
-                                        }
+                serde_json::Value::Array(arr) => Ok(serde_json::Value::Array(
+                    arr.into_iter()
+                        .map(|v| match v {
+                            serde_json::Value::Object(mut map) => {
+                                for val in map.values_mut() {
+                                    if let serde_json::Value::String(s) = val {
+                                        *s = s.to_uppercase();
                                     }
-                                    serde_json::Value::Object(map)
                                 }
-                                other => other,
-                            })
-                            .collect(),
-                    ))
-                }
+                                serde_json::Value::Object(map)
+                            }
+                            other => other,
+                        })
+                        .collect(),
+                )),
                 other => Ok(other),
             }
         }
 
-        fn post_render_html(
-            &self,
-            html: String,
-            _path: &str,
-            _dist: &Path,
-        ) -> Result<String> {
+        fn post_render_html(&self, html: String, _path: &str, _dist: &Path) -> Result<String> {
             Ok(html.to_uppercase())
         }
     }
@@ -281,20 +253,11 @@ mod tests {
             Err(eyre::eyre!("intentional failure"))
         }
 
-        fn post_render_html(
-            &self,
-            _html: String,
-            _path: &str,
-            _dist: &Path,
-        ) -> Result<String> {
+        fn post_render_html(&self, _html: String, _path: &str, _dist: &Path) -> Result<String> {
             Err(eyre::eyre!("intentional html failure"))
         }
 
-        fn post_build(
-            &self,
-            _dist_dir: &Path,
-            _project_root: &Path,
-        ) -> Result<()> {
+        fn post_build(&self, _dist_dir: &Path, _project_root: &Path) -> Result<()> {
             Err(eyre::eyre!("intentional post_build failure"))
         }
     }
@@ -455,7 +418,9 @@ mod tests {
     #[test]
     fn test_post_render_html_single_plugin() {
         let mut registry = PluginRegistry::new();
-        registry.register(Box::new(TestPlugin { prefix: "PLUGIN".into() }));
+        registry.register(Box::new(TestPlugin {
+            prefix: "PLUGIN".into(),
+        }));
 
         let html = "<h1>Hello</h1>".to_string();
         let result = registry
@@ -469,7 +434,9 @@ mod tests {
     #[test]
     fn test_post_render_html_chained_two_plugins() {
         let mut registry = PluginRegistry::new();
-        registry.register(Box::new(TestPlugin { prefix: "first".into() }));
+        registry.register(Box::new(TestPlugin {
+            prefix: "first".into(),
+        }));
         registry.register(Box::new(UppercasePlugin));
 
         let html = "<p>hello</p>".to_string();
@@ -498,11 +465,7 @@ mod tests {
         let mut registry = PluginRegistry::new();
         registry.register(Box::new(FailingPlugin));
 
-        let result = registry.post_render_html(
-            "<p>hi</p>".into(),
-            "test.html",
-            Path::new("dist"),
-        );
+        let result = registry.post_render_html("<p>hi</p>".into(), "test.html", Path::new("dist"));
         assert!(result.is_err());
         let err = result.unwrap_err().to_string();
         assert!(err.contains("failing"));

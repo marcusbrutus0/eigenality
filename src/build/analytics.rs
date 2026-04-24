@@ -34,16 +34,22 @@ fn build_umami_snippet(config: &UmamiAnalyticsConfig) -> String {
         config.host_url, config.website_id,
     );
     if let Some(ref domains) = config.domains {
-        script.push_str(&format!(r#"
-  data-domains="{domains}""#));
+        script.push_str(&format!(
+            r#"
+  data-domains="{domains}""#
+        ));
     }
     if !config.auto_track {
-        script.push_str(r#"
-  data-auto-track="false""#);
+        script.push_str(
+            r#"
+  data-auto-track="false""#,
+        );
     }
     if let Some(ref tag) = config.tag {
-        script.push_str(&format!(r#"
-  data-tag="{tag}""#));
+        script.push_str(&format!(
+            r#"
+  data-tag="{tag}""#
+        ));
     }
     script.push_str("></script>");
     script
@@ -117,7 +123,10 @@ mod tests {
     fn test_google_snippet_contains_tracking_id_twice() {
         let snippet = build_google_snippet("G-MYSITE99");
         let count = snippet.matches("G-MYSITE99").count();
-        assert_eq!(count, 2, "tracking ID should appear in script src and gtag config");
+        assert_eq!(
+            count, 2,
+            "tracking ID should appear in script src and gtag config"
+        );
     }
 
     #[test]
@@ -176,7 +185,10 @@ mod tests {
             tag: None,
         };
         let snippet = build_umami_snippet(&config);
-        assert!(!snippet.contains("data-auto-track"), "auto_track=true should not emit the attribute");
+        assert!(
+            !snippet.contains("data-auto-track"),
+            "auto_track=true should not emit the attribute"
+        );
     }
 
     // --- inject_analytics ---
@@ -217,9 +229,15 @@ mod tests {
         let result = inject_analytics(html, &config);
         let google_pos = result.find("googletagmanager").unwrap();
         let umami_pos = result.find("data-website-id").unwrap();
-        assert!(google_pos < umami_pos, "Google snippet should come before Umami");
+        assert!(
+            google_pos < umami_pos,
+            "Google snippet should come before Umami"
+        );
         let body_pos = result.find("</body>").unwrap();
-        assert!(umami_pos < body_pos, "both snippets should be before </body>");
+        assert!(
+            umami_pos < body_pos,
+            "both snippets should be before </body>"
+        );
     }
 
     #[test]

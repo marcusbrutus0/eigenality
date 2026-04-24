@@ -21,7 +21,7 @@ pub struct ImageVariant {
     /// The pixel width of this variant.
     pub width: u32,
     /// MIME type, e.g. `image/webp`, `image/avif`, `image/jpeg`.
-    pub mime_type: String
+    pub mime_type: String,
 }
 
 /// The full set of variants generated for a single source image.
@@ -51,8 +51,9 @@ pub struct ImageCache {
 impl ImageCache {
     pub fn open(project_root: &Path) -> Result<Self> {
         let cache_dir = project_root.join(".eigen_cache").join("images");
-        std::fs::create_dir_all(&cache_dir)
-            .wrap_err_with(|| format!("Failed to create image cache dir {}", cache_dir.display()))?;
+        std::fs::create_dir_all(&cache_dir).wrap_err_with(|| {
+            format!("Failed to create image cache dir {}", cache_dir.display())
+        })?;
         Ok(Self { cache_dir })
     }
 
@@ -142,15 +143,15 @@ pub fn optimize_image(
         .wrap_err_with(|| format!("Failed to read image {}", src_path.display()))?;
 
     // Determine original format from extension.
-    let ext = src_path
-        .extension()
-        .and_then(|e| e.to_str())
-        .unwrap_or("");
+    let ext = src_path.extension().and_then(|e| e.to_str()).unwrap_or("");
 
     let (_orig_img_format, _orig_mime, orig_format_name) = match guess_format_from_ext(ext) {
         Some(info) => info,
         None => {
-            tracing::debug!("  Skipping unsupported image format: {}", src_path.display());
+            tracing::debug!(
+                "  Skipping unsupported image format: {}",
+                src_path.display()
+            );
             return Ok(None);
         }
     };
@@ -213,7 +214,9 @@ pub fn optimize_image(
             let cache_key = &variant_filename;
 
             // Determine output path.
-            let out_path = dist_dir.join(url_prefix.trim_start_matches('/')).join(&variant_filename);
+            let out_path = dist_dir
+                .join(url_prefix.trim_start_matches('/'))
+                .join(&variant_filename);
             let variant_url = format!("{}/{}", url_prefix, variant_filename);
 
             // Check cache first.
@@ -235,7 +238,7 @@ pub fn optimize_image(
             variants.push(ImageVariant {
                 url_path: variant_url,
                 width: w,
-                mime_type: mime_type.to_string()
+                mime_type: mime_type.to_string(),
             });
         }
 
@@ -257,10 +260,7 @@ fn encode_image(img: &DynamicImage, format: image::ImageFormat, quality: u8) -> 
 
     match format {
         image::ImageFormat::Jpeg => {
-            let encoder = image::codecs::jpeg::JpegEncoder::new_with_quality(
-                &mut buf,
-                quality,
-            );
+            let encoder = image::codecs::jpeg::JpegEncoder::new_with_quality(&mut buf, quality);
             img.write_with_encoder(encoder)
                 .wrap_err("Failed to encode JPEG")?;
         }
@@ -273,8 +273,7 @@ fn encode_image(img: &DynamicImage, format: image::ImageFormat, quality: u8) -> 
         }
         image::ImageFormat::Avif => {
             let encoder = image::codecs::avif::AvifEncoder::new_with_speed_quality(
-                &mut buf,
-                10, // fastest speed
+                &mut buf, 10, // fastest speed
                 quality,
             );
             img.write_with_encoder(encoder)
@@ -410,15 +409,9 @@ mod tests {
 
         let cache = ImageCache::open(tmp.path()).unwrap();
 
-        let result = optimize_image(
-            &src_path,
-            "/assets",
-            &config,
-            &cache,
-            &dist_dir,
-        )
-        .unwrap()
-        .unwrap();
+        let result = optimize_image(&src_path, "/assets", &config, &cache, &dist_dir)
+            .unwrap()
+            .unwrap();
 
         assert_eq!(result.original_width, 100);
         assert_eq!(result.original_height, 50);
@@ -464,7 +457,8 @@ mod tests {
 
         // First run — populates cache.
         let r1 = optimize_image(&src_path, "/assets", &config, &cache, &dist_dir)
-            .unwrap().unwrap();
+            .unwrap()
+            .unwrap();
 
         // Delete dist files to prove cache is used on second run.
         for variants in r1.by_format.values() {
@@ -478,7 +472,8 @@ mod tests {
 
         // Second run — should restore from cache.
         let r2 = optimize_image(&src_path, "/assets", &config, &cache, &dist_dir)
-            .unwrap().unwrap();
+            .unwrap()
+            .unwrap();
 
         for variants in r2.by_format.values() {
             for v in variants {

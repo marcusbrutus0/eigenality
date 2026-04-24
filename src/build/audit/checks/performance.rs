@@ -523,9 +523,11 @@ mod tests {
         let html = r#"<html><head><script src="/js/app.js"></script></head><body></body></html>"#;
         let config = minimal_config();
         let findings = page_checks(html, "/index.html", "index.html", &config);
-        assert!(findings
-            .iter()
-            .any(|f| f.id == "perf/render-blocking-scripts"));
+        assert!(
+            findings
+                .iter()
+                .any(|f| f.id == "perf/render-blocking-scripts")
+        );
     }
 
     #[test]
@@ -534,9 +536,11 @@ mod tests {
             r#"<html><head><script src="/js/app.js" defer></script></head><body></body></html>"#;
         let config = minimal_config();
         let findings = page_checks(html, "/index.html", "index.html", &config);
-        assert!(!findings
-            .iter()
-            .any(|f| f.id == "perf/render-blocking-scripts"));
+        assert!(
+            !findings
+                .iter()
+                .any(|f| f.id == "perf/render-blocking-scripts")
+        );
     }
 
     #[test]
@@ -545,39 +549,42 @@ mod tests {
             r#"<html><head><script src="/js/app.js" async></script></head><body></body></html>"#;
         let config = minimal_config();
         let findings = page_checks(html, "/index.html", "index.html", &config);
-        assert!(!findings
-            .iter()
-            .any(|f| f.id == "perf/render-blocking-scripts"));
+        assert!(
+            !findings
+                .iter()
+                .any(|f| f.id == "perf/render-blocking-scripts")
+        );
     }
 
     #[test]
     fn inline_script_in_head_no_flag() {
-        let html =
-            r#"<html><head><script>console.log("hi")</script></head><body></body></html>"#;
+        let html = r#"<html><head><script>console.log("hi")</script></head><body></body></html>"#;
         let config = minimal_config();
         let findings = page_checks(html, "/index.html", "index.html", &config);
-        assert!(!findings
-            .iter()
-            .any(|f| f.id == "perf/render-blocking-scripts"));
+        assert!(
+            !findings
+                .iter()
+                .any(|f| f.id == "perf/render-blocking-scripts")
+        );
     }
 
     #[test]
     fn script_in_body_no_flag() {
-        let html =
-            r#"<html><head></head><body><script src="/js/app.js"></script></body></html>"#;
+        let html = r#"<html><head></head><body><script src="/js/app.js"></script></body></html>"#;
         let config = minimal_config();
         let findings = page_checks(html, "/index.html", "index.html", &config);
-        assert!(!findings
-            .iter()
-            .any(|f| f.id == "perf/render-blocking-scripts"));
+        assert!(
+            !findings
+                .iter()
+                .any(|f| f.id == "perf/render-blocking-scripts")
+        );
     }
 
     // perf/large-image
 
     #[test]
     fn img_without_srcset_flags_when_optimize_off() {
-        let html =
-            r#"<html><head></head><body><img src="/img/hero.jpg"></body></html>"#;
+        let html = r#"<html><head></head><body><img src="/img/hero.jpg"></body></html>"#;
         let config: SiteConfig = toml::from_str(
             r#"
             [site]
@@ -611,8 +618,7 @@ mod tests {
 
     #[test]
     fn img_without_srcset_no_flag_when_optimize_on() {
-        let html =
-            r#"<html><head></head><body><img src="/img/hero.jpg"></body></html>"#;
+        let html = r#"<html><head></head><body><img src="/img/hero.jpg"></body></html>"#;
         let config = minimal_config(); // optimize defaults to true
         let findings = page_checks(html, "/index.html", "index.html", &config);
         assert!(!findings.iter().any(|f| f.id == "perf/large-image"));

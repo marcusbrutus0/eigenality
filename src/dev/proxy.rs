@@ -93,8 +93,8 @@ pub async fn proxy_handler(
 
     match req.send().await {
         Ok(resp) => {
-            let status = StatusCode::from_u16(resp.status().as_u16())
-                .unwrap_or(StatusCode::BAD_GATEWAY);
+            let status =
+                StatusCode::from_u16(resp.status().as_u16()).unwrap_or(StatusCode::BAD_GATEWAY);
 
             let mut response_headers = HeaderMap::new();
             for (key, value) in resp.headers() {
@@ -129,11 +129,7 @@ pub async fn proxy_handler(
         }
         Err(e) => {
             eprintln!("Proxy error for {}: {}", url, e);
-            (
-                StatusCode::BAD_GATEWAY,
-                format!("Proxy error: {}", e),
-            )
-                .into_response()
+            (StatusCode::BAD_GATEWAY, format!("Proxy error: {}", e)).into_response()
         }
     }
 }

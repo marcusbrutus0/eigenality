@@ -41,17 +41,11 @@ pub struct CollectedRefs {
 ///
 /// HTML files are sorted by path before processing to ensure
 /// deterministic merge order.
-pub fn collect_references(
-    dist_dir: &Path,
-    exclude: &[String],
-) -> Result<CollectedRefs> {
+pub fn collect_references(dist_dir: &Path, exclude: &[String]) -> Result<CollectedRefs> {
     // Collect and sort all HTML file paths for deterministic ordering.
     let mut html_files: Vec<PathBuf> = Vec::new();
 
-    for entry in WalkDir::new(dist_dir)
-        .sort_by_file_name()
-        .into_iter()
-    {
+    for entry in WalkDir::new(dist_dir).sort_by_file_name().into_iter() {
         let entry = entry.wrap_err("Failed to read directory entry during reference collection")?;
 
         if !entry.file_type().is_file() {
@@ -93,10 +87,7 @@ pub fn collect_references(
         let html_content = match std::fs::read_to_string(html_path) {
             Ok(c) => c,
             Err(e) => {
-                tracing::warn!(
-                    "Failed to read HTML file '{}': {}",
-                    html_path.display(), e
-                );
+                tracing::warn!("Failed to read HTML file '{}': {}", html_path.display(), e);
                 continue;
             }
         };
@@ -212,7 +203,11 @@ mod tests {
     fn test_collect_single_css() {
         let tmp = TempDir::new().unwrap();
         let dist = tmp.path();
-        write_file(dist, "index.html", r#"<html><head><link rel="stylesheet" href="/css/style.css"></head><body></body></html>"#);
+        write_file(
+            dist,
+            "index.html",
+            r#"<html><head><link rel="stylesheet" href="/css/style.css"></head><body></body></html>"#,
+        );
 
         let refs = collect_references(dist, &[]).unwrap();
         assert_eq!(refs.css_hrefs, vec!["/css/style.css"]);
@@ -224,10 +219,14 @@ mod tests {
     fn test_collect_multiple_css() {
         let tmp = TempDir::new().unwrap();
         let dist = tmp.path();
-        write_file(dist, "index.html", r#"<html><head>
+        write_file(
+            dist,
+            "index.html",
+            r#"<html><head>
             <link rel="stylesheet" href="/css/reset.css">
             <link rel="stylesheet" href="/css/style.css">
-        </head><body></body></html>"#);
+        </head><body></body></html>"#,
+        );
 
         let refs = collect_references(dist, &[]).unwrap();
         assert_eq!(refs.css_hrefs, vec!["/css/reset.css", "/css/style.css"]);
@@ -237,8 +236,16 @@ mod tests {
     fn test_collect_dedup_css() {
         let tmp = TempDir::new().unwrap();
         let dist = tmp.path();
-        write_file(dist, "index.html", r#"<html><head><link rel="stylesheet" href="/css/style.css"></head><body></body></html>"#);
-        write_file(dist, "about.html", r#"<html><head><link rel="stylesheet" href="/css/style.css"></head><body></body></html>"#);
+        write_file(
+            dist,
+            "index.html",
+            r#"<html><head><link rel="stylesheet" href="/css/style.css"></head><body></body></html>"#,
+        );
+        write_file(
+            dist,
+            "about.html",
+            r#"<html><head><link rel="stylesheet" href="/css/style.css"></head><body></body></html>"#,
+        );
 
         let refs = collect_references(dist, &[]).unwrap();
         assert_eq!(refs.css_hrefs, vec!["/css/style.css"]);
@@ -249,10 +256,14 @@ mod tests {
     fn test_collect_skips_external() {
         let tmp = TempDir::new().unwrap();
         let dist = tmp.path();
-        write_file(dist, "index.html", r#"<html><head>
+        write_file(
+            dist,
+            "index.html",
+            r#"<html><head>
             <link rel="stylesheet" href="https://cdn.example.com/lib.css">
             <link rel="stylesheet" href="/css/local.css">
-        </head><body></body></html>"#);
+        </head><body></body></html>"#,
+        );
 
         let refs = collect_references(dist, &[]).unwrap();
         assert_eq!(refs.css_hrefs, vec!["/css/local.css"]);
@@ -262,10 +273,14 @@ mod tests {
     fn test_collect_skips_media() {
         let tmp = TempDir::new().unwrap();
         let dist = tmp.path();
-        write_file(dist, "index.html", r#"<html><head>
+        write_file(
+            dist,
+            "index.html",
+            r#"<html><head>
             <link rel="stylesheet" href="/css/print.css" media="print">
             <link rel="stylesheet" href="/css/style.css">
-        </head><body></body></html>"#);
+        </head><body></body></html>"#,
+        );
 
         let refs = collect_references(dist, &[]).unwrap();
         assert_eq!(refs.css_hrefs, vec!["/css/style.css"]);
@@ -275,10 +290,14 @@ mod tests {
     fn test_collect_skips_excluded() {
         let tmp = TempDir::new().unwrap();
         let dist = tmp.path();
-        write_file(dist, "index.html", r#"<html><head>
+        write_file(
+            dist,
+            "index.html",
+            r#"<html><head>
             <link rel="stylesheet" href="/css/vendor/bootstrap.css">
             <link rel="stylesheet" href="/css/style.css">
-        </head><body></body></html>"#);
+        </head><body></body></html>"#,
+        );
 
         let refs = collect_references(dist, &["**/vendor/**".to_string()]).unwrap();
         assert_eq!(refs.css_hrefs, vec!["/css/style.css"]);
@@ -288,7 +307,11 @@ mod tests {
     fn test_collect_single_js() {
         let tmp = TempDir::new().unwrap();
         let dist = tmp.path();
-        write_file(dist, "index.html", r#"<html><body><script src="/js/app.js"></script></body></html>"#);
+        write_file(
+            dist,
+            "index.html",
+            r#"<html><body><script src="/js/app.js"></script></body></html>"#,
+        );
 
         let refs = collect_references(dist, &[]).unwrap();
         assert!(refs.css_hrefs.is_empty());
@@ -299,10 +322,14 @@ mod tests {
     fn test_collect_skips_module_js() {
         let tmp = TempDir::new().unwrap();
         let dist = tmp.path();
-        write_file(dist, "index.html", r#"<html><body>
+        write_file(
+            dist,
+            "index.html",
+            r#"<html><body>
             <script type="module" src="/js/mod.js"></script>
             <script src="/js/app.js"></script>
-        </body></html>"#);
+        </body></html>"#,
+        );
 
         let refs = collect_references(dist, &[]).unwrap();
         assert_eq!(refs.js_srcs, vec!["/js/app.js"]);
@@ -312,11 +339,15 @@ mod tests {
     fn test_collect_skips_async_defer() {
         let tmp = TempDir::new().unwrap();
         let dist = tmp.path();
-        write_file(dist, "index.html", r#"<html><body>
+        write_file(
+            dist,
+            "index.html",
+            r#"<html><body>
             <script defer src="/js/deferred.js"></script>
             <script async src="/js/async.js"></script>
             <script src="/js/app.js"></script>
-        </body></html>"#);
+        </body></html>"#,
+        );
 
         let refs = collect_references(dist, &[]).unwrap();
         assert_eq!(refs.js_srcs, vec!["/js/app.js"]);
@@ -326,10 +357,14 @@ mod tests {
     fn test_collect_skips_inline_script() {
         let tmp = TempDir::new().unwrap();
         let dist = tmp.path();
-        write_file(dist, "index.html", r#"<html><body>
+        write_file(
+            dist,
+            "index.html",
+            r#"<html><body>
             <script>console.log("inline");</script>
             <script src="/js/app.js"></script>
-        </body></html>"#);
+        </body></html>"#,
+        );
 
         let refs = collect_references(dist, &[]).unwrap();
         assert_eq!(refs.js_srcs, vec!["/js/app.js"]);
@@ -351,14 +386,22 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let dist = tmp.path();
         // Two pages with different CSS sets -- order should be deterministic.
-        write_file(dist, "a.html", r#"<html><head>
+        write_file(
+            dist,
+            "a.html",
+            r#"<html><head>
             <link rel="stylesheet" href="/css/reset.css">
             <link rel="stylesheet" href="/css/a.css">
-        </head><body></body></html>"#);
-        write_file(dist, "b.html", r#"<html><head>
+        </head><body></body></html>"#,
+        );
+        write_file(
+            dist,
+            "b.html",
+            r#"<html><head>
             <link rel="stylesheet" href="/css/reset.css">
             <link rel="stylesheet" href="/css/b.css">
-        </head><body></body></html>"#);
+        </head><body></body></html>"#,
+        );
 
         let refs1 = collect_references(dist, &[]).unwrap();
         let refs2 = collect_references(dist, &[]).unwrap();
