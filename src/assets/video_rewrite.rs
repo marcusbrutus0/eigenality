@@ -87,24 +87,23 @@ pub fn collect_video_entries(html: &str, exclude_patterns: &[String]) -> Vec<Opt
         }
 
         // Form 2: first <source> child with src.
-        let first_source = video_el.select(&source_sel).next();
-        if let Some(source_el) = first_source {
-            if let Some(src) = source_el.value().attr("src") {
-                if should_skip_url(src) {
-                    entries.push(None);
-                    continue;
-                }
-                let check_path = src.trim_start_matches('/');
-                if is_excluded(check_path, exclude_patterns) {
-                    entries.push(None);
-                    continue;
-                }
-                entries.push(Some(VideoEntry {
-                    src: src.to_string(),
-                    is_form1: false,
-                }));
+        if let Some(source_el) = video_el.select(&source_sel).next()
+            && let Some(src) = source_el.value().attr("src")
+        {
+            if should_skip_url(src) {
+                entries.push(None);
                 continue;
             }
+            let check_path = src.trim_start_matches('/');
+            if is_excluded(check_path, exclude_patterns) {
+                entries.push(None);
+                continue;
+            }
+            entries.push(Some(VideoEntry {
+                src: src.to_string(),
+                is_form1: false,
+            }));
+            continue;
         }
 
         // No usable source found.

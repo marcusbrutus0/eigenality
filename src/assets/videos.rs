@@ -120,10 +120,10 @@ pub async fn check_ffmpeg() -> Option<String> {
 /// Check whether a path should be excluded from optimization.
 pub fn is_excluded(path: &str, exclude_patterns: &[String]) -> bool {
     for pattern in exclude_patterns {
-        if let Ok(glob_pattern) = glob::Pattern::new(pattern) {
-            if glob_pattern.matches(path) {
-                return true;
-            }
+        if let Ok(glob_pattern) = glob::Pattern::new(pattern)
+            && glob_pattern.matches(path)
+        {
+            return true;
         }
     }
     false
