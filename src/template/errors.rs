@@ -53,7 +53,8 @@ impl TemplateError {
         frontmatter_line_count: usize,
         tpl_ctx: Option<&Value>,
     ) -> Self {
-        let template_name = err.name()
+        let template_name = err
+            .name()
             .map(|n| n.to_string())
             .or_else(|| Some(rendering_template.to_string()));
 
@@ -201,13 +202,11 @@ impl TemplateError {
             if self.raw_line != self.line {
                 format!(
                     r#"<tr><td class="label">Line</td><td>{} <span style="color:#888">(template line {})</span></td></tr>"#,
-                    line, self.raw_line.unwrap_or(0),
+                    line,
+                    self.raw_line.unwrap_or(0),
                 )
             } else {
-                format!(
-                    r#"<tr><td class="label">Line</td><td>{}</td></tr>"#,
-                    line
-                )
+                format!(r#"<tr><td class="label">Line</td><td>{}</td></tr>"#, line)
             }
         } else {
             String::new()
@@ -406,10 +405,7 @@ fn describe_shape(name: &str, val: &Value, depth: usize, out: &mut String) {
     match kind {
         ValueKind::Map => {
             // Single iteration: collect keys and recurse.
-            let keys: Vec<_> = val
-                .try_iter()
-                .map(|i| i.collect())
-                .unwrap_or_default();
+            let keys: Vec<_> = val.try_iter().map(|i| i.collect()).unwrap_or_default();
             push_indent(out, depth);
             let _ = writeln!(out, "{name} : map ({} keys)", keys.len());
 
@@ -532,9 +528,7 @@ fn extract_expression_path<'a>(
 #[derive(Debug)]
 enum ContextWalkResult {
     /// The root segment was not found in the top-level context.
-    TopLevelMiss {
-        path: String,
-    },
+    TopLevelMiss { path: String },
     /// A nested segment was not found. `parent` is the last value that
     /// resolved successfully.
     NestedMiss {
@@ -544,9 +538,7 @@ enum ContextWalkResult {
     },
     /// Every segment resolved (shouldn't happen for an UndefinedError, but
     /// handled gracefully).
-    FullyResolved {
-        path: String,
-    },
+    FullyResolved { path: String },
 }
 
 /// Walk a dotted path through the template context and find where it breaks.
@@ -651,7 +643,11 @@ fn format_focused_context(
                 out.push('\n');
             }
         }
-        ContextWalkResult::NestedMiss { path, missing_segment, parent } => {
+        ContextWalkResult::NestedMiss {
+            path,
+            missing_segment,
+            parent,
+        } => {
             let _ = writeln!(out, "Tried to access: {path}");
 
             if let Some(pos) = path.find(missing_segment.as_str()) {
@@ -707,9 +703,7 @@ fn format_focused_context(
 fn format_value_shape(label: &str, val: &Value, out: &mut String) {
     match val.kind() {
         ValueKind::Map => {
-            let keys: Vec<_> = val.try_iter()
-                .map(|i| i.collect())
-                .unwrap_or_default();
+            let keys: Vec<_> = val.try_iter().map(|i| i.collect()).unwrap_or_default();
             let _ = writeln!(out, "`{label}` is a map with {} keys:", keys.len());
             for k in &keys {
                 let k_str = k.as_str().unwrap_or("?");
@@ -758,8 +752,8 @@ fn format_highlighted_context(ctx: &Value, highlight_root: Option<&str>) -> Stri
 
         if is_top_level {
             // Check if this top-level key matches the highlight root.
-            in_highlighted_branch = line.starts_with(highlight_root)
-                && line[highlight_root.len()..].starts_with(" : ");
+            in_highlighted_branch =
+                line.starts_with(highlight_root) && line[highlight_root.len()..].starts_with(" : ");
         }
 
         if in_highlighted_branch {
@@ -786,9 +780,8 @@ fn format_collection_item_shape(collection: &Value, out: &mut String) {
                 let _ = writeln!(out);
                 match first.kind() {
                     ValueKind::Map => {
-                        let keys: Vec<_> = first.try_iter()
-                            .map(|i| i.collect())
-                            .unwrap_or_default();
+                        let keys: Vec<_> =
+                            first.try_iter().map(|i| i.collect()).unwrap_or_default();
                         let _ = writeln!(out, "Each item is a map with {} keys:", keys.len());
                         for k in &keys {
                             let k_str = k.as_str().unwrap_or("?");
@@ -813,10 +806,7 @@ fn format_collection_item_shape(collection: &Value, out: &mut String) {
 /// 2. If the root is a loop variable, trace it back to the collection.
 /// 3. Otherwise, fall back to a highlighted (or plain) full dump.
 /// 4. For non-`UndefinedError`, return `None` (context not relevant).
-fn build_context_summary(
-    err: &minijinja::Error,
-    ctx: &Value,
-) -> Option<String> {
+fn build_context_summary(err: &minijinja::Error, ctx: &Value) -> Option<String> {
     use minijinja::ErrorKind;
 
     // Only UndefinedError benefits from context drilling.
@@ -838,7 +828,8 @@ fn build_context_summary(
     let loop_info = match &walk {
         ContextWalkResult::TopLevelMiss { .. } | ContextWalkResult::NestedMiss { .. } => {
             let root = segments[0];
-            let is_top_level_key = ctx.get_attr(root)
+            let is_top_level_key = ctx
+                .get_attr(root)
                 .map(|v| !v.is_undefined())
                 .unwrap_or(false);
 
@@ -846,7 +837,10 @@ fn build_context_summary(
                 source.as_deref().and_then(|src| {
                     let collection_expr = find_loop_collection(root, src)?;
                     let item_shape = resolve_dotted_path(&collection_expr, ctx);
-                    Some(LoopInfo { collection_expr, item_shape })
+                    Some(LoopInfo {
+                        collection_expr,
+                        item_shape,
+                    })
                 })
             } else {
                 None
@@ -867,12 +861,8 @@ fn build_context_summary(
             out.push_str(&format_highlighted_context(ctx, Some(root)));
             Some(out)
         }
-        ContextWalkResult::FullyResolved { .. } => {
-            Some(summarize_context(ctx))
-        }
-        _ => {
-            Some(format_focused_context(&walk, ctx, loop_info.as_ref()))
-        }
+        ContextWalkResult::FullyResolved { .. } => Some(summarize_context(ctx)),
+        _ => Some(format_focused_context(&walk, ctx, loop_info.as_ref())),
     }
 }
 
@@ -983,7 +973,8 @@ mod tests {
         let mut env = minijinja::Environment::new();
         env.set_undefined_behavior(minijinja::UndefinedBehavior::Strict);
         env.add_template("_base.html", "{{ missing }}").ok();
-        env.add_template("index.html", r#"{% extends "_base.html" %}"#).ok();
+        env.add_template("index.html", r#"{% extends "_base.html" %}"#)
+            .ok();
         let tmpl = env.get_template("index.html").unwrap();
         let err = tmpl.render(minijinja::context! {}).unwrap_err();
 
@@ -1011,10 +1002,13 @@ mod tests {
     fn test_context_summary_shows_keys_and_nested_shape() {
         let ctx = Value::from_iter([
             ("title", Value::from("Hello")),
-            ("page", Value::from_iter([
-                ("current_url", Value::from("/about")),
-                ("base_url", Value::from("https://example.com")),
-            ])),
+            (
+                "page",
+                Value::from_iter([
+                    ("current_url", Value::from("/about")),
+                    ("base_url", Value::from("https://example.com")),
+                ]),
+            ),
         ]);
         let summary = summarize_context(&ctx);
         assert!(summary.contains("title : string"));
@@ -1047,11 +1041,7 @@ mod tests {
 
     #[test]
     fn test_context_summary_sequence_of_primitives() {
-        let items = Value::from(vec![
-            Value::from("a"),
-            Value::from("b"),
-            Value::from("c"),
-        ]);
+        let items = Value::from(vec![Value::from("a"), Value::from("b"), Value::from("c")]);
         let ctx = Value::from_iter([("tags", items)]);
         let summary = summarize_context(&ctx);
         assert!(summary.contains("tags : sequence (3 items)"));
@@ -1084,7 +1074,9 @@ mod tests {
             kind: "UndefinedError".into(),
             short_msg: "variable `foo` is undefined".into(),
             detail: String::new(),
-            context_summary: Some("title : string\npage : map (3 keys)\n  current_url : string".into()),
+            context_summary: Some(
+                "title : string\npage : map (3 keys)\n  current_url : string".into(),
+            ),
         };
 
         let formatted = te.format_console("index.html", None);
@@ -1148,9 +1140,7 @@ mod tests {
     fn test_walk_context_top_level_miss() {
         let ctx = Value::from_iter([
             ("title", Value::from("Hello")),
-            ("page", Value::from_iter([
-                ("url", Value::from("/about")),
-            ])),
+            ("page", Value::from_iter([("url", Value::from("/about"))])),
         ]);
         let result = walk_context_path(&["missing"], &ctx);
         match result {
@@ -1163,15 +1153,20 @@ mod tests {
 
     #[test]
     fn test_walk_context_nested_miss() {
-        let ctx = Value::from_iter([
-            ("page", Value::from_iter([
+        let ctx = Value::from_iter([(
+            "page",
+            Value::from_iter([
                 ("url", Value::from("/about")),
                 ("base", Value::from("https://example.com")),
-            ])),
-        ]);
+            ]),
+        )]);
         let result = walk_context_path(&["page", "seo", "title"], &ctx);
         match result {
-            ContextWalkResult::NestedMiss { path, missing_segment, parent } => {
+            ContextWalkResult::NestedMiss {
+                path,
+                missing_segment,
+                parent,
+            } => {
                 assert_eq!(path, "page.seo.title");
                 assert_eq!(missing_segment, "seo");
                 assert!(parent.kind() == minijinja::value::ValueKind::Map);
@@ -1182,11 +1177,7 @@ mod tests {
 
     #[test]
     fn test_walk_context_fully_resolved() {
-        let ctx = Value::from_iter([
-            ("page", Value::from_iter([
-                ("title", Value::from("Hello")),
-            ])),
-        ]);
+        let ctx = Value::from_iter([("page", Value::from_iter([("title", Value::from("Hello"))]))]);
         let result = walk_context_path(&["page", "title"], &ctx);
         match result {
             ContextWalkResult::FullyResolved { path } => {
@@ -1231,10 +1222,7 @@ mod tests {
     #[test]
     fn test_find_loop_collection_whitespace_control() {
         let source = "{%- for tag in tags -%}{{ tag }}{% endfor %}";
-        assert_eq!(
-            find_loop_collection("tag", source).as_deref(),
-            Some("tags")
-        );
+        assert_eq!(find_loop_collection("tag", source).as_deref(), Some("tags"));
     }
 
     #[test]
@@ -1258,7 +1246,9 @@ mod tests {
             kind: "UndefinedError".into(),
             short_msg: "variable `foo` is undefined".into(),
             detail: "detail here".into(),
-            context_summary: Some("title : string\npage : map (3 keys)\n  base_url : string".into()),
+            context_summary: Some(
+                "title : string\npage : map (3 keys)\n  base_url : string".into(),
+            ),
         };
 
         let html = te.to_error_html("index.html", None);
@@ -1272,9 +1262,7 @@ mod tests {
     fn test_format_focused_top_level_miss() {
         let ctx = Value::from_iter([
             ("title", Value::from("Hello")),
-            ("page", Value::from_iter([
-                ("url", Value::from("/about")),
-            ])),
+            ("page", Value::from_iter([("url", Value::from("/about"))])),
         ]);
         let result = walk_context_path(&["missing"], &ctx);
         let output = format_focused_context(&result, &ctx, None);
@@ -1286,12 +1274,13 @@ mod tests {
 
     #[test]
     fn test_format_focused_nested_miss() {
-        let ctx = Value::from_iter([
-            ("page", Value::from_iter([
+        let ctx = Value::from_iter([(
+            "page",
+            Value::from_iter([
                 ("url", Value::from("/about")),
                 ("base", Value::from("https://example.com")),
-            ])),
-        ]);
+            ]),
+        )]);
         let result = walk_context_path(&["page", "seo", "title"], &ctx);
         let output = format_focused_context(&result, &ctx, None);
         assert!(output.contains("Tried to access: page.seo.title"));
@@ -1305,12 +1294,10 @@ mod tests {
 
     #[test]
     fn test_format_focused_loop_variable() {
-        let posts = Value::from(vec![
-            Value::from_iter([
-                ("title", Value::from("Post 1")),
-                ("slug", Value::from("post-1")),
-            ]),
-        ]);
+        let posts = Value::from(vec![Value::from_iter([
+            ("title", Value::from("Post 1")),
+            ("slug", Value::from("post-1")),
+        ])]);
         let ctx = Value::from_iter([("posts", posts)]);
         let result = walk_context_path(&["post", "titl"], &ctx);
         let loop_info = Some(LoopInfo {
@@ -1330,13 +1317,17 @@ mod tests {
     fn test_format_highlighted_context_marks_branch() {
         let ctx = Value::from_iter([
             ("title", Value::from("Hello")),
-            ("page", Value::from_iter([
-                ("url", Value::from("/about")),
-                ("base", Value::from("https://example.com")),
-            ])),
-            ("nav", Value::from_iter([
-                ("items", Value::from(Vec::<Value>::new())),
-            ])),
+            (
+                "page",
+                Value::from_iter([
+                    ("url", Value::from("/about")),
+                    ("base", Value::from("https://example.com")),
+                ]),
+            ),
+            (
+                "nav",
+                Value::from_iter([("items", Value::from(Vec::<Value>::new()))]),
+            ),
         ]);
         let output = format_highlighted_context(&ctx, Some("page"));
         // `page` branch should be highlighted with `>`
@@ -1352,9 +1343,7 @@ mod tests {
 
     #[test]
     fn test_format_highlighted_context_no_highlight() {
-        let ctx = Value::from_iter([
-            ("title", Value::from("Hello")),
-        ]);
+        let ctx = Value::from_iter([("title", Value::from("Hello"))]);
         let output = format_highlighted_context(&ctx, None);
         // No `>` markers, just a normal dump.
         assert!(output.contains("title : string"));
@@ -1381,8 +1370,14 @@ mod tests {
 
         let te = TemplateError::from_minijinja(&err, "test.html", 0, Some(&ctx));
 
-        let summary = te.context_summary.as_deref().expect("should have context summary");
-        assert!(summary.contains("Tried to access:"), "summary was: {summary}");
+        let summary = te
+            .context_summary
+            .as_deref()
+            .expect("should have context summary");
+        assert!(
+            summary.contains("Tried to access:"),
+            "summary was: {summary}"
+        );
         assert!(summary.contains("not found"), "summary was: {summary}");
         assert!(summary.contains("url : string"), "summary was: {summary}");
     }
@@ -1390,15 +1385,19 @@ mod tests {
     #[test]
     fn test_from_minijinja_non_undefined_skips_context() {
         let mut env = minijinja::Environment::new();
-        env.add_template("filter.html", "{{ x | nonexistent }}").ok();
+        env.add_template("filter.html", "{{ x | nonexistent }}")
+            .ok();
         let tmpl = env.get_template("filter.html").unwrap();
         let ctx = minijinja::context! { x => "hello" };
         let err = tmpl.render(&ctx).unwrap_err();
 
         let te = TemplateError::from_minijinja(&err, "filter.html", 0, Some(&ctx));
 
-        assert!(te.context_summary.is_none(),
-            "expected None for non-UndefinedError, got: {:?}", te.context_summary);
+        assert!(
+            te.context_summary.is_none(),
+            "expected None for non-UndefinedError, got: {:?}",
+            te.context_summary
+        );
     }
 
     #[test]
@@ -1407,19 +1406,21 @@ mod tests {
         env.set_undefined_behavior(minijinja::UndefinedBehavior::Strict);
         env.add_template(
             "loop.html",
-            "{% for post in posts %}{{ post.titl }}{% endfor %}"
-        ).ok();
+            "{% for post in posts %}{{ post.titl }}{% endfor %}",
+        )
+        .ok();
         let tmpl = env.get_template("loop.html").unwrap();
 
-        let posts = vec![
-            minijinja::context! { title => "Post 1", slug => "p1" },
-        ];
+        let posts = vec![minijinja::context! { title => "Post 1", slug => "p1" }];
         let ctx = minijinja::context! { posts => posts };
         let err = tmpl.render(&ctx).unwrap_err();
 
         let te = TemplateError::from_minijinja(&err, "loop.html", 0, Some(&ctx));
 
-        let summary = te.context_summary.as_deref().expect("should have context summary");
+        let summary = te
+            .context_summary
+            .as_deref()
+            .expect("should have context summary");
         assert!(summary.contains("post"), "summary was: {summary}");
         assert!(summary.contains("comes from"), "summary was: {summary}");
         assert!(summary.contains("title : string"), "summary was: {summary}");

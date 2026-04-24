@@ -14,7 +14,7 @@ use crate::config::VideoOptimConfig;
 // Data structures
 // ---------------------------------------------------------------------------
 
-/// A single video variant (one height × one codec).
+/// A single video variant (one height tier, one format).
 #[derive(Debug, Clone)]
 pub struct VideoVariant {
     /// URL path relative to site root, e.g. `/assets/clip-720p-ab12cd34.webm`.
@@ -23,8 +23,6 @@ pub struct VideoVariant {
     pub height: u32,
     /// MIME type, e.g. `video/webm`.
     pub mime_type: &'static str,
-    /// Codec label, e.g. `vp9`, `h264`.
-    pub codec: String,
 }
 
 /// The full set of variants generated for a single source video.
@@ -139,16 +137,6 @@ pub fn video_mime_type(ext: &str) -> &'static str {
         "mkv" => "video/x-matroska",
         "ogv" => "video/ogg",
         _ => "application/octet-stream",
-    }
-}
-
-/// Derive a codec label from a file extension (best-effort, no probing).
-fn codec_from_ext(ext: &str) -> String {
-    match ext.to_lowercase().as_str() {
-        "webm" => "vp9".into(),
-        "mp4" | "m4v" | "mov" | "avi" | "mkv" => "h264".into(),
-        "ogv" => "theora".into(),
-        _ => "unknown".into(),
     }
 }
 
@@ -289,6 +277,22 @@ pub fn write_variant_file(path: &Path, data: &[u8]) -> Result<()> {
     Ok(())
 }
 
+/// Read the generated file at `tmp`, cache it under `filename`, write to
+/// `out_path`, and clean up the temp file.
+fn cache_and_write(
+    cache: &VideoCache,
+    filename: &str,
+    out_path: &Path,
+    tmp: &Path,
+) -> Result<()> {
+    let data = std::fs::read(tmp)
+        .wrap_err_with(|| format!("Failed to read generated file {}", tmp.display()))?;
+    let _ = std::fs::remove_file(tmp);
+
+    cache.put(filename, &data)?;
+    write_variant_file(out_path, &data)
+}
+
 // ---------------------------------------------------------------------------
 // Main public entry point
 // ---------------------------------------------------------------------------
@@ -307,7 +311,8 @@ pub async fn optimize_video(
     cache: &VideoCache,
     dist_dir: &Path,
 ) -> Result<VideoVariants> {
-    let src_data = std::fs::read(src_path)
+    let src_data = tokio::fs::read(src_path)
+        .await
         .wrap_err_with(|| format!("Failed to read video {}", src_path.display()))?;
 
     let hash = source_hash(&src_data);
@@ -325,66 +330,49 @@ pub async fn optimize_video(
     // Probe source dimensions.
     let (original_width, original_height) = probe_dimensions(src_path).await?;
 
-    // Determine output heights.
+    // Determine output heights (already sorted descending).
     let heights = compute_heights(&config.heights, original_height);
 
     let out_dir = dist_dir.join(url_prefix.trim_start_matches('/'));
 
+    // Unique suffix to avoid temp-file races when the same video is
+    // processed concurrently from different pages.
+    let uid = std::process::id();
+
     // --- VP9 variants -------------------------------------------------------
-    let mut vp9_variants: Vec<VideoVariant> = Vec::new();
+    let mut vp9_variants: Vec<VideoVariant> = Vec::with_capacity(heights.len());
 
     for &h in &heights {
-        let variant_filename = format!("{stem}-{h}p-{hash}.webm");
-        let cache_key = &variant_filename;
-        let out_path = out_dir.join(&variant_filename);
-        let variant_url = format!("{url_prefix}/{variant_filename}");
+        let filename = format!("{stem}-{h}p-{hash}.webm");
+        let out_path = out_dir.join(&filename);
+        let variant_url = format!("{url_prefix}/{filename}");
 
-        if let Some(cached) = cache.get(cache_key) {
+        if let Some(cached) = cache.get(&filename) {
             write_variant_file(&out_path, &cached)?;
         } else {
-            // Transcode via ffmpeg into a temp file, then cache.
-            let tmp = cache.temp_path(&format!("tmp-{variant_filename}"));
+            let tmp = cache.temp_path(&format!("tmp-{uid}-{filename}"));
             transcode_vp9(src_path, &tmp, h, config.quality, original_height).await?;
-
-            let data = std::fs::read(&tmp)
-                .wrap_err_with(|| format!("Failed to read transcoded file {}", tmp.display()))?;
-
-            // Clean up temp file (best effort).
-            let _ = std::fs::remove_file(&tmp);
-
-            cache.put(cache_key, &data)?;
-            write_variant_file(&out_path, &data)?;
+            cache_and_write(cache, &filename, &out_path, &tmp)?;
         }
 
         vp9_variants.push(VideoVariant {
             url_path: variant_url,
             height: h,
             mime_type: "video/webm",
-            codec: "vp9".into(),
         });
     }
 
-    // Ensure descending order by height.
-    vp9_variants.sort_by(|a, b| b.height.cmp(&a.height));
-
     // --- Poster frame -------------------------------------------------------
     let poster_filename = format!("{stem}-poster-{hash}.webp");
-    let poster_cache_key = &poster_filename;
     let poster_out_path = out_dir.join(&poster_filename);
     let poster_url = format!("{url_prefix}/{poster_filename}");
 
-    if let Some(cached) = cache.get(poster_cache_key) {
+    if let Some(cached) = cache.get(&poster_filename) {
         write_variant_file(&poster_out_path, &cached)?;
     } else {
-        let tmp = cache.temp_path(&format!("tmp-{poster_filename}"));
+        let tmp = cache.temp_path(&format!("tmp-{uid}-{poster_filename}"));
         extract_poster(src_path, &tmp, config.poster_quality).await?;
-
-        let data = std::fs::read(&tmp)
-            .wrap_err_with(|| format!("Failed to read poster file {}", tmp.display()))?;
-        let _ = std::fs::remove_file(&tmp);
-
-        cache.put(poster_cache_key, &data)?;
-        write_variant_file(&poster_out_path, &data)?;
+        cache_and_write(cache, &poster_filename, &poster_out_path, &tmp)?;
     }
 
     // --- Original fallback --------------------------------------------------
@@ -392,13 +380,13 @@ pub async fn optimize_video(
     let orig_out_path = out_dir.join(&orig_filename);
     let orig_url = format!("{url_prefix}/{orig_filename}");
 
-    write_variant_file(&orig_out_path, &src_data)?;
+    write_variant_file(&orig_out_path, &src_data)
+        .wrap_err("Failed to write original video fallback")?;
 
     let original = VideoVariant {
         url_path: orig_url,
         height: original_height,
         mime_type: video_mime_type(ext),
-        codec: codec_from_ext(ext),
     };
 
     Ok(VideoVariants {
@@ -553,7 +541,6 @@ mod tests {
 
         let config = VideoOptimConfig {
             optimize: true,
-            format: "vp9".into(),
             quality: 50,                 // fast, low quality is fine for tests
             heights: vec![60, 120, 480], // 480 > 120, should be dropped
             exclude: vec![],
@@ -581,7 +568,6 @@ mod tests {
         assert_eq!(result.vp9[1].height, 60);
         for v in &result.vp9 {
             assert_eq!(v.mime_type, "video/webm");
-            assert_eq!(v.codec, "vp9");
         }
 
         // Original fallback.

@@ -34,10 +34,7 @@ pub struct RateLimiterPool {
 
 impl RateLimiterPool {
     /// Create a new pool from the global rate limit and source configs.
-    pub fn new(
-        global_rate: Option<u32>,
-        sources: &HashMap<String, SourceConfig>,
-    ) -> Self {
+    pub fn new(global_rate: Option<u32>, sources: &HashMap<String, SourceConfig>) -> Self {
         let mut source_rates = HashMap::new();
         for source in sources.values() {
             if let Some(rate) = source.rate_limit {
@@ -91,14 +88,16 @@ impl RateLimiterPool {
 
 /// Extract the host from a URL string.
 fn extract_host(url: &str) -> Option<String> {
-    Url::parse(url).ok().and_then(|u| u.host_str().map(str::to_string))
+    Url::parse(url)
+        .ok()
+        .and_then(|u| u.host_str().map(str::to_string))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::HashMap;
     use crate::config::SourceConfig;
+    use std::collections::HashMap;
 
     fn source(url: &str, rate_limit: Option<u32>) -> SourceConfig {
         SourceConfig {
@@ -128,7 +127,10 @@ mod tests {
     #[tokio::test]
     async fn per_source_overrides_global() {
         let mut sources = HashMap::new();
-        sources.insert("api".to_string(), source("https://api.example.com", Some(2)));
+        sources.insert(
+            "api".to_string(),
+            source("https://api.example.com", Some(2)),
+        );
         let pool = RateLimiterPool::new(Some(100), &sources);
 
         // First request is free.
@@ -147,7 +149,10 @@ mod tests {
     #[tokio::test]
     async fn different_hosts_have_independent_limiters() {
         let mut sources = HashMap::new();
-        sources.insert("slow".to_string(), source("https://slow.example.com", Some(1)));
+        sources.insert(
+            "slow".to_string(),
+            source("https://slow.example.com", Some(1)),
+        );
         let pool = RateLimiterPool::new(Some(100), &sources);
 
         pool.wait("https://slow.example.com/a").await;

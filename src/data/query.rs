@@ -7,7 +7,7 @@
 //!   an optional current item, resolves all `data` entries, and returns a
 //!   context map.
 
-use eyre::{bail, Result, WrapErr};
+use eyre::{Result, WrapErr, bail};
 use regex::Regex;
 use serde_json::Value;
 use std::collections::HashMap;
@@ -21,15 +21,12 @@ static INTERPOLATION_RE: LazyLock<Regex> =
 static ENV_VAR_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}").unwrap());
 
-static REMAINING_INTERP_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"\{\{.*?\}\}").unwrap());
+static REMAINING_INTERP_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\{\{.*?\}\}").unwrap());
 
 use crate::frontmatter::{DataQuery, Frontmatter};
 use crate::plugins::registry::PluginRegistry;
 
-use super::fetcher::{
-    DataFetcher, SourceCacheCheck, StoreResult, execute_source_request,
-};
+use super::fetcher::{DataFetcher, SourceCacheCheck, StoreResult, execute_source_request};
 use super::transforms::apply_transforms;
 
 /// Resolve all `data` queries in a static page's frontmatter.
@@ -456,7 +453,10 @@ pub async fn resolve_dynamic_page_data_for_item_unlocked(
 
     for (name, query) in &frontmatter.data {
         let interpolated = interpolate_query(query, item, item_as).wrap_err_with(|| {
-            format!("Failed to interpolate data query '{}' for current item", name)
+            format!(
+                "Failed to interpolate data query '{}' for current item",
+                name
+            )
         })?;
         verify_no_remaining_interpolation(&interpolated, name)?;
 
@@ -511,8 +511,7 @@ async fn fetch_unlocked(
     // Phase 1: check cache under lock; clone Arc handles for HTTP.
     let (check, client, rate_limiter) = {
         let f = fetcher.lock().await;
-        let check =
-            f.check_source_cache(source_name, path, &query.method, query.body.as_ref())?;
+        let check = f.check_source_cache(source_name, path, &query.method, query.body.as_ref())?;
         let client = f.client.clone();
         let rate_limiter = Arc::clone(&f.rate_limiter);
         (check, client, rate_limiter)
@@ -522,9 +521,11 @@ async fn fetch_unlocked(
         SourceCacheCheck::Hit(value) => {
             return apply_post_fetch(value, query, plugin_registry);
         }
-        SourceCacheCheck::Miss { cache_key, full_url, headers } => {
-            (cache_key, full_url, headers)
-        }
+        SourceCacheCheck::Miss {
+            cache_key,
+            full_url,
+            headers,
+        } => (cache_key, full_url, headers),
     };
 
     // Phase 2: HTTP with no mutex held.
@@ -603,7 +604,12 @@ fn apply_post_fetch(
         extracted
     };
 
-    Ok(apply_transforms(transformed, &query.filter, &query.sort, &query.limit))
+    Ok(apply_transforms(
+        transformed,
+        &query.filter,
+        &query.sort,
+        &query.limit,
+    ))
 }
 
 #[cfg(test)]
@@ -973,8 +979,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_resolve_page_data_with_plugin_registry() {
-        use crate::plugins::registry::PluginRegistry;
         use crate::plugins::Plugin;
+        use crate::plugins::registry::PluginRegistry;
 
         #[derive(Debug)]
         struct TagPlugin;
@@ -1035,8 +1041,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_resolve_dynamic_page_data_with_plugin_registry() {
-        use crate::plugins::registry::PluginRegistry;
         use crate::plugins::Plugin;
+        use crate::plugins::registry::PluginRegistry;
 
         #[derive(Debug)]
         struct EnrichPlugin;
@@ -1241,8 +1247,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_resolve_dynamic_page_data_for_item_with_plugin() {
-        use crate::plugins::registry::PluginRegistry;
         use crate::plugins::Plugin;
+        use crate::plugins::registry::PluginRegistry;
 
         #[derive(Debug)]
         struct PassthroughPlugin;
@@ -1279,10 +1285,9 @@ mod tests {
         };
 
         let item = json!({"id": 1, "title": "Test"});
-        let result =
-            resolve_dynamic_page_data_for_item(&fm, &item, &mut fetcher, Some(&registry))
-                .await
-                .unwrap();
+        let result = resolve_dynamic_page_data_for_item(&fm, &item, &mut fetcher, Some(&registry))
+            .await
+            .unwrap();
         assert_eq!(result.len(), 1);
         assert!(result["sidebar"].is_array());
     }
@@ -1324,9 +1329,12 @@ mod tests {
         write(root, "_data/nav.yaml", "- label: Home\n  url: /\n");
 
         let pool = no_op_pool();
-        let fetcher = Arc::new(AsyncMutex::new(
-            DataFetcher::new(&HashMap::new(), root, None, pool),
-        ));
+        let fetcher = Arc::new(AsyncMutex::new(DataFetcher::new(
+            &HashMap::new(),
+            root,
+            None,
+            pool,
+        )));
 
         let fm = Frontmatter {
             data: {
@@ -1357,9 +1365,12 @@ mod tests {
         write(root, "_data/posts.json", r#"[{"id": 1}, {"id": 2}]"#);
 
         let pool = no_op_pool();
-        let fetcher = Arc::new(AsyncMutex::new(
-            DataFetcher::new(&HashMap::new(), root, None, pool),
-        ));
+        let fetcher = Arc::new(AsyncMutex::new(DataFetcher::new(
+            &HashMap::new(),
+            root,
+            None,
+            pool,
+        )));
 
         let fm = Frontmatter {
             collection: Some(DataQuery {
@@ -1383,9 +1394,12 @@ mod tests {
         write(root, "_data/meta.json", r#"{"title": "static"}"#);
 
         let pool = no_op_pool();
-        let fetcher = Arc::new(AsyncMutex::new(
-            DataFetcher::new(&HashMap::new(), root, None, pool),
-        ));
+        let fetcher = Arc::new(AsyncMutex::new(DataFetcher::new(
+            &HashMap::new(),
+            root,
+            None,
+            pool,
+        )));
 
         let fm = Frontmatter {
             item_as: "post".into(),
@@ -1404,10 +1418,9 @@ mod tests {
         };
 
         let item = json!({"id": 1});
-        let result =
-            resolve_dynamic_page_data_for_item_unlocked(&fm, &item, &fetcher, None)
-                .await
-                .unwrap();
+        let result = resolve_dynamic_page_data_for_item_unlocked(&fm, &item, &fetcher, None)
+            .await
+            .unwrap();
         assert_eq!(result.len(), 1);
         assert_eq!(result["meta"]["title"], "static");
     }
@@ -1457,7 +1470,9 @@ mod tests {
             },
         );
         let pool = no_op_pool();
-        let fetcher = Arc::new(AsyncMutex::new(DataFetcher::new(&sources, root, None, pool)));
+        let fetcher = Arc::new(AsyncMutex::new(DataFetcher::new(
+            &sources, root, None, pool,
+        )));
 
         let fm = Frontmatter {
             data: {
@@ -1481,12 +1496,8 @@ mod tests {
         let fm_b = fm.clone();
 
         let (r1, r2) = tokio::join!(
-            tokio::spawn(async move {
-                resolve_page_data_unlocked(&fm_a, &fetcher_a, None).await
-            }),
-            tokio::spawn(async move {
-                resolve_page_data_unlocked(&fm_b, &fetcher_b, None).await
-            }),
+            tokio::spawn(async move { resolve_page_data_unlocked(&fm_a, &fetcher_a, None).await }),
+            tokio::spawn(async move { resolve_page_data_unlocked(&fm_b, &fetcher_b, None).await }),
         );
 
         let data1 = r1.expect("task 1 panicked").expect("task 1 error");

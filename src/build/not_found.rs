@@ -120,7 +120,10 @@ mod tests {
         assert!(html.contains("<!DOCTYPE html>"));
         assert!(html.contains("404"));
         assert!(html.contains("Page Not Found"));
-        assert!(html.contains(r#"href="/""#), "Should contain a link back to home");
+        assert!(
+            html.contains(r#"href="/""#),
+            "Should contain a link back to home"
+        );
     }
 
     #[test]

@@ -91,8 +91,8 @@ fn format_rule(out: &mut String, rule: &RobotsRule) {
 mod tests {
     use super::*;
     use crate::config::{
-        BuildConfig, RobotsConfig, RobotsRule, SiteConfig, SiteMeta,
-        SiteSchemaConfig, SiteSeoConfig, SitemapConfig
+        BuildConfig, RobotsConfig, RobotsRule, SiteConfig, SiteMeta, SiteSchemaConfig,
+        SiteSeoConfig, SitemapConfig,
     };
     use std::collections::HashMap;
     use std::fs;
@@ -306,7 +306,9 @@ mod tests {
             ..Default::default()
         };
         let content = build_robots_content(&robots, "https://example.com");
-        assert!(content.contains("User-agent: *\nAllow: /\nDisallow: /admin/\nDisallow: /private/\n"));
+        assert!(
+            content.contains("User-agent: *\nAllow: /\nDisallow: /admin/\nDisallow: /private/\n")
+        );
         assert!(content.contains("User-agent: Googlebot\nAllow: /\n"));
         assert!(content.contains("Sitemap: https://example.com/sitemap.xml\n"));
     }

@@ -36,11 +36,7 @@ pub fn collect_prefetch_urls(
         .filter_map(|p| match glob::Pattern::new(p) {
             Ok(pat) => Some(pat),
             Err(e) => {
-                tracing::warn!(
-                    "Invalid glob pattern in exclude_prefetch '{}': {}",
-                    p,
-                    e
-                );
+                tracing::warn!("Invalid glob pattern in exclude_prefetch '{}': {}", p, e);
                 None
             }
         })
@@ -190,7 +186,10 @@ mod tests {
             <a href="/blog.html" hx-get="/_fragments/blog.html" hx-target="#content">Blog</a>
         "##;
         let urls = collect_hx_get_urls(html);
-        assert_eq!(urls, vec!["/_fragments/about.html", "/_fragments/blog.html"]);
+        assert_eq!(
+            urls,
+            vec!["/_fragments/about.html", "/_fragments/blog.html"]
+        );
     }
 
     #[test]

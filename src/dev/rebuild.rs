@@ -17,13 +17,13 @@ use std::time::Instant;
 use crate::assets;
 use crate::assets::cache::AssetCache;
 use crate::build::rate_limit::RateLimiterPool;
+use crate::build::render::RenderedPage;
 use crate::config::SiteConfig;
 use crate::data::{self, DataFetcher};
 use crate::discovery::{self, PageDef, PageType};
 use crate::plugins::registry::{self, PluginRegistry};
 use crate::template;
 use crate::template::errors::TemplateError;
-use crate::build::render::RenderedPage;
 
 use super::inject;
 use super::watcher::RebuildScope;
@@ -81,11 +81,13 @@ impl DevBuildState {
     pub async fn new(project_root: &Path, fresh: bool) -> Result<Self> {
         let config = crate::config::load_config(project_root)?;
         let data_cache = crate::data::open_data_cache(project_root, fresh);
-        let rate_limiter = std::sync::Arc::new(RateLimiterPool::new(config.build.rate_limit, &config.sources));
+        let rate_limiter = std::sync::Arc::new(RateLimiterPool::new(
+            config.build.rate_limit,
+            &config.sources,
+        ));
         let fetcher = DataFetcher::new(&config.sources, project_root, data_cache, rate_limiter);
         let plugin_registry = registry::build_registry(&config.plugins, project_root)?;
-        let asset_cache = AssetCache::open(project_root)
-            .wrap_err("Failed to open asset cache")?;
+        let asset_cache = AssetCache::open(project_root).wrap_err("Failed to open asset cache")?;
         let asset_client = reqwest::Client::new();
 
         let mut state = Self {
@@ -119,9 +121,18 @@ impl DevBuildState {
                     // Reload config and plugins.
                     self.config = crate::config::load_config(&self.project_root)?;
                     let data_cache = crate::data::open_data_cache(&self.project_root, self.fresh);
-                    let rate_limiter = std::sync::Arc::new(RateLimiterPool::new(self.config.build.rate_limit, &self.config.sources));
-                    self.fetcher = DataFetcher::new(&self.config.sources, &self.project_root, data_cache, rate_limiter);
-                    self.plugin_registry = registry::build_registry(&self.config.plugins, &self.project_root)?;
+                    let rate_limiter = std::sync::Arc::new(RateLimiterPool::new(
+                        self.config.build.rate_limit,
+                        &self.config.sources,
+                    ));
+                    self.fetcher = DataFetcher::new(
+                        &self.config.sources,
+                        &self.project_root,
+                        data_cache,
+                        rate_limiter,
+                    );
+                    self.plugin_registry =
+                        registry::build_registry(&self.config.plugins, &self.project_root)?;
                     self.full_build().await?;
                 }
                 RebuildScope::DataOnly => {
@@ -160,7 +171,8 @@ impl DevBuildState {
             let elapsed = start.elapsed();
             tracing::info!("Rebuild completed in {:.1?}", elapsed);
             Ok(())
-        }.await;
+        }
+        .await;
 
         result.map_err(|e| {
             // Check if any error page HTML files were written by the render
@@ -207,8 +219,7 @@ impl DevBuildState {
         )?;
 
         // Build timestamp.
-        let build_time =
-            chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+        let build_time = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
 
         let dist_dir = project_root.join("dist");
         let rate_limiter = RateLimiterPool::new(config.build.rate_limit, &config.sources);
@@ -267,17 +278,9 @@ impl DevBuildState {
         self.plugin_registry.post_build(&dist_dir, project_root)?;
 
         // Run audit checks (dev mode only).
-        let audit_report = crate::build::audit::run_audit(
-            config,
-            &dist_dir,
-            &rendered_pages,
-        )?;
+        let audit_report = crate::build::audit::run_audit(config, &dist_dir, &rendered_pages)?;
         crate::build::audit::output::write_all(&audit_report, &dist_dir)?;
-        crate::build::audit::overlay::inject_badges(
-            &audit_report,
-            &dist_dir,
-            &rendered_pages,
-        )?;
+        crate::build::audit::overlay::inject_badges(&audit_report, &dist_dir, &rendered_pages)?;
         if audit_report.summary.total > 0 {
             tracing::info!(
                 "Audit: {} issue(s) found. See /_audit for details.",
@@ -344,9 +347,12 @@ async fn finalize_page_html_dev(
         ctx.dist_dir,
         &no_skip,
         ctx.rate_limiter,
-    ).await
+    )
+    .await
     .wrap_err_with(|| format!("Failed to localize assets for '{}'", input.url_path))?;
-    let full_html = ctx.plugin_registry.post_render_html(full_html, input.url_path, ctx.dist_dir)?;
+    let full_html =
+        ctx.plugin_registry
+            .post_render_html(full_html, input.url_path, ctx.dist_dir)?;
     let full_html = if ctx.config.build.view_transitions.enabled {
         crate::build::view_transitions::inject_view_transitions(&full_html, &block_names)
     } else {
@@ -365,7 +371,10 @@ async fn finalize_page_html_dev(
     if ctx.config.build.fragments {
         let frags = fragments::extract_fragments(input.rendered);
         let frags: Vec<_> = match &input.page.frontmatter.fragment_blocks {
-            Some(blocks) => frags.into_iter().filter(|f| blocks.contains(&f.block_name)).collect(),
+            Some(blocks) => frags
+                .into_iter()
+                .filter(|f| blocks.contains(&f.block_name))
+                .collect(),
             None => frags,
         };
         if !frags.is_empty() {
@@ -379,7 +388,8 @@ async fn finalize_page_html_dev(
                     ctx.dist_dir,
                     &no_skip,
                     ctx.rate_limiter,
-                ).await?;
+                )
+                .await?;
                 localized_frags.push(fragments::Fragment {
                     block_name: frag.block_name.clone(),
                     html: localized_html,
@@ -409,14 +419,20 @@ async fn render_static_page_dev(
     let tmpl_name = page.template_path.to_string_lossy().to_string();
 
     // Resolve data queries.
-    let page_data = data::resolve_page_data(&page.frontmatter, ctx.fetcher, Some(ctx.plugin_registry))
-        .await
-        .wrap_err_with(|| format!("Failed to resolve data for {}", tmpl_name))?;
+    let page_data =
+        data::resolve_page_data(&page.frontmatter, ctx.fetcher, Some(ctx.plugin_registry))
+            .await
+            .wrap_err_with(|| format!("Failed to resolve data for {}", tmpl_name))?;
 
-    let output_path = if ctx.config.build.clean_urls && page.template_path.file_stem().unwrap_or_default() != "index" {
-        page.output_dir.join(page.template_path.file_stem().unwrap_or_default()).join("index.html")
+    let output_path = if ctx.config.build.clean_urls
+        && page.template_path.file_stem().unwrap_or_default() != "index"
+    {
+        page.output_dir
+            .join(page.template_path.file_stem().unwrap_or_default())
+            .join("index.html")
     } else {
-        page.output_dir.join(page.template_path.file_name().unwrap_or_default())
+        page.output_dir
+            .join(page.template_path.file_name().unwrap_or_default())
     };
     let url_path = format!("/{}", output_path.to_string_lossy().replace('\\', "/"));
 
@@ -429,7 +445,8 @@ async fn render_static_page_dev(
     let meta = PageMeta::new(&url_path, &output_path, ctx.config, ctx.build_time);
     let tpl_ctx = context::build_page_context(ctx.config, ctx.global_data, &page_data, meta, None);
 
-    let tmpl = ctx.env
+    let tmpl = ctx
+        .env
         .get_template(&tmpl_name)
         .wrap_err_with(|| format!("Template '{}' not found", tmpl_name))?;
 
@@ -437,8 +454,10 @@ async fn render_static_page_dev(
         Ok(html) => html,
         Err(err) => {
             let te = TemplateError::from_minijinja(
-                &err, &tmpl_name,
-                page.frontmatter_line_count, Some(&tpl_ctx),
+                &err,
+                &tmpl_name,
+                page.frontmatter_line_count,
+                Some(&tpl_ctx),
             );
             let console_msg = te.format_console(&tmpl_name, None);
             let error_html = te.to_error_html(&tmpl_name, None);
@@ -446,19 +465,24 @@ async fn render_static_page_dev(
             eprintln!("{}", console_msg);
             return Err(eyre::eyre!(
                 "Failed to render template '{}': {}",
-                tmpl_name, te.short_msg
+                tmpl_name,
+                te.short_msg
             ));
         }
     };
 
     let draft_label = build_draft_label(&page.frontmatter);
-    finalize_page_html_dev(DevFinalizeInput {
-        rendered: &rendered,
-        output_path: &output_path,
-        url_path: &url_path,
-        page,
-        draft_label: &draft_label,
-    }, ctx).await?;
+    finalize_page_html_dev(
+        DevFinalizeInput {
+            rendered: &rendered,
+            output_path: &output_path,
+            url_path: &url_path,
+            page,
+            draft_label: &draft_label,
+        },
+        ctx,
+    )
+    .await?;
 
     Ok(RenderedPage {
         url_path,
@@ -502,15 +526,17 @@ async fn render_dynamic_page_dev(
     let slug_field = &page.frontmatter.slug_field;
 
     // Fetch collection.
-    let items = data::resolve_dynamic_page_data(&page.frontmatter, ctx.fetcher, Some(ctx.plugin_registry))
-        .await
-        .wrap_err_with(|| format!("Failed to fetch collection for {}", tmpl_name))?;
+    let items =
+        data::resolve_dynamic_page_data(&page.frontmatter, ctx.fetcher, Some(ctx.plugin_registry))
+            .await
+            .wrap_err_with(|| format!("Failed to fetch collection for {}", tmpl_name))?;
 
     if items.is_empty() {
         return Ok(Vec::new());
     }
 
-    let tmpl = ctx.env
+    let tmpl = ctx
+        .env
         .get_template(&tmpl_name)
         .wrap_err_with(|| format!("Template '{}' not found", tmpl_name))?;
 
@@ -540,9 +566,13 @@ async fn render_dynamic_page_dev(
         }
 
         // Resolve nested data.
-        let item_data =
-            data::resolve_dynamic_page_data_for_item(&page.frontmatter, item, ctx.fetcher, Some(ctx.plugin_registry))
-                .await?;
+        let item_data = data::resolve_dynamic_page_data_for_item(
+            &page.frontmatter,
+            item,
+            ctx.fetcher,
+            Some(ctx.plugin_registry),
+        )
+        .await?;
 
         let output_path = if ctx.config.build.clean_urls {
             page.output_dir.join(&slug).join("index.html")
@@ -551,21 +581,31 @@ async fn render_dynamic_page_dev(
         };
         let url_path = format!("/{}", output_path.to_string_lossy().replace('\\', "/"));
 
-        if rendered_pages.iter().any(|rp: &RenderedPage| rp.url_path == url_path) {
+        if rendered_pages
+            .iter()
+            .any(|rp: &RenderedPage| rp.url_path == url_path)
+        {
             bail!("Duplicate output path '{}' in '{}'", url_path, tmpl_name);
         }
 
         let meta = PageMeta::new(&url_path, &output_path, ctx.config, ctx.build_time);
 
-        let tpl_ctx =
-            context::build_page_context(ctx.config, ctx.global_data, &item_data, meta, Some((item_as, item)));
+        let tpl_ctx = context::build_page_context(
+            ctx.config,
+            ctx.global_data,
+            &item_data,
+            meta,
+            Some((item_as, item)),
+        );
 
         let rendered = match tmpl.render(&tpl_ctx) {
             Ok(html) => html,
             Err(err) => {
                 let te = TemplateError::from_minijinja(
-                    &err, &tmpl_name,
-                    page.frontmatter_line_count, Some(&tpl_ctx),
+                    &err,
+                    &tmpl_name,
+                    page.frontmatter_line_count,
+                    Some(&tpl_ctx),
                 );
                 let console_msg = te.format_console(&tmpl_name, Some(&slug));
                 let error_html = te.to_error_html(&tmpl_name, Some(&slug));
@@ -576,18 +616,24 @@ async fn render_dynamic_page_dev(
                 eprintln!("{}", console_msg);
                 return Err(eyre::eyre!(
                     "Failed to render '{}' for slug '{}': {}",
-                    tmpl_name, slug, te.short_msg
+                    tmpl_name,
+                    slug,
+                    te.short_msg
                 ));
             }
         };
 
-        finalize_page_html_dev(DevFinalizeInput {
-            rendered: &rendered,
-            output_path: &output_path,
-            url_path: &url_path,
-            page,
-            draft_label: "",
-        }, ctx).await?;
+        finalize_page_html_dev(
+            DevFinalizeInput {
+                rendered: &rendered,
+                output_path: &output_path,
+                url_path: &url_path,
+                page,
+                draft_label: "",
+            },
+            ctx,
+        )
+        .await?;
 
         rendered_pages.push(RenderedPage {
             url_path,
@@ -599,4 +645,3 @@ async fn render_dynamic_page_dev(
 
     Ok(rendered_pages)
 }
-

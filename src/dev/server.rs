@@ -18,8 +18,8 @@ use std::convert::Infallible;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use tokio::sync::broadcast;
-use tokio_stream::wrappers::BroadcastStream;
 use tokio_stream::StreamExt;
+use tokio_stream::wrappers::BroadcastStream;
 use tower_http::services::ServeDir;
 
 use crate::config::SiteConfig;
@@ -102,7 +102,8 @@ pub async fn dev_command(project_root: &Path, port: u16, host: &str, fresh: bool
     let app = build_router(dist_dir, &config, reload_tx, rebuild_tx)?;
 
     // Bind and serve.
-    let addr: SocketAddr = format!("{}:{}", host, port).parse()
+    let addr: SocketAddr = format!("{}:{}", host, port)
+        .parse()
         .map_err(|e| eyre::eyre!("Invalid host:port '{}:{}': {}", host, port, e))?;
     eprintln!("Dev server running at http://{}:{}", host, port);
     eprintln!("Press Ctrl+C to stop.\n");
@@ -155,10 +156,7 @@ fn build_router(
         };
 
         let path = format!("/_proxy/{}/{{*rest}}", name);
-        app = app.route(
-            &path,
-            get(proxy::proxy_handler).with_state(proxy_state),
-        );
+        app = app.route(&path, get(proxy::proxy_handler).with_state(proxy_state));
 
         tracing::info!("  Proxy: /_proxy/{}/* → {}", name, source.url);
     }
@@ -171,22 +169,25 @@ fn build_router(
     let dist_for_rewrite = dist_dir.clone();
     let fallback = Router::new()
         .fallback_service(serve_dir)
-        .layer(axum::middleware::from_fn(move |mut req: axum::extract::Request, next: axum::middleware::Next| {
-            let dist = dist_for_rewrite.clone();
-            async move {
-                let path = req.uri().path().to_string();
-                if !path.contains('.') && path != "/" {
-                    let trimmed = path.trim_end_matches('/').trim_start_matches('/');
-                    let html_file = format!("{}.html", trimmed);
-                    if dist.join(&html_file).is_file()
-                        && let Ok(new_uri) = format!("/{}", html_file).parse::<axum::http::Uri>()
-                    {
-                        *req.uri_mut() = new_uri;
+        .layer(axum::middleware::from_fn(
+            move |mut req: axum::extract::Request, next: axum::middleware::Next| {
+                let dist = dist_for_rewrite.clone();
+                async move {
+                    let path = req.uri().path().to_string();
+                    if !path.contains('.') && path != "/" {
+                        let trimmed = path.trim_end_matches('/').trim_start_matches('/');
+                        let html_file = format!("{}.html", trimmed);
+                        if dist.join(&html_file).is_file()
+                            && let Ok(new_uri) =
+                                format!("/{}", html_file).parse::<axum::http::Uri>()
+                        {
+                            *req.uri_mut() = new_uri;
+                        }
                     }
+                    next.run(req).await
                 }
-                next.run(req).await
-            }
-        }));
+            },
+        ));
     app = app.fallback_service(fallback);
 
     Ok(app)

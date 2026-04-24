@@ -184,7 +184,11 @@ mod tests {
 {% endblock %}"#;
         let result = inject_fragment_markers(src);
         assert!(result.contains("<!--FRAG:title:START-->My Title<!--FRAG:title:END-->"));
-        assert!(result.contains("<!--FRAG:content:START-->\n<h1>Page Content</h1>\n<!--FRAG:content:END-->"));
+        assert!(
+            result.contains(
+                "<!--FRAG:content:START-->\n<h1>Page Content</h1>\n<!--FRAG:content:END-->"
+            )
+        );
     }
 
     #[test]

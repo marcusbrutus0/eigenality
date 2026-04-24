@@ -175,8 +175,8 @@ minify = false
 
     // The JSON file should parse as valid JSON.
     let json_content = fs::read_to_string(dist.join("_audit.json")).unwrap();
-    let parsed: serde_json::Value = serde_json::from_str(&json_content)
-        .expect("_audit.json should be valid JSON");
+    let parsed: serde_json::Value =
+        serde_json::from_str(&json_content).expect("_audit.json should be valid JSON");
 
     // Sanity check: the JSON should have a "summary" key.
     assert!(

@@ -24,7 +24,8 @@ pub fn site_checks(config: &SiteConfig, dist_path: &Path) -> Vec<Finding> {
             ),
             fix: Fix {
                 file: "site.toml".into(),
-                instruction: "Set site.base_url to your production URL (e.g. \"https://mysite.com\")".into(),
+                instruction:
+                    "Set site.base_url to your production URL (e.g. \"https://mysite.com\")".into(),
             },
         });
     }
@@ -59,9 +60,10 @@ pub fn page_checks(html: &str, page_path: &str, template_path: &str) -> Vec<Find
     let http_links: Rc<RefCell<Vec<String>>> = Rc::new(RefCell::new(Vec::new()));
     let hl = http_links.clone();
 
-    let _ = lol_html::rewrite_str(html, lol_html::RewriteStrSettings {
-        element_content_handlers: vec![
-            lol_html::element!("a[href]", move |el| {
+    let _ = lol_html::rewrite_str(
+        html,
+        lol_html::RewriteStrSettings {
+            element_content_handlers: vec![lol_html::element!("a[href]", move |el| {
                 if let Some(href) = el.get_attribute("href")
                     && href.starts_with("http://")
                     && !href.starts_with("http://localhost")
@@ -70,10 +72,10 @@ pub fn page_checks(html: &str, page_path: &str, template_path: &str) -> Vec<Find
                     hl.borrow_mut().push(href);
                 }
                 Ok(())
-            }),
-        ],
-        ..lol_html::RewriteStrSettings::new()
-    });
+            })],
+            ..lol_html::RewriteStrSettings::new()
+        },
+    );
 
     let insecure = http_links.borrow();
     for href in insecure.iter() {
@@ -82,10 +84,7 @@ pub fn page_checks(html: &str, page_path: &str, template_path: &str) -> Vec<Find
             category: Category::BestPractices,
             severity: Severity::Medium,
             scope: Scope::Page,
-            message: format!(
-                "{}: insecure HTTP link found: {}",
-                page_path, href,
-            ),
+            message: format!("{}: insecure HTTP link found: {}", page_path, href,),
             fix: Fix {
                 file: template_path.into(),
                 instruction: format!("Change \"{}\" to use https://", href),
@@ -101,11 +100,14 @@ mod tests {
     use super::*;
 
     fn minimal_config() -> SiteConfig {
-        toml::from_str(r#"
+        toml::from_str(
+            r#"
             [site]
             name = "Test"
             base_url = "https://example.com"
-        "#).unwrap()
+        "#,
+        )
+        .unwrap()
     }
 
     #[test]
@@ -154,21 +156,24 @@ mod tests {
 
     #[test]
     fn test_http_links() {
-        let html = r#"<html><head></head><body><a href="http://insecure.com">Link</a></body></html>"#;
+        let html =
+            r#"<html><head></head><body><a href="http://insecure.com">Link</a></body></html>"#;
         let findings = page_checks(html, "/test.html", "templates/test.html");
         assert!(findings.iter().any(|f| f.id == "bp/https-links"));
     }
 
     #[test]
     fn test_https_links_ok() {
-        let html = r#"<html><head></head><body><a href="https://secure.com">Link</a></body></html>"#;
+        let html =
+            r#"<html><head></head><body><a href="https://secure.com">Link</a></body></html>"#;
         let findings = page_checks(html, "/test.html", "templates/test.html");
         assert!(!findings.iter().any(|f| f.id == "bp/https-links"));
     }
 
     #[test]
     fn test_localhost_http_not_flagged() {
-        let html = r#"<html><head></head><body><a href="http://localhost:3000">Dev</a></body></html>"#;
+        let html =
+            r#"<html><head></head><body><a href="http://localhost:3000">Dev</a></body></html>"#;
         let findings = page_checks(html, "/test.html", "templates/test.html");
         assert!(!findings.iter().any(|f| f.id == "bp/https-links"));
     }

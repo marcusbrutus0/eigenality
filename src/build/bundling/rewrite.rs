@@ -35,10 +35,9 @@ pub fn rewrite_html_for_bundles(
     let js_set: HashSet<&str> = js_srcs.iter().map(|s| s.as_str()).collect();
 
     for html_path in html_files {
-        let html_content = std::fs::read_to_string(html_path)
-            .wrap_err_with(|| format!(
-                "Bundling rewrite: failed to read '{}'", html_path.display()
-            ))?;
+        let html_content = std::fs::read_to_string(html_path).wrap_err_with(|| {
+            format!("Bundling rewrite: failed to read '{}'", html_path.display())
+        })?;
 
         let rewritten = rewrite_single_html(
             &html_content,
@@ -46,14 +45,20 @@ pub fn rewrite_html_for_bundles(
             js_bundle_src,
             &css_set,
             &js_set,
-        ).wrap_err_with(|| format!(
-            "Bundling rewrite: failed to rewrite '{}'", html_path.display()
-        ))?;
+        )
+        .wrap_err_with(|| {
+            format!(
+                "Bundling rewrite: failed to rewrite '{}'",
+                html_path.display()
+            )
+        })?;
 
-        std::fs::write(html_path, rewritten)
-            .wrap_err_with(|| format!(
-                "Bundling rewrite: failed to write '{}'", html_path.display()
-            ))?;
+        std::fs::write(html_path, rewritten).wrap_err_with(|| {
+            format!(
+                "Bundling rewrite: failed to write '{}'",
+                html_path.display()
+            )
+        })?;
     }
 
     Ok(())
@@ -79,7 +84,8 @@ fn rewrite_single_html(
     let css_injected_preload = css_injected.clone();
     let js_injected_clone = js_injected.clone();
 
-    let css_set_link: Rc<HashSet<String>> = Rc::new(css_set.iter().map(|s| s.to_string()).collect());
+    let css_set_link: Rc<HashSet<String>> =
+        Rc::new(css_set.iter().map(|s| s.to_string()).collect());
     let css_set_preload = css_set_link.clone();
     let js_set_rc: Rc<HashSet<String>> = Rc::new(js_set.iter().map(|s| s.to_string()).collect());
 
@@ -155,10 +161,8 @@ fn rewrite_single_html(
                                     modified = modified.replace(href.as_str(), bundle);
                                     first = false;
                                 } else {
-                                    let pattern = format!(
-                                        r#"<link rel="stylesheet" href="{}">"#,
-                                        href
-                                    );
+                                    let pattern =
+                                        format!(r#"<link rel="stylesheet" href="{}">"#, href);
                                     modified = modified.replace(&pattern, "");
                                 }
                             }
@@ -179,9 +183,7 @@ fn rewrite_single_html(
                     };
 
                     // Skip defer, async, type="module".
-                    if el.get_attribute("defer").is_some()
-                        || el.get_attribute("async").is_some()
-                    {
+                    if el.get_attribute("defer").is_some() || el.get_attribute("async").is_some() {
                         return Ok(());
                     }
                     if el.get_attribute("type").as_deref() == Some("module") {
@@ -228,7 +230,9 @@ mod tests {
     fn test_rewrite_css_single_link() {
         let html = r#"<html><head><link rel="stylesheet" href="/css/style.css"></head><body></body></html>"#;
         let css = css_set(&["/css/style.css"]);
-        let result = rewrite_single_html(html, Some("/css/bundle.css"), None, &css, &HashSet::new()).unwrap();
+        let result =
+            rewrite_single_html(html, Some("/css/bundle.css"), None, &css, &HashSet::new())
+                .unwrap();
 
         assert!(result.contains(r#"href="/css/bundle.css""#));
         assert!(!result.contains(r#"href="/css/style.css""#));
@@ -241,7 +245,9 @@ mod tests {
             <link rel="stylesheet" href="/css/style.css">
         </head><body></body></html>"#;
         let css = css_set(&["/css/reset.css", "/css/style.css"]);
-        let result = rewrite_single_html(html, Some("/css/bundle.css"), None, &css, &HashSet::new()).unwrap();
+        let result =
+            rewrite_single_html(html, Some("/css/bundle.css"), None, &css, &HashSet::new())
+                .unwrap();
 
         // First link rewritten to bundle, second removed.
         assert!(result.contains(r#"href="/css/bundle.css""#));
@@ -259,7 +265,9 @@ mod tests {
             <noscript><link rel="stylesheet" href="/css/style.css"></noscript>
         </head><body></body></html>"#;
         let css = css_set(&["/css/style.css"]);
-        let result = rewrite_single_html(html, Some("/css/bundle.css"), None, &css, &HashSet::new()).unwrap();
+        let result =
+            rewrite_single_html(html, Some("/css/bundle.css"), None, &css, &HashSet::new())
+                .unwrap();
 
         // Preload link should be rewritten.
         assert!(result.contains(r#"href="/css/bundle.css""#));
@@ -274,7 +282,9 @@ mod tests {
             <noscript><link rel="stylesheet" href="/css/style.css"></noscript>
         </head><body></body></html>"#;
         let css = css_set(&["/css/style.css"]);
-        let result = rewrite_single_html(html, Some("/css/bundle.css"), None, &css, &HashSet::new()).unwrap();
+        let result =
+            rewrite_single_html(html, Some("/css/bundle.css"), None, &css, &HashSet::new())
+                .unwrap();
 
         // Noscript link should be rewritten via text replacement.
         assert!(result.contains("/css/bundle.css"));
@@ -285,7 +295,8 @@ mod tests {
     fn test_rewrite_js_single_script() {
         let html = r#"<html><body><script src="/js/app.js"></script></body></html>"#;
         let js = js_set(&["/js/app.js"]);
-        let result = rewrite_single_html(html, None, Some("/js/bundle.js"), &HashSet::new(), &js).unwrap();
+        let result =
+            rewrite_single_html(html, None, Some("/js/bundle.js"), &HashSet::new(), &js).unwrap();
 
         assert!(result.contains(r#"src="/js/bundle.js""#));
         assert!(!result.contains(r#"src="/js/app.js""#));
@@ -298,7 +309,8 @@ mod tests {
             <script src="/js/app.js"></script>
         </body></html>"#;
         let js = js_set(&["/js/utils.js", "/js/app.js"]);
-        let result = rewrite_single_html(html, None, Some("/js/bundle.js"), &HashSet::new(), &js).unwrap();
+        let result =
+            rewrite_single_html(html, None, Some("/js/bundle.js"), &HashSet::new(), &js).unwrap();
 
         // First script rewritten, second removed.
         assert!(result.contains(r#"src="/js/bundle.js""#));
@@ -317,7 +329,14 @@ mod tests {
         </body></html>"#;
         let css = css_set(&["/css/local.css"]);
         let js = js_set(&["/js/app.js"]);
-        let result = rewrite_single_html(html, Some("/css/bundle.css"), Some("/js/bundle.js"), &css, &js).unwrap();
+        let result = rewrite_single_html(
+            html,
+            Some("/css/bundle.css"),
+            Some("/js/bundle.js"),
+            &css,
+            &js,
+        )
+        .unwrap();
 
         // External links should be untouched.
         assert!(result.contains("https://cdn.example.com/lib.css"));
@@ -331,7 +350,8 @@ mod tests {
             <script src="/js/app.js"></script>
         </body></html>"#;
         let js = js_set(&["/js/app.js"]);
-        let result = rewrite_single_html(html, None, Some("/js/bundle.js"), &HashSet::new(), &js).unwrap();
+        let result =
+            rewrite_single_html(html, None, Some("/js/bundle.js"), &HashSet::new(), &js).unwrap();
 
         // Module script untouched.
         assert!(result.contains(r#"type="module" src="/js/mod.js""#));
@@ -347,7 +367,8 @@ mod tests {
             <script src="/js/app.js"></script>
         </body></html>"#;
         let js = js_set(&["/js/app.js"]);
-        let result = rewrite_single_html(html, None, Some("/js/bundle.js"), &HashSet::new(), &js).unwrap();
+        let result =
+            rewrite_single_html(html, None, Some("/js/bundle.js"), &HashSet::new(), &js).unwrap();
 
         // Defer and async scripts untouched.
         assert!(result.contains(r#"src="/js/deferred.js""#));
@@ -359,7 +380,14 @@ mod tests {
     #[test]
     fn test_rewrite_no_bundled_refs() {
         let html = r#"<html><head><link rel="stylesheet" href="/css/other.css"></head><body><script src="/js/other.js"></script></body></html>"#;
-        let result = rewrite_single_html(html, Some("/css/bundle.css"), Some("/js/bundle.js"), &HashSet::new(), &HashSet::new()).unwrap();
+        let result = rewrite_single_html(
+            html,
+            Some("/css/bundle.css"),
+            Some("/js/bundle.js"),
+            &HashSet::new(),
+            &HashSet::new(),
+        )
+        .unwrap();
 
         // No bundled refs -> no changes.
         assert!(result.contains(r#"href="/css/other.css""#));

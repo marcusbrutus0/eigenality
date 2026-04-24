@@ -34,11 +34,9 @@ fn apply_filter(value: Value, filters: &std::collections::HashMap<String, String
             let filtered: Vec<Value> = arr
                 .into_iter()
                 .filter(|item| {
-                    filters.iter().all(|(key, expected)| {
-                        match item.get(key) {
-                            Some(val) => value_matches_string(val, expected),
-                            None => false,
-                        }
+                    filters.iter().all(|(key, expected)| match item.get(key) {
+                        Some(val) => value_matches_string(val, expected),
+                        None => false,
                     })
                 })
                 .collect();
@@ -336,7 +334,7 @@ mod tests {
         let result = apply_transforms(data, &Some(filter), &sort, &limit);
         let arr = result.as_array().unwrap();
         assert_eq!(arr.len(), 2);
-        assert_eq!(arr[0]["name"], "Bob");   // id=2
+        assert_eq!(arr[0]["name"], "Bob"); // id=2
         assert_eq!(arr[1]["name"], "Carol"); // id=3
     }
 

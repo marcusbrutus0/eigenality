@@ -33,10 +33,7 @@ pub fn open_data_cache(project_root: &std::path::Path, fresh: bool) -> Option<Da
 }
 pub use global::load_global_data;
 pub use query::{
-    resolve_page_data,
-    resolve_dynamic_page_data,
-    resolve_dynamic_page_data_for_item,
-    resolve_page_data_unlocked,
-    resolve_dynamic_page_data_unlocked,
-    resolve_dynamic_page_data_for_item_unlocked,
+    resolve_dynamic_page_data, resolve_dynamic_page_data_for_item,
+    resolve_dynamic_page_data_for_item_unlocked, resolve_dynamic_page_data_unlocked,
+    resolve_page_data, resolve_page_data_unlocked,
 };

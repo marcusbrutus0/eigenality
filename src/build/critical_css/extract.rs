@@ -21,9 +21,22 @@ static PSEUDO_ELEMENT_RE: LazyLock<Regex> = LazyLock::new(|| {
 /// Structural / functional pseudo-classes that `scraper` supports natively.
 /// These are preserved during stripping so selector matching works correctly.
 const STRUCTURAL_PSEUDOS: &[&str] = &[
-    "root", "first-child", "last-child", "nth-child", "nth-last-child",
-    "nth-of-type", "nth-last-of-type", "first-of-type", "last-of-type",
-    "only-child", "only-of-type", "empty", "not", "is", "where", "has",
+    "root",
+    "first-child",
+    "last-child",
+    "nth-child",
+    "nth-last-child",
+    "nth-of-type",
+    "nth-last-of-type",
+    "first-of-type",
+    "last-of-type",
+    "only-child",
+    "only-of-type",
+    "empty",
+    "not",
+    "is",
+    "where",
+    "has",
 ];
 
 /// Matches `font-family` declarations.
@@ -37,19 +50,16 @@ static ANIM_NAME_RE: LazyLock<Regex> = LazyLock::new(|| {
 });
 
 /// Matches `animation` shorthand declarations.
-static ANIM_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(?i)animation\s*:\s*([^;]+)").expect("animation regex is valid")
-});
+static ANIM_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(?i)animation\s*:\s*([^;]+)").expect("animation regex is valid"));
 
 /// Matches `var(--name)` references.
-static VAR_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"var\(\s*(--[a-zA-Z0-9_-]+)").expect("var() regex is valid")
-});
+static VAR_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"var\(\s*(--[a-zA-Z0-9_-]+)").expect("var() regex is valid"));
 
 /// Matches CSS custom property definitions (`--name:`).
-static CUSTOM_PROP_DEF_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(--[a-zA-Z0-9_-]+)\s*:").expect("custom prop regex is valid")
-});
+static CUSTOM_PROP_DEF_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(--[a-zA-Z0-9_-]+)\s*:").expect("custom prop regex is valid"));
 
 /// Strip dynamic pseudo-classes and pseudo-elements from a selector string
 /// to produce a version matchable against a static DOM.
@@ -83,10 +93,7 @@ pub fn strip_pseudo_for_matching(selector: &str) -> Option<String> {
                 // Hex escape: `\3a ` — consume up to 6 hex digits plus
                 // an optional trailing whitespace.
                 let hex_start = i;
-                while i < len
-                    && i - hex_start < 6
-                    && bytes[i].is_ascii_hexdigit()
-                {
+                while i < len && i - hex_start < 6 && bytes[i].is_ascii_hexdigit() {
                     result.push(bytes[i] as char);
                     i += 1;
                 }
@@ -119,8 +126,12 @@ pub fn strip_pseudo_for_matching(selector: &str) -> Option<String> {
                     let mut depth = 1;
                     end += 1;
                     while end < len && depth > 0 {
-                        if bytes[end] == b'(' { depth += 1; }
-                        if bytes[end] == b')' { depth -= 1; }
+                        if bytes[end] == b'(' {
+                            depth += 1;
+                        }
+                        if bytes[end] == b')' {
+                            depth -= 1;
+                        }
                         end += 1;
                     }
                 }
@@ -132,8 +143,12 @@ pub fn strip_pseudo_for_matching(selector: &str) -> Option<String> {
                     let mut depth = 1;
                     i += 1;
                     while i < len && depth > 0 {
-                        if bytes[i] == b'(' { depth += 1; }
-                        if bytes[i] == b')' { depth -= 1; }
+                        if bytes[i] == b'(' {
+                            depth += 1;
+                        }
+                        if bytes[i] == b')' {
+                            depth -= 1;
+                        }
                         i += 1;
                     }
                 }
@@ -233,10 +248,23 @@ pub fn collect_global_deps(declarations: &str) -> GlobalDependencies {
 fn is_generic_font_family(name: &str) -> bool {
     matches!(
         name.to_lowercase().as_str(),
-        "serif" | "sans-serif" | "monospace" | "cursive" | "fantasy"
-        | "system-ui" | "ui-serif" | "ui-sans-serif" | "ui-monospace"
-        | "ui-rounded" | "emoji" | "math" | "fangsong"
-        | "inherit" | "initial" | "unset" | "revert"
+        "serif"
+            | "sans-serif"
+            | "monospace"
+            | "cursive"
+            | "fantasy"
+            | "system-ui"
+            | "ui-serif"
+            | "ui-sans-serif"
+            | "ui-monospace"
+            | "ui-rounded"
+            | "emoji"
+            | "math"
+            | "fangsong"
+            | "inherit"
+            | "initial"
+            | "unset"
+            | "revert"
     )
 }
 
@@ -246,12 +274,30 @@ fn is_generic_font_family(name: &str) -> bool {
 /// We look for identifiers that are not timing keywords or durations.
 fn extract_animation_names_from_shorthand(value: &str, names: &mut HashSet<String>) {
     let timing_keywords: HashSet<&str> = [
-        "ease", "ease-in", "ease-out", "ease-in-out", "linear",
-        "step-start", "step-end", "infinite", "none", "normal",
-        "reverse", "alternate", "alternate-reverse", "forwards",
-        "backwards", "both", "running", "paused", "initial",
-        "inherit", "unset",
-    ].into_iter().collect();
+        "ease",
+        "ease-in",
+        "ease-out",
+        "ease-in-out",
+        "linear",
+        "step-start",
+        "step-end",
+        "infinite",
+        "none",
+        "normal",
+        "reverse",
+        "alternate",
+        "alternate-reverse",
+        "forwards",
+        "backwards",
+        "both",
+        "running",
+        "paused",
+        "initial",
+        "inherit",
+        "unset",
+    ]
+    .into_iter()
+    .collect();
 
     // Each comma-separated value is one animation.
     for animation in value.split(',') {
@@ -293,8 +339,8 @@ pub fn extract_critical_css(css: &str, document: &scraper::Html) -> Result<Strin
         error_recovery: true,
         ..ParserOptions::default()
     };
-    let stylesheet = StyleSheet::parse(css, options)
-        .map_err(|e| format!("CSS parse error: {e}"))?;
+    let stylesheet =
+        StyleSheet::parse(css, options).map_err(|e| format!("CSS parse error: {e}"))?;
 
     let mut matched_rules: Vec<String> = Vec::new();
     let mut global_deps = GlobalDependencies::default();
@@ -374,19 +420,27 @@ fn walk_rules(
         match rule {
             CssRule::Style(style_rule) => {
                 handle_style_rule(
-                    style_rule, document, matched_rules,
-                    global_deps, custom_prop_rules,
+                    style_rule,
+                    document,
+                    matched_rules,
+                    global_deps,
+                    custom_prop_rules,
                 );
             }
             CssRule::Media(media_rule) => {
                 let mut media_matched: Vec<String> = Vec::new();
                 walk_rules(
-                    &media_rule.rules.0, document, &mut media_matched,
-                    global_deps, font_face_rules, keyframe_rules,
+                    &media_rule.rules.0,
+                    document,
+                    &mut media_matched,
+                    global_deps,
+                    font_face_rules,
+                    keyframe_rules,
                     custom_prop_rules,
                 );
                 if !media_matched.is_empty() {
-                    let query = media_rule.query
+                    let query = media_rule
+                        .query
                         .to_css_string(printer())
                         .unwrap_or_default();
                     let inner = media_matched.join("\n");
@@ -396,12 +450,17 @@ fn walk_rules(
             CssRule::Supports(supports_rule) => {
                 let mut supports_matched: Vec<String> = Vec::new();
                 walk_rules(
-                    &supports_rule.rules.0, document, &mut supports_matched,
-                    global_deps, font_face_rules, keyframe_rules,
+                    &supports_rule.rules.0,
+                    document,
+                    &mut supports_matched,
+                    global_deps,
+                    font_face_rules,
+                    keyframe_rules,
                     custom_prop_rules,
                 );
                 if !supports_matched.is_empty() {
-                    let condition = supports_rule.condition
+                    let condition = supports_rule
+                        .condition
                         .to_css_string(printer())
                         .unwrap_or_default();
                     let inner = supports_matched.join("\n");
@@ -411,12 +470,18 @@ fn walk_rules(
             CssRule::LayerBlock(layer_rule) => {
                 let mut layer_matched: Vec<String> = Vec::new();
                 walk_rules(
-                    &layer_rule.rules.0, document, &mut layer_matched,
-                    global_deps, font_face_rules, keyframe_rules,
+                    &layer_rule.rules.0,
+                    document,
+                    &mut layer_matched,
+                    global_deps,
+                    font_face_rules,
+                    keyframe_rules,
                     custom_prop_rules,
                 );
                 if !layer_matched.is_empty() {
-                    let name = layer_rule.name.as_ref()
+                    let name = layer_rule
+                        .name
+                        .as_ref()
                         .and_then(|n| n.to_css_string(printer()).ok())
                         .unwrap_or_default();
                     let inner = layer_matched.join("\n");
@@ -467,7 +532,8 @@ fn handle_style_rule(
     global_deps: &mut GlobalDependencies,
     custom_prop_rules: &mut Vec<(String, String)>,
 ) {
-    let selector_list = style_rule.selectors
+    let selector_list = style_rule
+        .selectors
         .to_css_string(printer())
         .unwrap_or_default();
 
@@ -816,7 +882,7 @@ mod tests {
             .btn { color: var(--color-primary); }
         "#;
         let html = scraper::Html::parse_document(
-            r#"<html><body><button class="btn">Click</button></body></html>"#
+            r#"<html><body><button class="btn">Click</button></body></html>"#,
         );
         let result = extract_critical_css(css, &html).unwrap();
         // :root matches <html>, so the :root rule should be included via

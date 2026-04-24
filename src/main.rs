@@ -26,7 +26,11 @@ async fn main() -> Result<()> {
     setup_logging(cli.verbose, cli.quiet);
 
     match cli.command {
-        Command::Build { project, fresh, full } => {
+        Command::Build {
+            project,
+            fresh,
+            full,
+        } => {
             let project = std::fs::canonicalize(&project)?;
             let start = Instant::now();
             tracing::info!("Building site at {}...", project.display());
@@ -45,9 +49,17 @@ async fn main() -> Result<()> {
             eprintln!("  cd {name} && eigen build");
             Ok(())
         }
-        Command::Dev { project, port, host, fresh } => {
+        Command::Dev {
+            project,
+            port,
+            host,
+            fresh,
+        } => {
             let project = std::fs::canonicalize(&project)?;
-            tracing::info!("Starting dev server for {} on {host}:{port}...", project.display());
+            tracing::info!(
+                "Starting dev server for {} on {host}:{port}...",
+                project.display()
+            );
             if fresh {
                 tracing::info!("Fresh mode: bypassing data cache.");
             }
@@ -56,7 +68,12 @@ async fn main() -> Result<()> {
 
             Ok(())
         }
-        Command::Audit { project, format, output, no_build } => {
+        Command::Audit {
+            project,
+            format,
+            output,
+            no_build,
+        } => {
             let project = std::fs::canonicalize(&project)?;
             let start = Instant::now();
 
@@ -69,7 +86,9 @@ async fn main() -> Result<()> {
             let dist_dir = project.join("dist");
 
             if !dist_dir.exists() {
-                eyre::bail!("dist/ directory not found. Run `eigen build` first or remove --no-build.");
+                eyre::bail!(
+                    "dist/ directory not found. Run `eigen build` first or remove --no-build."
+                );
             }
 
             // Discover rendered pages from dist/.
@@ -85,22 +104,23 @@ async fn main() -> Result<()> {
                     std::fs::write(format!("{}.md", path.display()), md)?;
                     eprintln!("Wrote {}.json and {}.md", path.display(), path.display());
                 }
-                None => {
-                    match format.as_str() {
-                        "json" => {
-                            let json = build::audit::output::json::render_json(&report)?;
-                            println!("{}", json);
-                        }
-                        _ => {
-                            let md = build::audit::output::markdown::render_markdown(&report);
-                            print!("{}", md);
-                        }
+                None => match format.as_str() {
+                    "json" => {
+                        let json = build::audit::output::json::render_json(&report)?;
+                        println!("{}", json);
                     }
-                }
+                    _ => {
+                        let md = build::audit::output::markdown::render_markdown(&report);
+                        print!("{}", md);
+                    }
+                },
             }
 
             let elapsed = start.elapsed();
-            eprintln!("Audit completed in {:.1?} ({} issues)", elapsed, report.summary.total);
+            eprintln!(
+                "Audit completed in {:.1?} ({} issues)",
+                elapsed, report.summary.total
+            );
             Ok(())
         }
     }
@@ -112,12 +132,7 @@ fn discover_rendered_pages(dist_dir: &std::path::Path) -> Result<Vec<build::rend
     for entry in walkdir::WalkDir::new(dist_dir)
         .into_iter()
         .filter_map(|e| e.ok())
-        .filter(|e| {
-            e.path()
-                .extension()
-                .map(|x| x == "html")
-                .unwrap_or(false)
-        })
+        .filter(|e| e.path().extension().map(|x| x == "html").unwrap_or(false))
     {
         let rel = entry.path().strip_prefix(dist_dir)?;
         let rel_str = rel.to_string_lossy();

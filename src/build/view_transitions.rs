@@ -13,8 +13,7 @@ use std::collections::HashSet;
 use std::rc::Rc;
 
 /// The meta tag for cross-document view transitions.
-const VIEW_TRANSITION_META: &str =
-    r#"<meta name="view-transition" content="same-origin">"#;
+const VIEW_TRANSITION_META: &str = r#"<meta name="view-transition" content="same-origin">"#;
 
 /// The inline script that enables HTMX's built-in view transitions.
 ///
@@ -82,17 +81,15 @@ fn rewrite_html(
             element_content_handlers: vec![
                 // Inject meta + script into <head>.
                 lol_html::element!("head", move |el| {
-                    el.append(
-                        &head_owned,
-                        lol_html::html_content::ContentType::Html,
-                    );
+                    el.append(&head_owned, lol_html::html_content::ContentType::Html);
                     Ok(())
                 }),
                 // Add view-transition-name to elements with matching IDs.
                 lol_html::element!("*[id]", move |el| {
-                    if let Some(id) = el.get_attribute("id") && names.contains(&id) {
-                        let existing_style =
-                            el.get_attribute("style").unwrap_or_default();
+                    if let Some(id) = el.get_attribute("id")
+                        && names.contains(&id)
+                    {
+                        let existing_style = el.get_attribute("style").unwrap_or_default();
 
                         // Skip if already has a view-transition-name.
                         if existing_style.contains("view-transition-name") {
@@ -102,19 +99,12 @@ fn rewrite_html(
                         let new_style = if existing_style.is_empty() {
                             format!("view-transition-name: {};", id)
                         } else {
-                            let trimmed =
-                                existing_style.trim_end().trim_end_matches(';');
-                            format!(
-                                "{}; view-transition-name: {};",
-                                trimmed, id
-                            )
+                            let trimmed = existing_style.trim_end().trim_end_matches(';');
+                            format!("{}; view-transition-name: {};", trimmed, id)
                         };
 
                         if let Err(e) = el.set_attribute("style", &new_style) {
-                            tracing::warn!(
-                                "Failed to set style on #{}: {}",
-                                id, e
-                            );
+                            tracing::warn!("Failed to set style on #{}: {}", id, e);
                         }
                     }
                     Ok(())
@@ -133,15 +123,11 @@ fn rewrite_html(
 /// attributes get `view-transition-name` added to their `style`.
 ///
 /// Infallible by design: returns original HTML on any error.
-pub fn inject_view_transitions(
-    html: &str,
-    fragment_block_names: &[String],
-) -> String {
+pub fn inject_view_transitions(html: &str, fragment_block_names: &[String]) -> String {
     let has_meta = has_view_transition_meta(html);
     let head_html = build_head_injection(has_meta);
 
-    let block_names: HashSet<String> =
-        fragment_block_names.iter().cloned().collect();
+    let block_names: HashSet<String> = fragment_block_names.iter().cloned().collect();
 
     match rewrite_html(html, &head_html, &block_names) {
         Ok(result) => result,
@@ -190,7 +176,8 @@ mod tests {
         let result = inject_view_transitions(html, &["content".into()]);
         assert!(
             result.contains(r#"style="view-transition-name: content;""#),
-            "Should add view-transition-name to element with matching id. Got: {}", result
+            "Should add view-transition-name to element with matching id. Got: {}",
+            result
         );
     }
 
@@ -200,7 +187,8 @@ mod tests {
         let result = inject_view_transitions(html, &["content".into()]);
         assert!(
             result.contains("color: red; view-transition-name: content;"),
-            "Should append to existing style. Got: {}", result
+            "Should append to existing style. Got: {}",
+            result
         );
     }
 
@@ -210,7 +198,8 @@ mod tests {
         let result = inject_view_transitions(html, &["content".into()]);
         assert!(
             !result.contains(";;"),
-            "Should not produce double semicolons. Got: {}", result
+            "Should not produce double semicolons. Got: {}",
+            result
         );
     }
 
@@ -223,7 +212,11 @@ mod tests {
             "Should preserve existing view-transition-name"
         );
         let count = result.matches("view-transition-name").count();
-        assert_eq!(count, 1, "Should not duplicate view-transition-name. Got: {}", result);
+        assert_eq!(
+            count, 1,
+            "Should not duplicate view-transition-name. Got: {}",
+            result
+        );
     }
 
     #[test]
@@ -250,17 +243,16 @@ mod tests {
     #[test]
     fn test_multiple_fragment_names() {
         let html = r#"<html><head></head><body><div id="content">Main</div><nav id="nav_header">Nav</nav></body></html>"#;
-        let result = inject_view_transitions(
-            html,
-            &["content".into(), "nav_header".into()],
-        );
+        let result = inject_view_transitions(html, &["content".into(), "nav_header".into()]);
         assert!(
             result.contains(r#"view-transition-name: content;"#),
-            "Should add transition name to content. Got: {}", result
+            "Should add transition name to content. Got: {}",
+            result
         );
         assert!(
             result.contains(r#"view-transition-name: nav_header;"#),
-            "Should add transition name to nav_header. Got: {}", result
+            "Should add transition name to nav_header. Got: {}",
+            result
         );
     }
 

@@ -100,10 +100,9 @@ pub async fn localize_assets(
         match download::ensure_asset(client, cache, url, pool).await {
             Ok(local_filename) => {
                 // Copy from cache to dist/assets/.
-                cache.copy_to_dist(url, &dist_assets_dir)
-                    .wrap_err_with(|| {
-                        format!("Failed to copy cached asset to dist: {}", url)
-                    })?;
+                cache
+                    .copy_to_dist(url, &dist_assets_dir)
+                    .wrap_err_with(|| format!("Failed to copy cached asset to dist: {}", url))?;
                 let local_path = format!("/assets/{}", local_filename);
                 url_map.insert(url.clone(), local_path);
             }
@@ -134,7 +133,10 @@ pub fn check_asset_cache(
     html: &str,
     config: &AssetsConfig,
     skip_urls: &HashSet<String>,
-) -> (Vec<(String, Option<AssetCacheMeta>)>, HashMap<String, String>) {
+) -> (
+    Vec<(String, Option<AssetCacheMeta>)>,
+    HashMap<String, String>,
+) {
     if !config.localize {
         return (Vec::new(), HashMap::new());
     }
@@ -238,12 +240,18 @@ pub async fn store_and_rewrite_assets(
                 last_modified,
                 content_type,
             } => {
-                match cache.store(&url, &data, &local_filename, etag, last_modified, content_type) {
+                match cache.store(
+                    &url,
+                    &data,
+                    &local_filename,
+                    etag,
+                    last_modified,
+                    content_type,
+                ) {
                     Ok(final_name) => {
-                        cache.copy_to_dist(&url, dist_assets_dir)
-                            .wrap_err_with(|| {
-                                format!("Failed to copy asset to dist: {}", url)
-                            })?;
+                        cache
+                            .copy_to_dist(&url, dist_assets_dir)
+                            .wrap_err_with(|| format!("Failed to copy asset to dist: {}", url))?;
                         url_map.insert(url, format!("/assets/{}", final_name));
                     }
                     Err(e) => tracing::warn!("Failed to store asset {}: {:#}", url, e),
@@ -252,7 +260,8 @@ pub async fn store_and_rewrite_assets(
             DownloadResult::NotModified => {
                 // Server confirmed cache is still valid; copy to dist and map URL.
                 if let Some(meta) = cache.get(&url).cloned() {
-                    cache.copy_to_dist(&url, dist_assets_dir)
+                    cache
+                        .copy_to_dist(&url, dist_assets_dir)
                         .wrap_err_with(|| {
                             format!("Failed to copy not-modified asset to dist: {}", url)
                         })?;
@@ -280,9 +289,8 @@ fn extract_remote_urls(html: &str) -> Vec<String> {
     // 1. Match src attributes on target elements.
     //    Pattern: <(img|video|source|audio) ... src="URL" ...>
     //    We use a regex that finds src="..." within tags that start with one of our targets.
-    let src_re = Regex::new(
-        r#"(?is)<(?:img|video|source|audio)\b[^>]*?\bsrc\s*=\s*"([^"]+)""#
-    ).unwrap();
+    let src_re =
+        Regex::new(r#"(?is)<(?:img|video|source|audio)\b[^>]*?\bsrc\s*=\s*"([^"]+)""#).unwrap();
 
     for cap in src_re.captures_iter(html) {
         let url = cap[1].to_string();
@@ -292,9 +300,8 @@ fn extract_remote_urls(html: &str) -> Vec<String> {
     }
 
     // Also match single-quoted src attributes.
-    let src_sq_re = Regex::new(
-        r#"(?is)<(?:img|video|source|audio)\b[^>]*?\bsrc\s*=\s*'([^']+)'"#
-    ).unwrap();
+    let src_sq_re =
+        Regex::new(r#"(?is)<(?:img|video|source|audio)\b[^>]*?\bsrc\s*=\s*'([^']+)'"#).unwrap();
 
     for cap in src_sq_re.captures_iter(html) {
         let url = cap[1].to_string();
@@ -304,9 +311,8 @@ fn extract_remote_urls(html: &str) -> Vec<String> {
     }
 
     // 2. Match background-image: url(...) anywhere in the HTML.
-    let bg_re = Regex::new(
-        r#"(?i)background-image\s*:\s*url\(\s*['"]?([^'")]+)['"]?\s*\)"#
-    ).unwrap();
+    let bg_re =
+        Regex::new(r#"(?i)background-image\s*:\s*url\(\s*['"]?([^'")]+)['"]?\s*\)"#).unwrap();
 
     for cap in bg_re.captures_iter(html) {
         let url = cap[1].trim().to_string();
@@ -332,7 +338,8 @@ fn should_skip_cdn(url: &str, config: &AssetsConfig) -> bool {
 
     // If the host is explicitly in the allow list, never skip it.
     for allowed in &config.cdn_allow_hosts {
-        if host == allowed.to_lowercase() || host.ends_with(&format!(".{}", allowed.to_lowercase())) {
+        if host == allowed.to_lowercase() || host.ends_with(&format!(".{}", allowed.to_lowercase()))
+        {
             return false;
         }
     }
@@ -356,7 +363,8 @@ fn should_skip_cdn(url: &str, config: &AssetsConfig) -> bool {
 
 /// Extract the hostname from a URL.
 fn extract_host(url: &str) -> Option<&str> {
-    let after_scheme = url.strip_prefix("https://")
+    let after_scheme = url
+        .strip_prefix("https://")
         .or_else(|| url.strip_prefix("http://"))?;
 
     // Take everything up to the first `/`, `?`, `#`, or `:` (port).
@@ -443,7 +451,8 @@ mod tests {
 
     #[test]
     fn test_extract_background_image_in_style_block() {
-        let html = r#"<style>.hero { background-image: url("https://example.com/hero.png"); }</style>"#;
+        let html =
+            r#"<style>.hero { background-image: url("https://example.com/hero.png"); }</style>"#;
         let urls = extract_remote_urls(html);
         assert_eq!(urls, vec!["https://example.com/hero.png"]);
     }
@@ -485,16 +494,28 @@ mod tests {
     #[test]
     fn test_skip_default_cdn() {
         let config = default_config();
-        assert!(should_skip_cdn("https://cdn.jsdelivr.net/npm/htmx.org", &config));
-        assert!(should_skip_cdn("https://fonts.googleapis.com/css2?family=Roboto", &config));
-        assert!(should_skip_cdn("https://cdnjs.cloudflare.com/ajax/libs/foo.js", &config));
+        assert!(should_skip_cdn(
+            "https://cdn.jsdelivr.net/npm/htmx.org",
+            &config
+        ));
+        assert!(should_skip_cdn(
+            "https://fonts.googleapis.com/css2?family=Roboto",
+            &config
+        ));
+        assert!(should_skip_cdn(
+            "https://cdnjs.cloudflare.com/ajax/libs/foo.js",
+            &config
+        ));
     }
 
     #[test]
     fn test_dont_skip_regular_url() {
         let config = default_config();
         assert!(!should_skip_cdn("https://example.com/photo.jpg", &config));
-        assert!(!should_skip_cdn("https://mysite.com/images/banner.png", &config));
+        assert!(!should_skip_cdn(
+            "https://mysite.com/images/banner.png",
+            &config
+        ));
     }
 
     #[test]
@@ -506,7 +527,10 @@ mod tests {
             images: Default::default(),
             videos: Default::default(),
         };
-        assert!(should_skip_cdn("https://mycdn.example.com/assets/lib.js", &config));
+        assert!(should_skip_cdn(
+            "https://mycdn.example.com/assets/lib.js",
+            &config
+        ));
     }
 
     #[test]
@@ -519,15 +543,24 @@ mod tests {
             videos: Default::default(),
         };
         // Normally this would be skipped, but allow_hosts overrides.
-        assert!(!should_skip_cdn("https://cdn.jsdelivr.net/my-image.jpg", &config));
+        assert!(!should_skip_cdn(
+            "https://cdn.jsdelivr.net/my-image.jpg",
+            &config
+        ));
     }
 
     // --- extract_host tests ---
 
     #[test]
     fn test_extract_host_basic() {
-        assert_eq!(extract_host("https://example.com/path"), Some("example.com"));
-        assert_eq!(extract_host("http://foo.bar.com:8080/path"), Some("foo.bar.com"));
+        assert_eq!(
+            extract_host("https://example.com/path"),
+            Some("example.com")
+        );
+        assert_eq!(
+            extract_host("http://foo.bar.com:8080/path"),
+            Some("foo.bar.com")
+        );
         assert_eq!(extract_host("https://example.com"), Some("example.com"));
     }
 
@@ -549,8 +582,14 @@ mod tests {
     fn test_rewrite_urls_multiple() {
         let html = r#"<img src="https://a.com/1.jpg"><img src="https://b.com/2.png">"#;
         let mut map = HashMap::new();
-        map.insert("https://a.com/1.jpg".to_string(), "/assets/1-aaa.jpg".to_string());
-        map.insert("https://b.com/2.png".to_string(), "/assets/2-bbb.png".to_string());
+        map.insert(
+            "https://a.com/1.jpg".to_string(),
+            "/assets/1-aaa.jpg".to_string(),
+        );
+        map.insert(
+            "https://b.com/2.png".to_string(),
+            "/assets/2-bbb.png".to_string(),
+        );
         let result = rewrite_urls(html, &map);
         assert!(result.contains("/assets/1-aaa.jpg"));
         assert!(result.contains("/assets/2-bbb.png"));
@@ -572,7 +611,10 @@ mod tests {
     fn test_rewrite_same_url_multiple_occurrences() {
         let html = r#"<img src="https://example.com/x.jpg"><img src="https://example.com/x.jpg">"#;
         let mut map = HashMap::new();
-        map.insert("https://example.com/x.jpg".to_string(), "/assets/x-abc.jpg".to_string());
+        map.insert(
+            "https://example.com/x.jpg".to_string(),
+            "/assets/x-abc.jpg".to_string(),
+        );
         let result = rewrite_urls(html, &map);
         assert_eq!(result.matches("/assets/x-abc.jpg").count(), 2);
     }

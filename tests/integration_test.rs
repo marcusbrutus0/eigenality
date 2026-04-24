@@ -46,9 +46,18 @@ async fn test_full_build_example_site() {
 
     // Verify dist/ structure.
     assert!(root.join("dist").is_dir(), "dist/ should exist");
-    assert!(root.join("dist/index.html").exists(), "index.html should exist");
-    assert!(root.join("dist/about.html").exists(), "about.html should exist");
-    assert!(root.join("dist/sitemap.xml").exists(), "sitemap.xml should exist");
+    assert!(
+        root.join("dist/index.html").exists(),
+        "index.html should exist"
+    );
+    assert!(
+        root.join("dist/about.html").exists(),
+        "about.html should exist"
+    );
+    assert!(
+        root.join("dist/sitemap.xml").exists(),
+        "sitemap.xml should exist"
+    );
 
     // Verify static assets copied.
     assert!(
@@ -68,7 +77,10 @@ async fn test_full_build_example_site() {
 
     // Verify full pages contain DOCTYPE but fragments don't.
     let full_html = fs::read_to_string(root.join("dist/index.html")).unwrap();
-    assert!(full_html.contains("<!DOCTYPE html>"), "Full page should have DOCTYPE");
+    assert!(
+        full_html.contains("<!DOCTYPE html>"),
+        "Full page should have DOCTYPE"
+    );
     assert!(
         !full_html.contains("<!--FRAG:"),
         "Full page should NOT contain fragment markers"
@@ -102,7 +114,10 @@ async fn test_dynamic_pages_generate_one_per_item() {
     let tmp = TempDir::new().unwrap();
     let root = tmp.path();
 
-    write(root, "site.toml", r#"
+    write(
+        root,
+        "site.toml",
+        r#"
 [site]
 name = "Dynamic Test"
 base_url = "https://test.com"
@@ -110,12 +125,19 @@ base_url = "https://test.com"
 [build]
 fragments = true
 minify = false
-"#);
+"#,
+    );
 
-    write(root, "templates/_base.html",
-          "<!DOCTYPE html><html><body>{% block content %}{% endblock %}</body></html>");
+    write(
+        root,
+        "templates/_base.html",
+        "<!DOCTYPE html><html><body>{% block content %}{% endblock %}</body></html>",
+    );
 
-    write(root, "templates/posts/[post].html", r#"---
+    write(
+        root,
+        "templates/posts/[post].html",
+        r#"---
 collection:
   file: "posts.json"
 slug_field: slug
@@ -125,13 +147,18 @@ item_as: post
 {% block content %}
 <h1>{{ post.title }}</h1>
 <p>By {{ post.author }}</p>
-{% endblock %}"#);
+{% endblock %}"#,
+    );
 
-    write(root, "_data/posts.json", r#"[
+    write(
+        root,
+        "_data/posts.json",
+        r#"[
         {"slug": "hello-world", "title": "Hello World", "author": "Alice"},
         {"slug": "second-post", "title": "Second Post", "author": "Bob"},
         {"slug": "third-post", "title": "Third Post", "author": "Carol"}
-    ]"#);
+    ]"#,
+    );
 
     eigen::build::build(root, true, false, false).await.unwrap();
 
@@ -161,7 +188,10 @@ async fn test_dynamic_page_empty_collection_no_error() {
     let tmp = TempDir::new().unwrap();
     let root = tmp.path();
 
-    write(root, "site.toml", r#"
+    write(
+        root,
+        "site.toml",
+        r#"
 [site]
 name = "Empty Coll"
 base_url = "https://test.com"
@@ -169,17 +199,25 @@ base_url = "https://test.com"
 [build]
 fragments = false
 minify = false
-"#);
+"#,
+    );
 
-    write(root, "templates/_base.html",
-          "<html>{% block content %}{% endblock %}</html>");
+    write(
+        root,
+        "templates/_base.html",
+        "<html>{% block content %}{% endblock %}</html>",
+    );
 
-    write(root, "templates/[item].html", r#"---
+    write(
+        root,
+        "templates/[item].html",
+        r#"---
 collection:
   file: "items.json"
 ---
 {% extends "_base.html" %}
-{% block content %}<p>{{ item.name }}</p>{% endblock %}"#);
+{% block content %}<p>{{ item.name }}</p>{% endblock %}"#,
+    );
 
     write(root, "_data/items.json", "[]");
 
@@ -196,7 +234,10 @@ async fn test_dynamic_page_with_nested_data_queries() {
     let tmp = TempDir::new().unwrap();
     let root = tmp.path();
 
-    write(root, "site.toml", r#"
+    write(
+        root,
+        "site.toml",
+        r#"
 [site]
 name = "Nested Data"
 base_url = "https://test.com"
@@ -204,12 +245,19 @@ base_url = "https://test.com"
 [build]
 fragments = false
 minify = false
-"#);
+"#,
+    );
 
-    write(root, "templates/_base.html",
-          "<html>{% block content %}{% endblock %}</html>");
+    write(
+        root,
+        "templates/_base.html",
+        "<html>{% block content %}{% endblock %}</html>",
+    );
 
-    write(root, "templates/[post].html", r#"---
+    write(
+        root,
+        "templates/[post].html",
+        r#"---
 collection:
   file: "posts.json"
 slug_field: slug
@@ -224,17 +272,26 @@ data:
 {% block content %}
 <h1>{{ post.title }}</h1>
 {% for a in author %}<p>Author: {{ a.name }}</p>{% endfor %}
-{% endblock %}"#);
+{% endblock %}"#,
+    );
 
-    write(root, "_data/posts.json", r#"[
+    write(
+        root,
+        "_data/posts.json",
+        r#"[
         {"slug": "post-1", "title": "Post One", "author_id": "1"},
         {"slug": "post-2", "title": "Post Two", "author_id": "2"}
-    ]"#);
+    ]"#,
+    );
 
-    write(root, "_data/authors.json", r#"[
+    write(
+        root,
+        "_data/authors.json",
+        r#"[
         {"id": "1", "name": "Alice"},
         {"id": "2", "name": "Bob"}
-    ]"#);
+    ]"#,
+    );
 
     eigen::build::build(root, true, false, false).await.unwrap();
 
@@ -258,7 +315,10 @@ async fn test_fragment_markers_stripped_from_full_page() {
     let tmp = TempDir::new().unwrap();
     let root = tmp.path();
 
-    write(root, "site.toml", r#"
+    write(
+        root,
+        "site.toml",
+        r#"
 [site]
 name = "Frag Test"
 base_url = "https://test.com"
@@ -267,19 +327,30 @@ base_url = "https://test.com"
 fragments = true
 content_block = "content"
 minify = false
-"#);
+"#,
+    );
 
-    write(root, "templates/_base.html",
-          "<!DOCTYPE html><html><body>{% block content %}{% endblock %}</body></html>");
+    write(
+        root,
+        "templates/_base.html",
+        "<!DOCTYPE html><html><body>{% block content %}{% endblock %}</body></html>",
+    );
 
-    write(root, "templates/index.html", r#"{% extends "_base.html" %}
-{% block content %}<h1>Home</h1><p>Welcome</p>{% endblock %}"#);
+    write(
+        root,
+        "templates/index.html",
+        r#"{% extends "_base.html" %}
+{% block content %}<h1>Home</h1><p>Welcome</p>{% endblock %}"#,
+    );
 
     eigen::build::build(root, true, false, false).await.unwrap();
 
     // Full page: no markers.
     let full = fs::read_to_string(root.join("dist/index.html")).unwrap();
-    assert!(!full.contains("<!--FRAG:"), "Full page must not contain markers");
+    assert!(
+        !full.contains("<!--FRAG:"),
+        "Full page must not contain markers"
+    );
     assert!(full.contains("<h1>Home</h1>"));
     assert!(full.contains("<!DOCTYPE html>"));
 
@@ -288,7 +359,10 @@ minify = false
     assert!(frag.contains("<h1>Home</h1>"));
     assert!(frag.contains("<p>Welcome</p>"));
     assert!(!frag.contains("<!DOCTYPE html>"));
-    assert!(!frag.contains("<!--FRAG:"), "Fragment must not contain markers");
+    assert!(
+        !frag.contains("<!--FRAG:"),
+        "Fragment must not contain markers"
+    );
 }
 
 #[tokio::test]
@@ -296,7 +370,10 @@ async fn test_multiple_fragment_blocks() {
     let tmp = TempDir::new().unwrap();
     let root = tmp.path();
 
-    write(root, "site.toml", r#"
+    write(
+        root,
+        "site.toml",
+        r#"
 [site]
 name = "Multi Frag"
 base_url = "https://test.com"
@@ -304,24 +381,33 @@ base_url = "https://test.com"
 [build]
 fragments = true
 minify = false
-"#);
+"#,
+    );
 
-    write(root, "templates/_base.html", r#"<!DOCTYPE html>
+    write(
+        root,
+        "templates/_base.html",
+        r#"<!DOCTYPE html>
 <html>
 <body>
 <div id="sidebar">{% block sidebar %}Default sidebar{% endblock %}</div>
 <main>{% block content %}{% endblock %}</main>
 </body>
-</html>"#);
+</html>"#,
+    );
 
-    write(root, "templates/about.html", r#"---
+    write(
+        root,
+        "templates/about.html",
+        r#"---
 fragment_blocks:
   - content
   - sidebar
 ---
 {% extends "_base.html" %}
 {% block sidebar %}<aside>About sidebar</aside>{% endblock %}
-{% block content %}<h1>About</h1>{% endblock %}"#);
+{% block content %}<h1>About</h1>{% endblock %}"#,
+    );
 
     eigen::build::build(root, true, false, false).await.unwrap();
 
@@ -341,7 +427,10 @@ async fn test_fragments_disabled() {
     let tmp = TempDir::new().unwrap();
     let root = tmp.path();
 
-    write(root, "site.toml", r#"
+    write(
+        root,
+        "site.toml",
+        r#"
 [site]
 name = "No Frags"
 base_url = "https://test.com"
@@ -349,21 +438,35 @@ base_url = "https://test.com"
 [build]
 fragments = false
 minify = false
-"#);
+"#,
+    );
 
-    write(root, "templates/_base.html",
-          "<html>{% block content %}{% endblock %}</html>");
+    write(
+        root,
+        "templates/_base.html",
+        "<html>{% block content %}{% endblock %}</html>",
+    );
 
-    write(root, "templates/index.html", r#"{% extends "_base.html" %}
-{% block content %}<h1>Home</h1>{% endblock %}"#);
+    write(
+        root,
+        "templates/index.html",
+        r#"{% extends "_base.html" %}
+{% block content %}<h1>Home</h1>{% endblock %}"#,
+    );
 
     eigen::build::build(root, true, false, false).await.unwrap();
 
     assert!(root.join("dist/index.html").exists());
-    assert!(!root.join("dist/_fragments").exists(), "_fragments dir should not exist");
+    assert!(
+        !root.join("dist/_fragments").exists(),
+        "_fragments dir should not exist"
+    );
 
     let html = fs::read_to_string(root.join("dist/index.html")).unwrap();
-    assert!(!html.contains("<!--FRAG:"), "No markers when fragments disabled");
+    assert!(
+        !html.contains("<!--FRAG:"),
+        "No markers when fragments disabled"
+    );
 }
 
 // ============================================================================
@@ -375,7 +478,10 @@ async fn test_link_to_generates_htmx_attributes() {
     let tmp = TempDir::new().unwrap();
     let root = tmp.path();
 
-    write(root, "site.toml", r#"
+    write(
+        root,
+        "site.toml",
+        r#"
 [site]
 name = "HTMX Test"
 base_url = "https://test.com"
@@ -385,16 +491,24 @@ fragments = true
 fragment_dir = "_fragments"
 content_block = "content"
 minify = false
-"#);
+"#,
+    );
 
-    write(root, "templates/_base.html",
-          "<html><body>{% block content %}{% endblock %}</body></html>");
+    write(
+        root,
+        "templates/_base.html",
+        "<html><body>{% block content %}{% endblock %}</body></html>",
+    );
 
-    write(root, "templates/index.html", r##"{% extends "_base.html" %}
+    write(
+        root,
+        "templates/index.html",
+        r##"{% extends "_base.html" %}
 {% block content %}
 <a {{ link_to("/about.html") }}>About</a>
 <a {{ link_to("/posts.html", "#main") }}>Posts</a>
-{% endblock %}"##);
+{% endblock %}"##,
+    );
 
     eigen::build::build(root, true, false, false).await.unwrap();
 
@@ -406,8 +520,14 @@ minify = false
         html.contains(r#"hx-get="/_fragments/about.html""#),
         "Should have hx-get pointing to fragment"
     );
-    assert!(html.contains(r##"hx-target="#content""##), "Default target should be #content");
-    assert!(html.contains(r#"hx-push-url="/about.html""#), "Should have hx-push-url");
+    assert!(
+        html.contains(r##"hx-target="#content""##),
+        "Default target should be #content"
+    );
+    assert!(
+        html.contains(r#"hx-push-url="/about.html""#),
+        "Should have hx-push-url"
+    );
 
     // Custom target link_to.
     assert!(
@@ -421,7 +541,10 @@ async fn test_link_to_without_fragments_is_plain_href() {
     let tmp = TempDir::new().unwrap();
     let root = tmp.path();
 
-    write(root, "site.toml", r#"
+    write(
+        root,
+        "site.toml",
+        r#"
 [site]
 name = "Plain HREF"
 base_url = "https://test.com"
@@ -429,15 +552,23 @@ base_url = "https://test.com"
 [build]
 fragments = false
 minify = false
-"#);
+"#,
+    );
 
-    write(root, "templates/index.html", r#"<a {{ link_to("/about.html") }}>About</a>"#);
+    write(
+        root,
+        "templates/index.html",
+        r#"<a {{ link_to("/about.html") }}>About</a>"#,
+    );
 
     eigen::build::build(root, true, false, false).await.unwrap();
 
     let html = fs::read_to_string(root.join("dist/index.html")).unwrap();
     assert!(html.contains(r#"href="/about.html""#));
-    assert!(!html.contains("hx-get"), "Should NOT have hx-get when fragments disabled");
+    assert!(
+        !html.contains("hx-get"),
+        "Should NOT have hx-get when fragments disabled"
+    );
 }
 
 // ============================================================================
@@ -449,7 +580,10 @@ async fn test_markdown_filter_in_output() {
     let tmp = TempDir::new().unwrap();
     let root = tmp.path();
 
-    write(root, "site.toml", r#"
+    write(
+        root,
+        "site.toml",
+        r#"
 [site]
 name = "Markdown Test"
 base_url = "https://test.com"
@@ -457,12 +591,20 @@ base_url = "https://test.com"
 [build]
 fragments = false
 minify = false
-"#);
+"#,
+    );
 
     // Use a data file so we can test the markdown filter on multi-line content.
-    write(root, "_data/content.yaml", "text: \"# Hello\\n\\nWorld **bold**\"");
-    write(root, "templates/index.html",
-          "---\ndata:\n  content:\n    file: \"content.yaml\"\n---\n{{ content.text | markdown }}");
+    write(
+        root,
+        "_data/content.yaml",
+        "text: \"# Hello\\n\\nWorld **bold**\"",
+    );
+    write(
+        root,
+        "templates/index.html",
+        "---\ndata:\n  content:\n    file: \"content.yaml\"\n---\n{{ content.text | markdown }}",
+    );
 
     eigen::build::build(root, true, false, false).await.unwrap();
 
@@ -476,7 +618,10 @@ async fn test_date_filter_in_output() {
     let tmp = TempDir::new().unwrap();
     let root = tmp.path();
 
-    write(root, "site.toml", r#"
+    write(
+        root,
+        "site.toml",
+        r#"
 [site]
 name = "Date Test"
 base_url = "https://test.com"
@@ -484,10 +629,14 @@ base_url = "https://test.com"
 [build]
 fragments = false
 minify = false
-"#);
+"#,
+    );
 
-    write(root, "templates/index.html",
-          r#"{{ "2024-03-15" | date("%B %d, %Y") }}"#);
+    write(
+        root,
+        "templates/index.html",
+        r#"{{ "2024-03-15" | date("%B %d, %Y") }}"#,
+    );
 
     eigen::build::build(root, true, false, false).await.unwrap();
 
@@ -500,7 +649,10 @@ async fn test_slugify_filter_in_output() {
     let tmp = TempDir::new().unwrap();
     let root = tmp.path();
 
-    write(root, "site.toml", r#"
+    write(
+        root,
+        "site.toml",
+        r#"
 [site]
 name = "Slugify Test"
 base_url = "https://test.com"
@@ -508,10 +660,14 @@ base_url = "https://test.com"
 [build]
 fragments = false
 minify = false
-"#);
+"#,
+    );
 
-    write(root, "templates/index.html",
-          r#"{{ "Hello World! #1" | slugify }}"#);
+    write(
+        root,
+        "templates/index.html",
+        r#"{{ "Hello World! #1" | slugify }}"#,
+    );
 
     eigen::build::build(root, true, false, false).await.unwrap();
 
@@ -524,7 +680,10 @@ async fn test_absolute_filter_in_output() {
     let tmp = TempDir::new().unwrap();
     let root = tmp.path();
 
-    write(root, "site.toml", r#"
+    write(
+        root,
+        "site.toml",
+        r#"
 [site]
 name = "Absolute Test"
 base_url = "https://example.com"
@@ -532,10 +691,14 @@ base_url = "https://example.com"
 [build]
 fragments = false
 minify = false
-"#);
+"#,
+    );
 
-    write(root, "templates/index.html",
-          r#"{{ "/about.html" | absolute }}"#);
+    write(
+        root,
+        "templates/index.html",
+        r#"{{ "/about.html" | absolute }}"#,
+    );
 
     eigen::build::build(root, true, false, false).await.unwrap();
 
@@ -548,7 +711,10 @@ async fn test_json_filter_in_output() {
     let tmp = TempDir::new().unwrap();
     let root = tmp.path();
 
-    write(root, "site.toml", r#"
+    write(
+        root,
+        "site.toml",
+        r#"
 [site]
 name = "JSON Test"
 base_url = "https://test.com"
@@ -556,14 +722,19 @@ base_url = "https://test.com"
 [build]
 fragments = false
 minify = false
-"#);
+"#,
+    );
 
-    write(root, "templates/index.html", r#"---
+    write(
+        root,
+        "templates/index.html",
+        r#"---
 data:
   info:
     file: "info.json"
 ---
-<script>var data = {{ info | json }};</script>"#);
+<script>var data = {{ info | json }};</script>"#,
+    );
 
     write(root, "_data/info.json", r#"{"key": "value", "num": 42}"#);
 
@@ -589,7 +760,10 @@ async fn test_current_year_function_in_output() {
     let tmp = TempDir::new().unwrap();
     let root = tmp.path();
 
-    write(root, "site.toml", r#"
+    write(
+        root,
+        "site.toml",
+        r#"
 [site]
 name = "Year Test"
 base_url = "https://test.com"
@@ -597,10 +771,14 @@ base_url = "https://test.com"
 [build]
 fragments = false
 minify = false
-"#);
+"#,
+    );
 
-    write(root, "templates/index.html",
-          r#"<footer>&copy; {{ current_year() }}</footer>"#);
+    write(
+        root,
+        "templates/index.html",
+        r#"<footer>&copy; {{ current_year() }}</footer>"#,
+    );
 
     eigen::build::build(root, true, false, false).await.unwrap();
 
@@ -614,7 +792,10 @@ async fn test_asset_function_in_output() {
     let tmp = TempDir::new().unwrap();
     let root = tmp.path();
 
-    write(root, "site.toml", r#"
+    write(
+        root,
+        "site.toml",
+        r#"
 [site]
 name = "Asset Test"
 base_url = "https://test.com"
@@ -622,10 +803,14 @@ base_url = "https://test.com"
 [build]
 fragments = false
 minify = false
-"#);
+"#,
+    );
 
-    write(root, "templates/index.html",
-          r#"<link rel="stylesheet" href="{{ asset('css/style.css') }}">"#);
+    write(
+        root,
+        "templates/index.html",
+        r#"<link rel="stylesheet" href="{{ asset('css/style.css') }}">"#,
+    );
 
     eigen::build::build(root, true, false, false).await.unwrap();
 
@@ -638,7 +823,10 @@ async fn test_site_global_in_output() {
     let tmp = TempDir::new().unwrap();
     let root = tmp.path();
 
-    write(root, "site.toml", r#"
+    write(
+        root,
+        "site.toml",
+        r#"
 [site]
 name = "My Awesome Site"
 base_url = "https://awesome.com"
@@ -646,10 +834,14 @@ base_url = "https://awesome.com"
 [build]
 fragments = false
 minify = false
-"#);
+"#,
+    );
 
-    write(root, "templates/index.html",
-          r#"<title>{{ site.name }}</title><base href="{{ site.base_url }}">"#);
+    write(
+        root,
+        "templates/index.html",
+        r#"<title>{{ site.name }}</title><base href="{{ site.base_url }}">"#,
+    );
 
     eigen::build::build(root, true, false, false).await.unwrap();
 
@@ -667,7 +859,10 @@ async fn test_global_data_yaml_in_template() {
     let tmp = TempDir::new().unwrap();
     let root = tmp.path();
 
-    write(root, "site.toml", r#"
+    write(
+        root,
+        "site.toml",
+        r#"
 [site]
 name = "Data Test"
 base_url = "https://test.com"
@@ -675,23 +870,32 @@ base_url = "https://test.com"
 [build]
 fragments = false
 minify = false
-"#);
+"#,
+    );
 
-    write(root, "templates/index.html", r#"---
+    write(
+        root,
+        "templates/index.html",
+        r#"---
 data:
   nav:
     file: "nav.yaml"
 ---
-<nav>{% for item in nav %}<a href="{{ item.url }}">{{ item.label }}</a> {% endfor %}</nav>"#);
+<nav>{% for item in nav %}<a href="{{ item.url }}">{{ item.label }}</a> {% endfor %}</nav>"#,
+    );
 
-    write(root, "_data/nav.yaml", r#"
+    write(
+        root,
+        "_data/nav.yaml",
+        r#"
 - label: Home
   url: /
 - label: About
   url: /about
 - label: Blog
   url: /blog
-"#);
+"#,
+    );
 
     eigen::build::build(root, true, false, false).await.unwrap();
 
@@ -706,7 +910,10 @@ async fn test_global_data_json_in_template() {
     let tmp = TempDir::new().unwrap();
     let root = tmp.path();
 
-    write(root, "site.toml", r#"
+    write(
+        root,
+        "site.toml",
+        r#"
 [site]
 name = "JSON Data"
 base_url = "https://test.com"
@@ -714,16 +921,25 @@ base_url = "https://test.com"
 [build]
 fragments = false
 minify = false
-"#);
+"#,
+    );
 
-    write(root, "templates/index.html", r#"---
+    write(
+        root,
+        "templates/index.html",
+        r#"---
 data:
   config:
     file: "config.json"
 ---
-<p>Theme: {{ config.theme }}</p><p>Debug: {{ config.debug }}</p>"#);
+<p>Theme: {{ config.theme }}</p><p>Debug: {{ config.debug }}</p>"#,
+    );
 
-    write(root, "_data/config.json", r#"{"theme": "dark", "debug": false}"#);
+    write(
+        root,
+        "_data/config.json",
+        r#"{"theme": "dark", "debug": false}"#,
+    );
 
     eigen::build::build(root, true, false, false).await.unwrap();
 
@@ -741,7 +957,10 @@ async fn test_data_sort_filter_limit_in_build() {
     let tmp = TempDir::new().unwrap();
     let root = tmp.path();
 
-    write(root, "site.toml", r#"
+    write(
+        root,
+        "site.toml",
+        r#"
 [site]
 name = "Transform Test"
 base_url = "https://test.com"
@@ -749,9 +968,13 @@ base_url = "https://test.com"
 [build]
 fragments = false
 minify = false
-"#);
+"#,
+    );
 
-    write(root, "templates/index.html", r#"---
+    write(
+        root,
+        "templates/index.html",
+        r#"---
 data:
   posts:
     file: "posts.json"
@@ -760,15 +983,20 @@ data:
     sort: "-id"
     limit: 2
 ---
-{% for p in posts %}{{ p.title }} {% endfor %}"#);
+{% for p in posts %}{{ p.title }} {% endfor %}"#,
+    );
 
-    write(root, "_data/posts.json", r#"[
+    write(
+        root,
+        "_data/posts.json",
+        r#"[
         {"id": 1, "title": "First", "status": "published"},
         {"id": 2, "title": "Second", "status": "draft"},
         {"id": 3, "title": "Third", "status": "published"},
         {"id": 4, "title": "Fourth", "status": "published"},
         {"id": 5, "title": "Fifth", "status": "published"}
-    ]"#);
+    ]"#,
+    );
 
     eigen::build::build(root, true, false, false).await.unwrap();
 
@@ -777,7 +1005,10 @@ data:
     assert!(html.contains("Fifth"));
     assert!(html.contains("Fourth"));
     assert!(!html.contains("Third"), "Third should be excluded by limit");
-    assert!(!html.contains("Second"), "Second should be filtered out (draft)");
+    assert!(
+        !html.contains("Second"),
+        "Second should be filtered out (draft)"
+    );
     assert!(!html.contains("First"), "First should be excluded by limit");
 }
 
@@ -790,7 +1021,10 @@ async fn test_page_metadata_available() {
     let tmp = TempDir::new().unwrap();
     let root = tmp.path();
 
-    write(root, "site.toml", r#"
+    write(
+        root,
+        "site.toml",
+        r#"
 [site]
 name = "Meta Test"
 base_url = "https://meta.com"
@@ -798,17 +1032,25 @@ base_url = "https://meta.com"
 [build]
 fragments = false
 minify = false
-"#);
+"#,
+    );
 
-    write(root, "templates/_base.html",
-          "<html>{% block content %}{% endblock %}</html>");
+    write(
+        root,
+        "templates/_base.html",
+        "<html>{% block content %}{% endblock %}</html>",
+    );
 
-    write(root, "templates/docs/guide.html", r#"{% extends "_base.html" %}
+    write(
+        root,
+        "templates/docs/guide.html",
+        r#"{% extends "_base.html" %}
 {% block content %}
 URL:{{ page.current_url }}
 PATH:{{ page.current_path }}
 BASE:{{ page.base_url }}
-{% endblock %}"#);
+{% endblock %}"#,
+    );
 
     eigen::build::build(root, true, false, false).await.unwrap();
 
@@ -827,7 +1069,10 @@ async fn test_sitemap_priorities() {
     let tmp = TempDir::new().unwrap();
     let root = tmp.path();
 
-    write(root, "site.toml", r#"
+    write(
+        root,
+        "site.toml",
+        r#"
 [site]
 name = "Sitemap Prio"
 base_url = "https://test.com"
@@ -835,25 +1080,45 @@ base_url = "https://test.com"
 [build]
 fragments = false
 minify = false
-"#);
+"#,
+    );
 
-    write(root, "templates/_base.html",
-          "<html>{% block content %}{% endblock %}</html>");
+    write(
+        root,
+        "templates/_base.html",
+        "<html>{% block content %}{% endblock %}</html>",
+    );
 
-    write(root, "templates/index.html", r#"{% extends "_base.html" %}
-{% block content %}Home{% endblock %}"#);
+    write(
+        root,
+        "templates/index.html",
+        r#"{% extends "_base.html" %}
+{% block content %}Home{% endblock %}"#,
+    );
 
-    write(root, "templates/about.html", r#"{% extends "_base.html" %}
-{% block content %}About{% endblock %}"#);
+    write(
+        root,
+        "templates/about.html",
+        r#"{% extends "_base.html" %}
+{% block content %}About{% endblock %}"#,
+    );
 
-    write(root, "templates/[item].html", r#"---
+    write(
+        root,
+        "templates/[item].html",
+        r#"---
 collection:
   file: "items.json"
 ---
 {% extends "_base.html" %}
-{% block content %}{{ item.title }}{% endblock %}"#);
+{% block content %}{{ item.title }}{% endblock %}"#,
+    );
 
-    write(root, "_data/items.json", r#"[{"slug": "test-item", "title": "Test"}]"#);
+    write(
+        root,
+        "_data/items.json",
+        r#"[{"slug": "test-item", "title": "Test"}]"#,
+    );
 
     eigen::build::build(root, true, false, false).await.unwrap();
 
@@ -867,11 +1132,20 @@ collection:
     let urls: Vec<&str> = sitemap.split("<url>").skip(1).collect();
     for url_block in &urls {
         if url_block.contains("/index.html") {
-            assert!(url_block.contains("<priority>1.0</priority>"), "Index should be 1.0");
+            assert!(
+                url_block.contains("<priority>1.0</priority>"),
+                "Index should be 1.0"
+            );
         } else if url_block.contains("/about.html") {
-            assert!(url_block.contains("<priority>0.8</priority>"), "Static non-index should be 0.8");
+            assert!(
+                url_block.contains("<priority>0.8</priority>"),
+                "Static non-index should be 0.8"
+            );
         } else if url_block.contains("/test-item.html") {
-            assert!(url_block.contains("<priority>0.6</priority>"), "Dynamic should be 0.6");
+            assert!(
+                url_block.contains("<priority>0.6</priority>"),
+                "Dynamic should be 0.6"
+            );
         }
     }
 }
@@ -885,7 +1159,10 @@ async fn test_template_includes_partial() {
     let tmp = TempDir::new().unwrap();
     let root = tmp.path();
 
-    write(root, "site.toml", r#"
+    write(
+        root,
+        "site.toml",
+        r#"
 [site]
 name = "Include Test"
 base_url = "https://test.com"
@@ -893,13 +1170,20 @@ base_url = "https://test.com"
 [build]
 fragments = false
 minify = false
-"#);
+"#,
+    );
 
-    write(root, "templates/_partials/footer.html",
-          "<footer>© {{ site.name }}</footer>");
+    write(
+        root,
+        "templates/_partials/footer.html",
+        "<footer>© {{ site.name }}</footer>",
+    );
 
-    write(root, "templates/index.html",
-          "<main>Hello</main>{% include \"_partials/footer.html\" %}");
+    write(
+        root,
+        "templates/index.html",
+        "<main>Hello</main>{% include \"_partials/footer.html\" %}",
+    );
 
     eigen::build::build(root, true, false, false).await.unwrap();
 
@@ -913,7 +1197,10 @@ async fn test_template_extends_base_layout() {
     let tmp = TempDir::new().unwrap();
     let root = tmp.path();
 
-    write(root, "site.toml", r#"
+    write(
+        root,
+        "site.toml",
+        r#"
 [site]
 name = "Extends Test"
 base_url = "https://test.com"
@@ -921,17 +1208,26 @@ base_url = "https://test.com"
 [build]
 fragments = false
 minify = false
-"#);
+"#,
+    );
 
-    write(root, "templates/_base.html", r#"<!DOCTYPE html>
+    write(
+        root,
+        "templates/_base.html",
+        r#"<!DOCTYPE html>
 <html>
 <head><title>{% block title %}{{ site.name }}{% endblock %}</title></head>
 <body>{% block content %}{% endblock %}</body>
-</html>"#);
+</html>"#,
+    );
 
-    write(root, "templates/index.html", r#"{% extends "_base.html" %}
+    write(
+        root,
+        "templates/index.html",
+        r#"{% extends "_base.html" %}
 {% block title %}Home — {{ site.name }}{% endblock %}
-{% block content %}<h1>Welcome</h1>{% endblock %}"#);
+{% block content %}<h1>Welcome</h1>{% endblock %}"#,
+    );
 
     eigen::build::build(root, true, false, false).await.unwrap();
 
@@ -946,7 +1242,10 @@ async fn test_missing_slug_field_item_skipped() {
     let tmp = TempDir::new().unwrap();
     let root = tmp.path();
 
-    write(root, "site.toml", r#"
+    write(
+        root,
+        "site.toml",
+        r#"
 [site]
 name = "Skip Missing Slug"
 base_url = "https://test.com"
@@ -954,24 +1253,36 @@ base_url = "https://test.com"
 [build]
 fragments = false
 minify = false
-"#);
+"#,
+    );
 
-    write(root, "templates/_base.html",
-          "<html>{% block content %}{% endblock %}</html>");
+    write(
+        root,
+        "templates/_base.html",
+        "<html>{% block content %}{% endblock %}</html>",
+    );
 
-    write(root, "templates/[item].html", r#"---
+    write(
+        root,
+        "templates/[item].html",
+        r#"---
 collection:
   file: "items.json"
 slug_field: slug
 ---
 {% extends "_base.html" %}
-{% block content %}{{ item.name }}{% endblock %}"#);
+{% block content %}{{ item.name }}{% endblock %}"#,
+    );
 
     // One item has slug, one doesn't.
-    write(root, "_data/items.json", r#"[
+    write(
+        root,
+        "_data/items.json",
+        r#"[
         {"slug": "good-item", "name": "Good"},
         {"name": "No Slug"}
-    ]"#);
+    ]"#,
+    );
 
     eigen::build::build(root, true, false, false).await.unwrap();
 
@@ -990,7 +1301,10 @@ async fn test_deeply_nested_static_pages() {
     let tmp = TempDir::new().unwrap();
     let root = tmp.path();
 
-    write(root, "site.toml", r#"
+    write(
+        root,
+        "site.toml",
+        r#"
 [site]
 name = "Nested"
 base_url = "https://test.com"
@@ -998,7 +1312,8 @@ base_url = "https://test.com"
 [build]
 fragments = false
 minify = false
-"#);
+"#,
+    );
 
     write(root, "templates/a/b/c/deep.html", "<p>Deep page</p>");
 
@@ -1014,7 +1329,10 @@ async fn test_static_and_dynamic_pages_coexist() {
     let tmp = TempDir::new().unwrap();
     let root = tmp.path();
 
-    write(root, "site.toml", r#"
+    write(
+        root,
+        "site.toml",
+        r#"
 [site]
 name = "Mixed"
 base_url = "https://test.com"
@@ -1022,32 +1340,56 @@ base_url = "https://test.com"
 [build]
 fragments = false
 minify = false
-"#);
+"#,
+    );
 
-    write(root, "templates/_base.html",
-          "<html>{% block content %}{% endblock %}</html>");
+    write(
+        root,
+        "templates/_base.html",
+        "<html>{% block content %}{% endblock %}</html>",
+    );
 
-    write(root, "templates/index.html", r#"{% extends "_base.html" %}
-{% block content %}Home{% endblock %}"#);
+    write(
+        root,
+        "templates/index.html",
+        r#"{% extends "_base.html" %}
+{% block content %}Home{% endblock %}"#,
+    );
 
-    write(root, "templates/about.html", r#"{% extends "_base.html" %}
-{% block content %}About{% endblock %}"#);
+    write(
+        root,
+        "templates/about.html",
+        r#"{% extends "_base.html" %}
+{% block content %}About{% endblock %}"#,
+    );
 
-    write(root, "templates/posts/index.html", r#"{% extends "_base.html" %}
-{% block content %}All Posts{% endblock %}"#);
+    write(
+        root,
+        "templates/posts/index.html",
+        r#"{% extends "_base.html" %}
+{% block content %}All Posts{% endblock %}"#,
+    );
 
-    write(root, "templates/posts/[post].html", r#"---
+    write(
+        root,
+        "templates/posts/[post].html",
+        r#"---
 collection:
   file: "posts.json"
 item_as: post
 ---
 {% extends "_base.html" %}
-{% block content %}{{ post.title }}{% endblock %}"#);
+{% block content %}{{ post.title }}{% endblock %}"#,
+    );
 
-    write(root, "_data/posts.json", r#"[
+    write(
+        root,
+        "_data/posts.json",
+        r#"[
         {"slug": "first", "title": "First Post"},
         {"slug": "second", "title": "Second Post"}
-    ]"#);
+    ]"#,
+    );
 
     eigen::build::build(root, true, false, false).await.unwrap();
 
@@ -1089,7 +1431,9 @@ async fn test_init_creates_buildable_project() {
     fs::write(project_path.join("site.toml"), site_toml).unwrap();
 
     // Build the scaffolded project.
-    eigen::build::build(&project_path, true, false, false).await.unwrap();
+    eigen::build::build(&project_path, true, false, false)
+        .await
+        .unwrap();
 
     // Verify output.
     assert!(project_path.join("dist/index.html").exists());
@@ -1148,7 +1492,10 @@ async fn test_live_reload_not_injected_in_build() {
     let tmp = TempDir::new().unwrap();
     let root = tmp.path();
 
-    write(root, "site.toml", r#"
+    write(
+        root,
+        "site.toml",
+        r#"
 [site]
 name = "No Reload"
 base_url = "https://test.com"
@@ -1156,10 +1503,14 @@ base_url = "https://test.com"
 [build]
 fragments = false
 minify = false
-"#);
+"#,
+    );
 
-    write(root, "templates/index.html",
-          "<html><body><h1>Hello</h1></body></html>");
+    write(
+        root,
+        "templates/index.html",
+        "<html><body><h1>Hello</h1></body></html>",
+    );
 
     eigen::build::build(root, true, false, false).await.unwrap();
 
@@ -1183,7 +1534,10 @@ async fn test_build_with_no_plugins() {
     let tmp = TempDir::new().unwrap();
     let root = tmp.path();
 
-    write(root, "site.toml", r#"
+    write(
+        root,
+        "site.toml",
+        r#"
 [site]
 name = "No Plugins"
 base_url = "https://test.com"
@@ -1191,7 +1545,8 @@ base_url = "https://test.com"
 [build]
 fragments = false
 minify = false
-"#);
+"#,
+    );
 
     write(root, "templates/index.html", "<h1>Hello</h1>");
 
@@ -1206,7 +1561,10 @@ async fn test_build_with_strapi_plugin_config() {
     let tmp = TempDir::new().unwrap();
     let root = tmp.path();
 
-    write(root, "site.toml", r#"
+    write(
+        root,
+        "site.toml",
+        r#"
 [site]
 name = "Strapi Plugin Test"
 base_url = "https://test.com"
@@ -1217,7 +1575,8 @@ minify = false
 
 [plugins.strapi]
 media_base_url = "http://localhost:1337"
-"#);
+"#,
+    );
 
     write(root, "templates/index.html", "<h1>Hello</h1>");
 
@@ -1233,7 +1592,10 @@ async fn test_strapi_plugin_transforms_data_in_build() {
     let tmp = TempDir::new().unwrap();
     let root = tmp.path();
 
-    write(root, "site.toml", r#"
+    write(
+        root,
+        "site.toml",
+        r#"
 [site]
 name = "Strapi Transform"
 base_url = "https://test.com"
@@ -1248,7 +1610,8 @@ url = "http://localhost:0"
 [plugins.strapi]
 sources = ["strapi"]
 media_base_url = "http://localhost:1337"
-"#);
+"#,
+    );
 
     // Use a local file that mimics Strapi's response structure.
     // The strapi plugin should flatten this when the file is read
@@ -1256,17 +1619,25 @@ media_base_url = "http://localhost:1337"
     // run on source-backed queries, not file queries.
     // So we test with a file query where the data is already flat
     // but verify the plugin doesn't break anything.
-    write(root, "_data/posts.json", r#"[
+    write(
+        root,
+        "_data/posts.json",
+        r#"[
         {"id": 1, "title": "Hello"},
         {"id": 2, "title": "World"}
-    ]"#);
+    ]"#,
+    );
 
-    write(root, "templates/index.html", r#"---
+    write(
+        root,
+        "templates/index.html",
+        r#"---
 data:
   posts:
     file: "posts.json"
 ---
-{% for p in posts %}{{ p.title }} {% endfor %}"#);
+{% for p in posts %}{{ p.title }} {% endfor %}"#,
+    );
 
     eigen::build::build(root, true, false, false).await.unwrap();
     let html = fs::read_to_string(root.join("dist/index.html")).unwrap();
@@ -1280,7 +1651,10 @@ async fn test_strapi_media_template_function() {
     let tmp = TempDir::new().unwrap();
     let root = tmp.path();
 
-    write(root, "site.toml", r#"
+    write(
+        root,
+        "site.toml",
+        r#"
 [site]
 name = "Strapi Media Fn"
 base_url = "https://test.com"
@@ -1291,10 +1665,14 @@ minify = false
 
 [plugins.strapi]
 media_base_url = "http://localhost:1337"
-"#);
+"#,
+    );
 
-    write(root, "templates/index.html",
-          r#"<img src="{{ strapi_media('/uploads/photo.jpg') }}">"#);
+    write(
+        root,
+        "templates/index.html",
+        r#"<img src="{{ strapi_media('/uploads/photo.jpg') }}">"#,
+    );
 
     eigen::build::build(root, true, false, false).await.unwrap();
     let html = fs::read_to_string(root.join("dist/index.html")).unwrap();
@@ -1306,7 +1684,10 @@ async fn test_strapi_media_function_absolute_url_passthrough() {
     let tmp = TempDir::new().unwrap();
     let root = tmp.path();
 
-    write(root, "site.toml", r#"
+    write(
+        root,
+        "site.toml",
+        r#"
 [site]
 name = "Strapi Media Abs"
 base_url = "https://test.com"
@@ -1317,10 +1698,14 @@ minify = false
 
 [plugins.strapi]
 media_base_url = "http://localhost:1337"
-"#);
+"#,
+    );
 
-    write(root, "templates/index.html",
-          r#"<img src="{{ strapi_media('https://cdn.example.com/photo.jpg') }}">"#);
+    write(
+        root,
+        "templates/index.html",
+        r#"<img src="{{ strapi_media('https://cdn.example.com/photo.jpg') }}">"#,
+    );
 
     eigen::build::build(root, true, false, false).await.unwrap();
     let html = fs::read_to_string(root.join("dist/index.html")).unwrap();
@@ -1333,7 +1718,10 @@ async fn test_unknown_plugin_in_config_does_not_break_build() {
     let tmp = TempDir::new().unwrap();
     let root = tmp.path();
 
-    write(root, "site.toml", r#"
+    write(
+        root,
+        "site.toml",
+        r#"
 [site]
 name = "Unknown Plugin"
 base_url = "https://test.com"
@@ -1344,7 +1732,8 @@ minify = false
 
 [plugins.nonexistent_plugin]
 some_option = true
-"#);
+"#,
+    );
 
     write(root, "templates/index.html", "<h1>Hello</h1>");
 
@@ -1359,7 +1748,10 @@ async fn test_multiple_plugins_in_config() {
     let tmp = TempDir::new().unwrap();
     let root = tmp.path();
 
-    write(root, "site.toml", r#"
+    write(
+        root,
+        "site.toml",
+        r#"
 [site]
 name = "Multi Plugin"
 base_url = "https://test.com"
@@ -1373,10 +1765,14 @@ media_base_url = "http://localhost:1337"
 
 [plugins.js]
 entries = []
-"#);
+"#,
+    );
 
-    write(root, "templates/index.html",
-          r#"<img src="{{ strapi_media('/uploads/test.jpg') }}">"#);
+    write(
+        root,
+        "templates/index.html",
+        r#"<img src="{{ strapi_media('/uploads/test.jpg') }}">"#,
+    );
 
     eigen::build::build(root, true, false, false).await.unwrap();
     let html = fs::read_to_string(root.join("dist/index.html")).unwrap();
@@ -1390,7 +1786,10 @@ async fn test_build_dynamic_pages_with_strapi_plugin() {
     let tmp = TempDir::new().unwrap();
     let root = tmp.path();
 
-    write(root, "site.toml", r#"
+    write(
+        root,
+        "site.toml",
+        r#"
 [site]
 name = "Dynamic + Plugin"
 base_url = "https://test.com"
@@ -1401,24 +1800,36 @@ minify = false
 
 [plugins.strapi]
 media_base_url = "http://localhost:1337"
-"#);
+"#,
+    );
 
-    write(root, "templates/_base.html",
-          "<html>{% block content %}{% endblock %}</html>");
+    write(
+        root,
+        "templates/_base.html",
+        "<html>{% block content %}{% endblock %}</html>",
+    );
 
-    write(root, "templates/[post].html", r#"---
+    write(
+        root,
+        "templates/[post].html",
+        r#"---
 collection:
   file: "posts.json"
 slug_field: slug
 item_as: post
 ---
 {% extends "_base.html" %}
-{% block content %}<h1>{{ post.title }}</h1>{% endblock %}"#);
+{% block content %}<h1>{{ post.title }}</h1>{% endblock %}"#,
+    );
 
-    write(root, "_data/posts.json", r#"[
+    write(
+        root,
+        "_data/posts.json",
+        r#"[
         {"slug": "hello", "title": "Hello"},
         {"slug": "world", "title": "World"}
-    ]"#);
+    ]"#,
+    );
 
     eigen::build::build(root, true, false, false).await.unwrap();
     assert!(root.join("dist/hello.html").exists());
@@ -1437,7 +1848,10 @@ fn test_config_with_plugins_section_parses() {
     let tmp = TempDir::new().unwrap();
     let root = tmp.path();
 
-    write(root, "site.toml", r#"
+    write(
+        root,
+        "site.toml",
+        r#"
 [site]
 name = "Config Test"
 base_url = "https://test.com"
@@ -1445,7 +1859,8 @@ base_url = "https://test.com"
 [plugins.strapi]
 sources = ["cms"]
 media_base_url = "http://localhost:1337"
-"#);
+"#,
+    );
 
     let config = eigen::config::load_config(root).unwrap();
     assert_eq!(config.plugins.len(), 1);
@@ -1457,11 +1872,15 @@ fn test_config_without_plugins_section_parses() {
     let tmp = TempDir::new().unwrap();
     let root = tmp.path();
 
-    write(root, "site.toml", r#"
+    write(
+        root,
+        "site.toml",
+        r#"
 [site]
 name = "No Plugins Config"
 base_url = "https://test.com"
-"#);
+"#,
+    );
 
     let config = eigen::config::load_config(root).unwrap();
     assert!(config.plugins.is_empty());
@@ -1476,7 +1895,10 @@ async fn test_build_with_minification_enabled() {
     let tmp = TempDir::new().unwrap();
     let root = tmp.path();
 
-    write(root, "site.toml", r#"
+    write(
+        root,
+        "site.toml",
+        r#"
 [site]
 name = "Minify Test"
 base_url = "https://test.com"
@@ -1484,9 +1906,13 @@ base_url = "https://test.com"
 [build]
 fragments = true
 minify = true
-"#);
+"#,
+    );
 
-    write(root, "templates/_base.html", r#"<!DOCTYPE html>
+    write(
+        root,
+        "templates/_base.html",
+        r#"<!DOCTYPE html>
 <html>
   <head>
     <title>{{ site.name }}</title>
@@ -1500,14 +1926,19 @@ minify = true
   <body>
     {% block content %}{% endblock %}
   </body>
-</html>"#);
+</html>"#,
+    );
 
-    write(root, "templates/index.html", r#"{% extends "_base.html" %}
+    write(
+        root,
+        "templates/index.html",
+        r#"{% extends "_base.html" %}
 {% block content %}
     <h1>  Hello,   World!  </h1>
     <!-- this comment should be stripped -->
     <p>Welcome to the site.</p>
-{% endblock %}"#);
+{% endblock %}"#,
+    );
 
     eigen::build::build(root, true, false, false).await.unwrap();
 
@@ -1540,7 +1971,10 @@ async fn test_build_minification_disabled() {
     let tmp = TempDir::new().unwrap();
     let root = tmp.path();
 
-    write(root, "site.toml", r#"
+    write(
+        root,
+        "site.toml",
+        r#"
 [site]
 name = "No Minify"
 base_url = "https://test.com"
@@ -1548,15 +1982,20 @@ base_url = "https://test.com"
 [build]
 fragments = false
 minify = false
-"#);
+"#,
+    );
 
-    write(root, "templates/index.html", r#"<!DOCTYPE html>
+    write(
+        root,
+        "templates/index.html",
+        r#"<!DOCTYPE html>
 <html>
   <body>
     <!-- keep this comment -->
     <h1>  Hello  </h1>
   </body>
-</html>"#);
+</html>"#,
+    );
 
     eigen::build::build(root, true, false, false).await.unwrap();
 
@@ -1575,7 +2014,10 @@ async fn test_minification_preserves_picture_srcset() {
     let tmp = TempDir::new().unwrap();
     let root = tmp.path();
 
-    write(root, "site.toml", r#"
+    write(
+        root,
+        "site.toml",
+        r#"
 [site]
 name = "Picture Minify"
 base_url = "https://test.com"
@@ -1586,13 +2028,18 @@ minify = true
 
 [assets.images]
 optimize = false
-"#);
+"#,
+    );
 
-    write(root, "templates/index.html", r#"<picture>
+    write(
+        root,
+        "templates/index.html",
+        r#"<picture>
   <source srcset="/img/hero-480w.avif 480w, /img/hero-768w.avif 768w" type="image/avif">
   <source srcset="/img/hero-480w.webp 480w, /img/hero-768w.webp 768w" type="image/webp">
   <img src="/img/hero.jpg" alt="Hero image" class="hero" loading="lazy">
-</picture>"#);
+</picture>"#,
+    );
 
     eigen::build::build(root, true, false, false).await.unwrap();
 
@@ -1617,7 +2064,10 @@ async fn test_not_found_writes_default_when_no_template() {
     let tmp = TempDir::new().unwrap();
     let root = tmp.path();
 
-    write(root, "site.toml", r#"
+    write(
+        root,
+        "site.toml",
+        r#"
 [site]
 name = "404 Default Test"
 base_url = "https://test.com"
@@ -1626,20 +2076,38 @@ base_url = "https://test.com"
 fragments = false
 minify = false
 not_found = true
-"#);
+"#,
+    );
 
     write(root, "templates/index.html", "<h1>Home</h1>");
 
-    eigen::build::build(root, false, false, false).await.unwrap();
+    eigen::build::build(root, false, false, false)
+        .await
+        .unwrap();
 
     let path_404 = root.join("dist/404.html");
-    assert!(path_404.exists(), "dist/404.html should be created by default");
+    assert!(
+        path_404.exists(),
+        "dist/404.html should be created by default"
+    );
 
     let html = fs::read_to_string(&path_404).unwrap();
-    assert!(html.contains("<!DOCTYPE html>"), "Default 404 should be a full HTML page");
-    assert!(html.contains("404"), "Default 404 should contain the number 404");
-    assert!(html.contains("Page Not Found"), "Default 404 should mention 'Page Not Found'");
-    assert!(html.contains(r#"href="/""#), "Default 404 should link back to home");
+    assert!(
+        html.contains("<!DOCTYPE html>"),
+        "Default 404 should be a full HTML page"
+    );
+    assert!(
+        html.contains("404"),
+        "Default 404 should contain the number 404"
+    );
+    assert!(
+        html.contains("Page Not Found"),
+        "Default 404 should mention 'Page Not Found'"
+    );
+    assert!(
+        html.contains(r#"href="/""#),
+        "Default 404 should link back to home"
+    );
 }
 
 /// When `not_found = false` (default), no `dist/404.html` should be created
@@ -1649,7 +2117,10 @@ async fn test_not_found_flag_disabled_suppresses_404_page() {
     let tmp = TempDir::new().unwrap();
     let root = tmp.path();
 
-    write(root, "site.toml", r#"
+    write(
+        root,
+        "site.toml",
+        r#"
 [site]
 name = "404 Disabled Test"
 base_url = "https://test.com"
@@ -1658,11 +2129,14 @@ base_url = "https://test.com"
 fragments = false
 minify = false
 not_found = false
-"#);
+"#,
+    );
 
     write(root, "templates/index.html", "<h1>Home</h1>");
 
-    eigen::build::build(root, false, false, false).await.unwrap();
+    eigen::build::build(root, false, false, false)
+        .await
+        .unwrap();
 
     assert!(
         !root.join("dist/404.html").exists(),
@@ -1677,7 +2151,10 @@ async fn test_not_found_custom_template_overrides_default() {
     let tmp = TempDir::new().unwrap();
     let root = tmp.path();
 
-    write(root, "site.toml", r#"
+    write(
+        root,
+        "site.toml",
+        r#"
 [site]
 name = "Custom 404 Test"
 base_url = "https://test.com"
@@ -1686,19 +2163,33 @@ base_url = "https://test.com"
 fragments = false
 minify = false
 not_found = true
-"#);
+"#,
+    );
 
-    write(root, "templates/_base.html",
-          "<!DOCTYPE html><html><body>{% block content %}{% endblock %}</body></html>");
+    write(
+        root,
+        "templates/_base.html",
+        "<!DOCTYPE html><html><body>{% block content %}{% endblock %}</body></html>",
+    );
 
     // Custom 404 template.
-    write(root, "templates/404.html", r#"{% extends "_base.html" %}
-{% block content %}<h1>Custom Error Page</h1><p>My bespoke 404.</p>{% endblock %}"#);
+    write(
+        root,
+        "templates/404.html",
+        r#"{% extends "_base.html" %}
+{% block content %}<h1>Custom Error Page</h1><p>My bespoke 404.</p>{% endblock %}"#,
+    );
 
-    write(root, "templates/index.html", r#"{% extends "_base.html" %}
-{% block content %}<h1>Home</h1>{% endblock %}"#);
+    write(
+        root,
+        "templates/index.html",
+        r#"{% extends "_base.html" %}
+{% block content %}<h1>Home</h1>{% endblock %}"#,
+    );
 
-    eigen::build::build(root, false, false, false).await.unwrap();
+    eigen::build::build(root, false, false, false)
+        .await
+        .unwrap();
 
     let path_404 = root.join("dist/404.html");
     assert!(path_404.exists(), "dist/404.html should exist");
@@ -1726,7 +2217,10 @@ async fn test_not_found_default_excluded_from_sitemap() {
     let tmp = TempDir::new().unwrap();
     let root = tmp.path();
 
-    write(root, "site.toml", r#"
+    write(
+        root,
+        "site.toml",
+        r#"
 [site]
 name = "404 Sitemap Test"
 base_url = "https://test.com"
@@ -1736,12 +2230,15 @@ fragments = false
 minify = false
 not_found = true
 sitemap = true
-"#);
+"#,
+    );
 
     write(root, "templates/index.html", "<h1>Home</h1>");
     write(root, "templates/about.html", "<h1>About</h1>");
 
-    eigen::build::build(root, false, false, false).await.unwrap();
+    eigen::build::build(root, false, false, false)
+        .await
+        .unwrap();
 
     let sitemap = fs::read_to_string(root.join("dist/sitemap.xml")).unwrap();
     // The default 404 page (written directly, not via template rendering) must
@@ -1759,7 +2256,10 @@ async fn test_not_found_clean_urls_does_not_affect_404_path() {
     let tmp = TempDir::new().unwrap();
     let root = tmp.path();
 
-    write(root, "site.toml", r#"
+    write(
+        root,
+        "site.toml",
+        r#"
 [site]
 name = "Clean URL 404 Test"
 base_url = "https://test.com"
@@ -1769,22 +2269,39 @@ fragments = false
 minify = false
 not_found = true
 clean_urls = true
-"#);
+"#,
+    );
 
-    write(root, "templates/_base.html",
-          "<!DOCTYPE html><html><body>{% block content %}{% endblock %}</body></html>");
+    write(
+        root,
+        "templates/_base.html",
+        "<!DOCTYPE html><html><body>{% block content %}{% endblock %}</body></html>",
+    );
 
-    write(root, "templates/index.html", r#"{% extends "_base.html" %}
-{% block content %}<h1>Home</h1>{% endblock %}"#);
+    write(
+        root,
+        "templates/index.html",
+        r#"{% extends "_base.html" %}
+{% block content %}<h1>Home</h1>{% endblock %}"#,
+    );
 
     // Custom 404 template to also verify the rendered path is correct.
-    write(root, "templates/404.html", r#"{% extends "_base.html" %}
-{% block content %}<h1>Custom 404</h1>{% endblock %}"#);
+    write(
+        root,
+        "templates/404.html",
+        r#"{% extends "_base.html" %}
+{% block content %}<h1>Custom 404</h1>{% endblock %}"#,
+    );
 
-    eigen::build::build(root, false, false, false).await.unwrap();
+    eigen::build::build(root, false, false, false)
+        .await
+        .unwrap();
 
     // With clean_urls: index goes to index.html, about goes to about/index.html.
-    assert!(root.join("dist/index.html").exists(), "index.html should stay as-is");
+    assert!(
+        root.join("dist/index.html").exists(),
+        "index.html should stay as-is"
+    );
     assert!(
         !root.join("dist/about").exists(),
         "no about/ dir in this build"
@@ -1817,17 +2334,28 @@ async fn test_full_build_example_site_includes_404() {
     let site_toml = site_toml.replace("[build]", "[build]\nminify = false");
     fs::write(root.join("site.toml"), site_toml).unwrap();
 
-    eigen::build::build(root, false, false, false).await.unwrap();
+    eigen::build::build(root, false, false, false)
+        .await
+        .unwrap();
 
     let path_404 = root.join("dist/404.html");
-    assert!(path_404.exists(), "dist/404.html should be built from example_site template");
+    assert!(
+        path_404.exists(),
+        "dist/404.html should be built from example_site template"
+    );
 
     let html = fs::read_to_string(&path_404).unwrap();
     // The example_site 404 template extends _base.html and uses the site name.
-    assert!(html.contains("<!DOCTYPE html>"), "Should be a full HTML page via layout");
+    assert!(
+        html.contains("<!DOCTYPE html>"),
+        "Should be a full HTML page via layout"
+    );
     assert!(html.contains("404"), "Should mention 404");
     // Site name from _base.html should appear.
-    assert!(html.contains("Example Site"), "Layout should inject site name");
+    assert!(
+        html.contains("Example Site"),
+        "Layout should inject site name"
+    );
 }
 
 /// Dynamic page with POST data query: collection from a local file, per-item
@@ -1837,7 +2365,10 @@ async fn test_post_method_dynamic_page_with_body_interpolation() {
     let tmp = TempDir::new().unwrap();
     let root = tmp.path();
 
-    write(root, "site.toml", r#"
+    write(
+        root,
+        "site.toml",
+        r#"
 [site]
 name = "POST Dynamic Test"
 base_url = "https://test.com"
@@ -1845,12 +2376,19 @@ base_url = "https://test.com"
 [build]
 fragments = false
 minify = false
-"#);
+"#,
+    );
 
-    write(root, "templates/_base.html",
-          "<html>{% block content %}{% endblock %}</html>");
+    write(
+        root,
+        "templates/_base.html",
+        "<html>{% block content %}{% endblock %}</html>",
+    );
 
-    write(root, "templates/[project].html", r#"---
+    write(
+        root,
+        "templates/[project].html",
+        r#"---
 collection:
   file: "projects.json"
 slug_field: slug
@@ -1869,30 +2407,57 @@ data:
 {% block content %}
 <h1>{{ project.name }}</h1>
 {% for d in details %}<p>{{ d.info }}</p>{% endfor %}
-{% endblock %}"#);
+{% endblock %}"#,
+    );
 
-    write(root, "_data/projects.json", r#"[
+    write(
+        root,
+        "_data/projects.json",
+        r#"[
         {"slug": "alpha", "id": "1", "name": "Alpha"},
         {"slug": "beta", "id": "2", "name": "Beta"}
-    ]"#);
+    ]"#,
+    );
 
-    write(root, "_data/details.json", r#"[
+    write(
+        root,
+        "_data/details.json",
+        r#"[
         {"project_id": "1", "info": "Alpha details"},
         {"project_id": "2", "info": "Beta details"}
-    ]"#);
+    ]"#,
+    );
 
     // The build should succeed — POST fields must not cause errors.
     eigen::build::build(root, true, false, false).await.unwrap();
 
     let alpha = fs::read_to_string(root.join("dist/alpha.html")).unwrap();
-    assert!(alpha.contains("<h1>Alpha</h1>"), "Alpha page should render project name");
-    assert!(alpha.contains("Alpha details"), "Alpha page should have filtered details");
-    assert!(!alpha.contains("Beta details"), "Alpha page should NOT have Beta details");
+    assert!(
+        alpha.contains("<h1>Alpha</h1>"),
+        "Alpha page should render project name"
+    );
+    assert!(
+        alpha.contains("Alpha details"),
+        "Alpha page should have filtered details"
+    );
+    assert!(
+        !alpha.contains("Beta details"),
+        "Alpha page should NOT have Beta details"
+    );
 
     let beta = fs::read_to_string(root.join("dist/beta.html")).unwrap();
-    assert!(beta.contains("<h1>Beta</h1>"), "Beta page should render project name");
-    assert!(beta.contains("Beta details"), "Beta page should have filtered details");
-    assert!(!beta.contains("Alpha details"), "Beta page should NOT have Alpha details");
+    assert!(
+        beta.contains("<h1>Beta</h1>"),
+        "Beta page should render project name"
+    );
+    assert!(
+        beta.contains("Beta details"),
+        "Beta page should have filtered details"
+    );
+    assert!(
+        !beta.contains("Alpha details"),
+        "Beta page should NOT have Alpha details"
+    );
 }
 
 /// Verify that `extract_frontmatter` round-trips POST method and body
@@ -1941,14 +2506,20 @@ async fn test_post_method_body_interpolation_via_resolve_item_data() {
     let root = tmp.path();
 
     // Write the data files that the queries will read.
-    write(root, "_data/entries.json", r#"[
+    write(
+        root,
+        "_data/entries.json",
+        r#"[
         {"entry_id": "e1", "title": "Entry One"},
         {"entry_id": "e2", "title": "Entry Two"},
         {"entry_id": "e3", "title": "Entry Three"}
-    ]"#);
+    ]"#,
+    );
 
     let sources = std::collections::HashMap::new();
-    let pool = std::sync::Arc::new(eigen::build::rate_limit::RateLimiterPool::new(None, &sources));
+    let pool = std::sync::Arc::new(eigen::build::rate_limit::RateLimiterPool::new(
+        None, &sources,
+    ));
     let mut fetcher = eigen::data::DataFetcher::new(&sources, root, None, pool);
 
     // Simulate a dynamic page's frontmatter with a POST query whose body
@@ -1983,12 +2554,14 @@ async fn test_post_method_body_interpolation_via_resolve_item_data() {
 
     // Resolve for an item with entry_id = "e2".
     let item = serde_json::json!({"entry_id": "e2", "slug": "rec-2"});
-    let result = eigen::data::resolve_dynamic_page_data_for_item(
-        &fm, &item, &mut fetcher, None,
-    ).await.unwrap();
+    let result = eigen::data::resolve_dynamic_page_data_for_item(&fm, &item, &mut fetcher, None)
+        .await
+        .unwrap();
 
     // The filter should have matched only the entry with entry_id "e2".
-    let entries = result["entries"].as_array().expect("entries should be an array");
+    let entries = result["entries"]
+        .as_array()
+        .expect("entries should be an array");
     assert_eq!(entries.len(), 1);
     assert_eq!(entries[0]["title"], "Entry Two");
 }
@@ -2000,7 +2573,10 @@ async fn test_post_method_static_page_full_build() {
     let tmp = TempDir::new().unwrap();
     let root = tmp.path();
 
-    write(root, "site.toml", r#"
+    write(
+        root,
+        "site.toml",
+        r#"
 [site]
 name = "Static POST Test"
 base_url = "https://test.com"
@@ -2008,14 +2584,21 @@ base_url = "https://test.com"
 [build]
 fragments = false
 minify = false
-"#);
+"#,
+    );
 
-    write(root, "templates/_base.html",
-          "<html>{% block content %}{% endblock %}</html>");
+    write(
+        root,
+        "templates/_base.html",
+        "<html>{% block content %}{% endblock %}</html>",
+    );
 
     // Static page with a POST data query. The method/body are parsed
     // but local file fetching ignores them.
-    write(root, "templates/index.html", r#"---
+    write(
+        root,
+        "templates/index.html",
+        r#"---
 data:
   items:
     file: "items.json"
@@ -2033,13 +2616,18 @@ data:
 <li>{{ item.name }}</li>
 {% endfor %}
 </ul>
-{% endblock %}"#);
+{% endblock %}"#,
+    );
 
-    write(root, "_data/items.json", r#"[
+    write(
+        root,
+        "_data/items.json",
+        r#"[
         {"name": "Charlie"},
         {"name": "Alice"},
         {"name": "Bob"}
-    ]"#);
+    ]"#,
+    );
 
     eigen::build::build(root, true, false, false).await.unwrap();
 
@@ -2047,7 +2635,10 @@ data:
     // Sort ascending by name, limit 2 → Alice, Bob.
     assert!(html.contains("Alice"), "Should contain Alice");
     assert!(html.contains("Bob"), "Should contain Bob");
-    assert!(!html.contains("Charlie"), "Charlie should be excluded by limit");
+    assert!(
+        !html.contains("Charlie"),
+        "Charlie should be excluded by limit"
+    );
 
     // Alice should appear before Bob (sorted ascending).
     let alice_pos = html.find("Alice").unwrap();
@@ -2090,7 +2681,10 @@ async fn test_clean_links_strips_html_extension_from_link_to() {
     let tmp = TempDir::new().unwrap();
     let root = tmp.path();
 
-    write(root, "site.toml", r#"
+    write(
+        root,
+        "site.toml",
+        r#"
 [site]
 name = "Clean Links Test"
 base_url = "https://test.com"
@@ -2099,25 +2693,40 @@ base_url = "https://test.com"
 fragments = false
 minify = false
 clean_links = true
-"#);
+"#,
+    );
 
-    write(root, "templates/_base.html",
-          "<html><body>{% block content %}{% endblock %}</body></html>");
+    write(
+        root,
+        "templates/_base.html",
+        "<html><body>{% block content %}{% endblock %}</body></html>",
+    );
 
-    write(root, "templates/index.html", r##"{% extends "_base.html" %}
+    write(
+        root,
+        "templates/index.html",
+        r##"{% extends "_base.html" %}
 {% block content %}
 <a {{ link_to("/about.html") }}>About</a>
-{% endblock %}"##);
+{% endblock %}"##,
+    );
 
-    write(root, "templates/about.html", r#"{% extends "_base.html" %}
-{% block content %}<h1>About</h1>{% endblock %}"#);
+    write(
+        root,
+        "templates/about.html",
+        r#"{% extends "_base.html" %}
+{% block content %}<h1>About</h1>{% endblock %}"#,
+    );
 
     eigen::build::build(root, true, false, false).await.unwrap();
 
     let html = fs::read_to_string(root.join("dist/index.html")).unwrap();
 
     // clean_links strips .html — href should use the clean path.
-    assert!(html.contains(r#"href="/about""#), "link_to should emit clean href without .html");
+    assert!(
+        html.contains(r#"href="/about""#),
+        "link_to should emit clean href without .html"
+    );
     assert!(
         !html.contains(r#"href="/about.html""#),
         "link_to must NOT emit .html extension when clean_links = true"
@@ -2138,16 +2747,16 @@ async fn source_asset_downloads_with_auth_headers() {
     let handle = std::thread::spawn(move || {
         let req = server.recv().unwrap();
         // Verify the Authorization header is present.
-        let auth = req.headers().iter()
+        let auth = req
+            .headers()
+            .iter()
             .find(|h| h.field.equiv("Authorization"))
             .map(|h| h.value.to_string());
         assert_eq!(auth.as_deref(), Some("Bearer test-token-123"));
 
         let png_bytes = b"\x89PNG\r\n\x1a\n"; // minimal PNG signature
         let response = tiny_http::Response::from_data(png_bytes.to_vec())
-            .with_header(
-                tiny_http::Header::from_bytes("content-type", "image/png").unwrap(),
-            );
+            .with_header(tiny_http::Header::from_bytes("content-type", "image/png").unwrap());
         req.respond(response).unwrap();
     });
 
@@ -2199,7 +2808,10 @@ headers = {{ Authorization = "Bearer test-token-123" }}
         .unwrap()
         .filter_map(|e| e.ok())
         .collect();
-    assert!(!files.is_empty(), "Should have at least one downloaded asset");
+    assert!(
+        !files.is_empty(),
+        "Should have at least one downloaded asset"
+    );
 
     // Verify the HTML was rewritten.
     let html = std::fs::read_to_string(root.join("dist/index.html")).unwrap();
@@ -2227,7 +2839,10 @@ async fn test_redirects_generated_from_config() {
     let tmp = TempDir::new().unwrap();
     let root = tmp.path();
 
-    write(root, "site.toml", r#"
+    write(
+        root,
+        "site.toml",
+        r#"
 [site]
 name = "Redirect Test"
 base_url = "https://test.com"
@@ -2245,20 +2860,40 @@ status = 301
 from = "/gone"
 to = "/replacement"
 status = 302
-"#);
+"#,
+    );
 
-    write(root, "templates/_base.html", "<html>{% block content %}{% endblock %}</html>");
-    write(root, "templates/index.html", "---\n---\n{% extends '_base.html' %}{% block content %}Home{% endblock %}");
+    write(
+        root,
+        "templates/_base.html",
+        "<html>{% block content %}{% endblock %}</html>",
+    );
+    write(
+        root,
+        "templates/index.html",
+        "---\n---\n{% extends '_base.html' %}{% block content %}Home{% endblock %}",
+    );
 
-    eigen::build::build(root, false, false, false).await.unwrap();
+    eigen::build::build(root, false, false, false)
+        .await
+        .unwrap();
 
     let path = root.join("dist/_redirects");
     assert!(path.exists(), "dist/_redirects should be generated");
 
     let content = fs::read_to_string(&path).unwrap();
-    assert!(content.starts_with("# Generated by eigen"), "Should have header comment");
-    assert!(content.contains("/old /new 301\n"), "Should contain first rule");
-    assert!(content.contains("/gone /replacement 302\n"), "Should contain second rule");
+    assert!(
+        content.starts_with("# Generated by eigen"),
+        "Should have header comment"
+    );
+    assert!(
+        content.contains("/old /new 301\n"),
+        "Should contain first rule"
+    );
+    assert!(
+        content.contains("/gone /replacement 302\n"),
+        "Should contain second rule"
+    );
 
     // Rule order must be preserved.
     let old_pos = content.find("/old").unwrap();
@@ -2272,7 +2907,10 @@ async fn test_redirects_static_file_copied() {
     let tmp = TempDir::new().unwrap();
     let root = tmp.path();
 
-    write(root, "site.toml", r#"
+    write(
+        root,
+        "site.toml",
+        r#"
 [site]
 name = "Redirect Static Test"
 base_url = "https://test.com"
@@ -2280,19 +2918,36 @@ base_url = "https://test.com"
 [build]
 fragments = false
 minify = false
-"#);
+"#,
+    );
 
     write(root, "static/_redirects", "/legacy /current 301\n");
-    write(root, "templates/_base.html", "<html>{% block content %}{% endblock %}</html>");
-    write(root, "templates/index.html", "---\n---\n{% extends '_base.html' %}{% block content %}Home{% endblock %}");
+    write(
+        root,
+        "templates/_base.html",
+        "<html>{% block content %}{% endblock %}</html>",
+    );
+    write(
+        root,
+        "templates/index.html",
+        "---\n---\n{% extends '_base.html' %}{% block content %}Home{% endblock %}",
+    );
 
-    eigen::build::build(root, false, false, false).await.unwrap();
+    eigen::build::build(root, false, false, false)
+        .await
+        .unwrap();
 
     let path = root.join("dist/_redirects");
-    assert!(path.exists(), "dist/_redirects should be copied from static/");
+    assert!(
+        path.exists(),
+        "dist/_redirects should be copied from static/"
+    );
 
     let content = fs::read_to_string(&path).unwrap();
-    assert_eq!(content, "/legacy /current 301\n", "Static file content should be copied verbatim");
+    assert_eq!(
+        content, "/legacy /current 301\n",
+        "Static file content should be copied verbatim"
+    );
 }
 
 /// Both static/_redirects and config [[redirects]] present → build aborts.
@@ -2301,7 +2956,10 @@ async fn test_redirects_conflict_aborts_build() {
     let tmp = TempDir::new().unwrap();
     let root = tmp.path();
 
-    write(root, "site.toml", r#"
+    write(
+        root,
+        "site.toml",
+        r#"
 [site]
 name = "Redirect Conflict Test"
 base_url = "https://test.com"
@@ -2313,14 +2971,26 @@ minify = false
 [[redirects]]
 from = "/old"
 to = "/new"
-"#);
+"#,
+    );
 
     write(root, "static/_redirects", "/old /other 301\n");
-    write(root, "templates/_base.html", "<html>{% block content %}{% endblock %}</html>");
-    write(root, "templates/index.html", "---\n---\n{% extends '_base.html' %}{% block content %}Home{% endblock %}");
+    write(
+        root,
+        "templates/_base.html",
+        "<html>{% block content %}{% endblock %}</html>",
+    );
+    write(
+        root,
+        "templates/index.html",
+        "---\n---\n{% extends '_base.html' %}{% block content %}Home{% endblock %}",
+    );
 
     let result = eigen::build::build(root, false, false, false).await;
-    assert!(result.is_err(), "Build should fail when both static/_redirects and config rules exist");
+    assert!(
+        result.is_err(),
+        "Build should fail when both static/_redirects and config rules exist"
+    );
 }
 
 // ============================================================================
@@ -2334,7 +3004,10 @@ async fn test_incremental_build_manifest_written_after_build() {
     let tmp = TempDir::new().unwrap();
     let root = tmp.path();
 
-    write(root, "site.toml", r#"
+    write(
+        root,
+        "site.toml",
+        r#"
 [site]
 name = "Incremental Test"
 base_url = "https://test.com"
@@ -2342,15 +3015,25 @@ base_url = "https://test.com"
 [build]
 fragments = false
 minify = false
-"#);
+"#,
+    );
 
-    write(root, "templates/_base.html", "<html>{% block content %}{% endblock %}</html>");
-    write(root, "templates/index.html",
-        "---\n---\n{% extends '_base.html' %}{% block content %}Hello{% endblock %}");
+    write(
+        root,
+        "templates/_base.html",
+        "<html>{% block content %}{% endblock %}</html>",
+    );
+    write(
+        root,
+        "templates/index.html",
+        "---\n---\n{% extends '_base.html' %}{% block content %}Hello{% endblock %}",
+    );
 
     // First build — manifest should not exist yet.
     assert!(!root.join(".eigen_cache/build_manifest.json").exists());
-    eigen::build::build(root, false, false, false).await.unwrap();
+    eigen::build::build(root, false, false, false)
+        .await
+        .unwrap();
 
     // After first build, manifest must exist.
     assert!(root.join(".eigen_cache/build_manifest.json").exists());
@@ -2363,7 +3046,10 @@ async fn test_incremental_build_second_run_keeps_output() {
     let tmp = TempDir::new().unwrap();
     let root = tmp.path();
 
-    write(root, "site.toml", r#"
+    write(
+        root,
+        "site.toml",
+        r#"
 [site]
 name = "Incremental Keep"
 base_url = "https://test.com"
@@ -2371,18 +3057,30 @@ base_url = "https://test.com"
 [build]
 fragments = false
 minify = false
-"#);
+"#,
+    );
 
-    write(root, "templates/_base.html", "<html>{% block content %}{% endblock %}</html>");
-    write(root, "templates/index.html",
-        "---\n---\n{% extends '_base.html' %}{% block content %}Stable{% endblock %}");
+    write(
+        root,
+        "templates/_base.html",
+        "<html>{% block content %}{% endblock %}</html>",
+    );
+    write(
+        root,
+        "templates/index.html",
+        "---\n---\n{% extends '_base.html' %}{% block content %}Stable{% endblock %}",
+    );
 
     // First build.
-    eigen::build::build(root, false, false, false).await.unwrap();
+    eigen::build::build(root, false, false, false)
+        .await
+        .unwrap();
     let content_after_first = fs::read_to_string(root.join("dist/index.html")).unwrap();
 
     // Second build with no changes.
-    eigen::build::build(root, false, false, false).await.unwrap();
+    eigen::build::build(root, false, false, false)
+        .await
+        .unwrap();
     let content_after_second = fs::read_to_string(root.join("dist/index.html")).unwrap();
 
     // Content must be identical — page was either skipped or re-rendered correctly.
@@ -2396,7 +3094,10 @@ async fn test_incremental_build_full_flag_forces_rebuild() {
     let tmp = TempDir::new().unwrap();
     let root = tmp.path();
 
-    write(root, "site.toml", r#"
+    write(
+        root,
+        "site.toml",
+        r#"
 [site]
 name = "Full Flag Test"
 base_url = "https://test.com"
@@ -2404,14 +3105,24 @@ base_url = "https://test.com"
 [build]
 fragments = false
 minify = false
-"#);
+"#,
+    );
 
-    write(root, "templates/_base.html", "<html>{% block content %}{% endblock %}</html>");
-    write(root, "templates/index.html",
-        "---\n---\n{% extends '_base.html' %}{% block content %}Full Flag{% endblock %}");
+    write(
+        root,
+        "templates/_base.html",
+        "<html>{% block content %}{% endblock %}</html>",
+    );
+    write(
+        root,
+        "templates/index.html",
+        "---\n---\n{% extends '_base.html' %}{% block content %}Full Flag{% endblock %}",
+    );
 
     // Build once to create manifest.
-    eigen::build::build(root, false, false, false).await.unwrap();
+    eigen::build::build(root, false, false, false)
+        .await
+        .unwrap();
     // Build with --full: must succeed and produce correct output.
     eigen::build::build(root, false, false, true).await.unwrap();
 
@@ -2427,7 +3138,10 @@ async fn test_incremental_build_template_change_rerenders() {
     let tmp = TempDir::new().unwrap();
     let root = tmp.path();
 
-    write(root, "site.toml", r#"
+    write(
+        root,
+        "site.toml",
+        r#"
 [site]
 name = "Change Test"
 base_url = "https://test.com"
@@ -2435,25 +3149,43 @@ base_url = "https://test.com"
 [build]
 fragments = false
 minify = false
-"#);
+"#,
+    );
 
-    write(root, "templates/_base.html", "<html>{% block content %}{% endblock %}</html>");
-    write(root, "templates/index.html",
-        "---\n---\n{% extends '_base.html' %}{% block content %}Version 1{% endblock %}");
+    write(
+        root,
+        "templates/_base.html",
+        "<html>{% block content %}{% endblock %}</html>",
+    );
+    write(
+        root,
+        "templates/index.html",
+        "---\n---\n{% extends '_base.html' %}{% block content %}Version 1{% endblock %}",
+    );
 
     // First build.
-    eigen::build::build(root, false, false, false).await.unwrap();
+    eigen::build::build(root, false, false, false)
+        .await
+        .unwrap();
     let v1 = fs::read_to_string(root.join("dist/index.html")).unwrap();
     assert!(v1.contains("Version 1"));
 
     // Change the template.
-    write(root, "templates/index.html",
-        "---\n---\n{% extends '_base.html' %}{% block content %}Version 2{% endblock %}");
+    write(
+        root,
+        "templates/index.html",
+        "---\n---\n{% extends '_base.html' %}{% block content %}Version 2{% endblock %}",
+    );
 
     // Second build — must pick up the change.
-    eigen::build::build(root, false, false, false).await.unwrap();
+    eigen::build::build(root, false, false, false)
+        .await
+        .unwrap();
     let v2 = fs::read_to_string(root.join("dist/index.html")).unwrap();
-    assert!(v2.contains("Version 2"), "Updated template should produce new output");
+    assert!(
+        v2.contains("Version 2"),
+        "Updated template should produce new output"
+    );
     assert!(!v2.contains("Version 1"), "Old content should not appear");
 }
 

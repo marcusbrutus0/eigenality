@@ -12,12 +12,10 @@ pub fn site_checks() -> Vec<Finding> {
         category: Category::Accessibility,
         severity: Severity::Low,
         scope: Scope::Site,
-        message: "Remember to verify color contrast ratios meet WCAG AA (4.5:1 for text)."
-            .into(),
+        message: "Remember to verify color contrast ratios meet WCAG AA (4.5:1 for text).".into(),
         fix: Fix {
             file: "templates/**/*.html".into(),
-            instruction: "Use a contrast checker to verify all text meets WCAG AA ratios."
-                .into(),
+            instruction: "Use a contrast checker to verify all text meets WCAG AA ratios.".into(),
         },
     }]
 }
@@ -173,9 +171,7 @@ pub fn page_checks(html: &str, page_path: &str, template_path: &str) -> Vec<Find
             category: Category::Accessibility,
             severity: Severity::Medium,
             scope: Scope::Page,
-            message: format!(
-                "{page_path}: <a href=\"{href}\"> has no accessible text content."
-            ),
+            message: format!("{page_path}: <a href=\"{href}\"> has no accessible text content."),
             fix: Fix {
                 file: template_path.into(),
                 instruction: "Add visible link text or an aria-label attribute.".into(),
@@ -233,16 +229,14 @@ mod tests {
 
     #[test]
     fn test_img_has_alt() {
-        let html =
-            r#"<html><head></head><body><img src="photo.jpg" alt="A photo"></body></html>"#;
+        let html = r#"<html><head></head><body><img src="photo.jpg" alt="A photo"></body></html>"#;
         let findings = page_checks(html, "/test.html", "templates/test.html");
         assert!(!findings.iter().any(|f| f.id == "a11y/img-alt-text"));
     }
 
     #[test]
     fn test_img_empty_alt_decorative() {
-        let html =
-            r#"<html><head></head><body><img src="spacer.gif" alt=""></body></html>"#;
+        let html = r#"<html><head></head><body><img src="spacer.gif" alt=""></body></html>"#;
         let findings = page_checks(html, "/test.html", "templates/test.html");
         assert!(!findings.iter().any(|f| f.id == "a11y/img-alt-text"));
     }
@@ -256,15 +250,15 @@ mod tests {
 
     #[test]
     fn test_link_with_text() {
-        let html =
-            r#"<html><head></head><body><a href="/foo">Click here</a></body></html>"#;
+        let html = r#"<html><head></head><body><a href="/foo">Click here</a></body></html>"#;
         let findings = page_checks(html, "/test.html", "templates/test.html");
         assert!(!findings.iter().any(|f| f.id == "a11y/link-text"));
     }
 
     #[test]
     fn test_link_with_aria_label_no_text() {
-        let html = r#"<html><head></head><body><a href="/foo" aria-label="Home"></a></body></html>"#;
+        let html =
+            r#"<html><head></head><body><a href="/foo" aria-label="Home"></a></body></html>"#;
         let findings = page_checks(html, "/test.html", "templates/test.html");
         assert!(!findings.iter().any(|f| f.id == "a11y/link-text"));
     }
@@ -283,8 +277,10 @@ mod tests {
     fn test_multiple_imgs_some_missing_alt() {
         let html = r#"<html><head></head><body><img src="a.jpg" alt="ok"><img src="b.jpg"><img src="c.jpg" alt=""></body></html>"#;
         let findings = page_checks(html, "/test.html", "templates/test.html");
-        let alt_findings: Vec<_> =
-            findings.iter().filter(|f| f.id == "a11y/img-alt-text").collect();
+        let alt_findings: Vec<_> = findings
+            .iter()
+            .filter(|f| f.id == "a11y/img-alt-text")
+            .collect();
         assert_eq!(alt_findings.len(), 1, "only b.jpg should be flagged");
     }
 }

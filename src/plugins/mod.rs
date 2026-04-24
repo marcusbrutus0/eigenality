@@ -83,10 +83,7 @@ pub trait Plugin: std::fmt::Debug + Send + Sync {
     }
 
     /// Register custom filters, functions, or globals on the template engine.
-    fn register_template_extensions(
-        &self,
-        _env: &mut minijinja::Environment<'_>,
-    ) -> Result<()> {
+    fn register_template_extensions(&self, _env: &mut minijinja::Environment<'_>) -> Result<()> {
         Ok(())
     }
 
@@ -103,11 +100,7 @@ pub trait Plugin: std::fmt::Debug + Send + Sync {
     }
 
     /// Called once after all pages have been rendered and written.
-    fn post_build(
-        &self,
-        _dist_dir: &Path,
-        _project_root: &Path,
-    ) -> Result<()> {
+    fn post_build(&self, _dist_dir: &Path, _project_root: &Path) -> Result<()> {
         Ok(())
     }
 }

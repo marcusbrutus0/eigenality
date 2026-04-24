@@ -154,7 +154,12 @@ mod tests {
         let body = b"[{\"id\":1}]";
 
         cache
-            .store(key, body, Some("\"abc123\""), Some("Mon, 01 Jan 2024 00:00:00 GMT"))
+            .store(
+                key,
+                body,
+                Some("\"abc123\""),
+                Some("Mon, 01 Jan 2024 00:00:00 GMT"),
+            )
             .expect("store should succeed");
 
         let meta = cache.get(key).expect("get should return meta");
@@ -181,8 +186,12 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let mut cache = open(&tmp);
 
-        cache.store("GET:https://a.example.com/1", b"data1", None, None).unwrap();
-        cache.store("GET:https://a.example.com/2", b"data2", None, None).unwrap();
+        cache
+            .store("GET:https://a.example.com/1", b"data1", None, None)
+            .unwrap();
+        cache
+            .store("GET:https://a.example.com/2", b"data2", None, None)
+            .unwrap();
 
         cache.clear().expect("clear should succeed");
 
@@ -228,7 +237,10 @@ mod tests {
 
         // open() should succeed and simply skip the malformed file.
         let cache = DataCache::open(tmp.path()).expect("open should succeed despite bad meta");
-        assert!(cache.index.is_empty(), "bad meta should not appear in index");
+        assert!(
+            cache.index.is_empty(),
+            "bad meta should not appear in index"
+        );
     }
 
     #[test]
@@ -261,8 +273,12 @@ mod tests {
 
         let key = "GET:https://api.example.com/thing";
 
-        cache.store(key, b"old-body", Some("\"etag-1\""), None).unwrap();
-        cache.store(key, b"new-body", Some("\"etag-2\""), None).unwrap();
+        cache
+            .store(key, b"old-body", Some("\"etag-1\""), None)
+            .unwrap();
+        cache
+            .store(key, b"new-body", Some("\"etag-2\""), None)
+            .unwrap();
 
         let meta = cache.get(key).unwrap();
         assert_eq!(meta.etag.as_deref(), Some("\"etag-2\""));

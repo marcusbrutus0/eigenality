@@ -110,7 +110,14 @@ pub async fn download_asset(
     cached_meta: Option<&AssetCacheMeta>,
     pool: &RateLimiterPool,
 ) -> Result<DownloadResult> {
-    download_asset_with_headers(client, url, cached_meta, &reqwest::header::HeaderMap::new(), pool).await
+    download_asset_with_headers(
+        client,
+        url,
+        cached_meta,
+        &reqwest::header::HeaderMap::new(),
+        pool,
+    )
+    .await
 }
 
 /// Ensure an asset is available in the cache (downloading or validating as needed),
@@ -142,8 +149,14 @@ pub async fn ensure_asset_with_headers(
                     content_type,
                 } => {
                     tracing::debug!("  Source asset re-downloaded: {}", url);
-                    let final_name =
-                        cache.store(url, &data, &local_filename, etag, last_modified, content_type)?;
+                    let final_name = cache.store(
+                        url,
+                        &data,
+                        &local_filename,
+                        etag,
+                        last_modified,
+                        content_type,
+                    )?;
                     return Ok(final_name);
                 }
             }
@@ -160,8 +173,14 @@ pub async fn ensure_asset_with_headers(
             content_type,
         } => {
             tracing::debug!("  Source asset downloaded: {} → {}", url, local_filename);
-            let final_name =
-                cache.store(url, &data, &local_filename, etag, last_modified, content_type)?;
+            let final_name = cache.store(
+                url,
+                &data,
+                &local_filename,
+                etag,
+                last_modified,
+                content_type,
+            )?;
             Ok(final_name)
         }
         DownloadResult::NotModified => {
@@ -199,8 +218,7 @@ mod tests {
         use reqwest::header::{AUTHORIZATION, HeaderMap, HeaderValue};
         use std::thread;
 
-        let server =
-            tiny_http::Server::http("127.0.0.1:0").expect("failed to bind mock server");
+        let server = tiny_http::Server::http("127.0.0.1:0").expect("failed to bind mock server");
         let addr = server.server_addr().to_ip().expect("no IP address");
         let url = format!("http://{}/image.png", addr);
 
@@ -254,8 +272,7 @@ mod tests {
         use reqwest::header::HeaderMap;
         use std::thread;
 
-        let server =
-            tiny_http::Server::http("127.0.0.1:0").expect("failed to bind mock server");
+        let server = tiny_http::Server::http("127.0.0.1:0").expect("failed to bind mock server");
         let addr = server.server_addr().to_ip().expect("no IP address");
         let url = format!("http://{}/image.png", addr);
 

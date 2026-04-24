@@ -1,7 +1,7 @@
 //! Step 3.2: DataFetcher — fetch data from local files or remote sources with
 //! caching, root extraction, and transforms.
 
-use eyre::{bail, Result, WrapErr};
+use eyre::{Result, WrapErr, bail};
 use serde_json::Value;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -36,7 +36,9 @@ pub enum StoreResult {
     /// Value parsed and stored successfully.
     Value(Value),
     /// 304 received but disk-cached body was corrupt; retry with these fresh source headers.
-    RetryNeeded { fresh_headers: reqwest::header::HeaderMap },
+    RetryNeeded {
+        fresh_headers: reqwest::header::HeaderMap,
+    },
 }
 
 /// Execute an HTTP request for a data source, with no mutex held.
@@ -229,10 +231,18 @@ impl DataFetcher {
                     headers.insert(reqwest::header::IF_MODIFIED_SINCE, hv);
                 }
             }
-            tracing::debug!("Conditional request for {} (etag: {:?})", full_url, meta.etag);
+            tracing::debug!(
+                "Conditional request for {} (etag: {:?})",
+                full_url,
+                meta.etag
+            );
         }
 
-        Ok(SourceCacheCheck::Miss { cache_key, full_url, headers })
+        Ok(SourceCacheCheck::Miss {
+            cache_key,
+            full_url,
+            headers,
+        })
     }
 
     /// Phase 3: parse the HTTP response and store in both caches.
@@ -262,7 +272,8 @@ impl DataFetcher {
                     Err(e) => {
                         tracing::warn!(
                             "304 but cached body failed to parse for {}: {}. Re-fetching.",
-                            full_url, e,
+                            full_url,
+                            e,
                         );
                         let source = self.sources.get(source_name).ok_or_else(|| {
                             eyre::eyre!("Source '{}' disappeared during retry", source_name)
@@ -279,7 +290,9 @@ impl DataFetcher {
             bail!("HTTP {} from {}", status, full_url);
         }
 
-        let value = self.handle_success_response(response, cache_key, full_url).await?;
+        let value = self
+            .handle_success_response(response, cache_key, full_url)
+            .await?;
         Ok(StoreResult::Value(value))
     }
 
@@ -355,16 +368,13 @@ impl DataFetcher {
         method: &HttpMethod,
         body: Option<&serde_json::Value>,
     ) -> Result<Value> {
-        let source = self
-            .sources
-            .get(source_name)
-            .ok_or_else(|| {
-                eyre::eyre!(
-                    "Source '{}' not found in site.toml. Available: {}",
-                    source_name,
-                    self.sources.keys().cloned().collect::<Vec<_>>().join(", ")
-                )
-            })?;
+        let source = self.sources.get(source_name).ok_or_else(|| {
+            eyre::eyre!(
+                "Source '{}' not found in site.toml. Available: {}",
+                source_name,
+                self.sources.keys().cloned().collect::<Vec<_>>().join(", ")
+            )
+        })?;
 
         // Build full URL: base URL + path.
         let full_url = format!(
@@ -410,7 +420,11 @@ impl DataFetcher {
                     headers.insert(reqwest::header::IF_MODIFIED_SINCE, hv);
                 }
             }
-            tracing::debug!("Conditional request for {} (etag: {:?})", full_url, meta.etag);
+            tracing::debug!(
+                "Conditional request for {} (etag: {:?})",
+                full_url,
+                meta.etag
+            );
         }
 
         let response = self.send_request(method, &full_url, headers, body).await?;
@@ -428,15 +442,24 @@ impl DataFetcher {
                     Err(e) => {
                         tracing::warn!(
                             "304 but cached body failed to parse for {}: {}. Re-fetching.",
-                            full_url, e,
+                            full_url,
+                            e,
                         );
                         let retry_headers = Self::build_source_headers(source)?;
-                        let retry_response = self.send_request(method, &full_url, retry_headers, body).await?;
+                        let retry_response = self
+                            .send_request(method, &full_url, retry_headers, body)
+                            .await?;
                         let retry_status = retry_response.status();
                         if !retry_status.is_success() {
-                            bail!("HTTP {} from {} (retry after bad 304 cache)", retry_status, full_url);
+                            bail!(
+                                "HTTP {} from {} (retry after bad 304 cache)",
+                                retry_status,
+                                full_url
+                            );
                         }
-                        return self.handle_success_response(retry_response, cache_key, &full_url).await;
+                        return self
+                            .handle_success_response(retry_response, cache_key, &full_url)
+                            .await;
                     }
                 }
             }
@@ -447,7 +470,8 @@ impl DataFetcher {
             bail!("HTTP {} from {}", status, full_url);
         }
 
-        self.handle_success_response(response, cache_key, &full_url).await
+        self.handle_success_response(response, cache_key, &full_url)
+            .await
     }
 
     /// Process a successful HTTP response: extract cache headers, store in disk
@@ -795,8 +819,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_fetch_with_plugin_registry_transforms_data() {
-        use crate::plugins::registry::PluginRegistry;
         use crate::plugins::Plugin;
+        use crate::plugins::registry::PluginRegistry;
 
         #[derive(Debug)]
         struct AddFieldPlugin;
@@ -863,8 +887,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_fetch_plugin_runs_after_root_extraction() {
-        use crate::plugins::registry::PluginRegistry;
         use crate::plugins::Plugin;
+        use crate::plugins::registry::PluginRegistry;
 
         #[derive(Debug)]
         struct CountPlugin;
@@ -913,8 +937,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_fetch_plugin_runs_before_filter_sort_limit() {
-        use crate::plugins::registry::PluginRegistry;
         use crate::plugins::Plugin;
+        use crate::plugins::registry::PluginRegistry;
 
         /// Plugin that adds a "status" field to all items.
         #[derive(Debug)]
@@ -1053,7 +1077,10 @@ mod tests {
                     has_if_none_match = true;
                 }
             }
-            assert!(has_if_none_match, "Second request should have If-None-Match header");
+            assert!(
+                has_if_none_match,
+                "Second request should have If-None-Match header"
+            );
 
             let response304 = "HTTP/1.1 304 Not Modified\r\nConnection: close\r\n\r\n";
             reader2.get_mut().write_all(response304.as_bytes()).unwrap();
@@ -1158,7 +1185,11 @@ mod tests {
             .unwrap();
 
         match result {
-            SourceCacheCheck::Miss { cache_key, full_url, .. } => {
+            SourceCacheCheck::Miss {
+                cache_key,
+                full_url,
+                ..
+            } => {
                 assert_eq!(full_url, "http://api.example.com/items");
                 assert_eq!(cache_key, "GET:http://api.example.com/items");
             }
@@ -1212,11 +1243,9 @@ mod tests {
         let mut headers = HeaderMap::new();
         headers.insert(AUTHORIZATION, HeaderValue::from_static("Bearer tok"));
 
-        let resp = execute_source_request(
-            &client, &pool, &HttpMethod::Get, &url, headers, None,
-        )
-        .await
-        .expect("request should succeed");
+        let resp = execute_source_request(&client, &pool, &HttpMethod::Get, &url, headers, None)
+            .await
+            .expect("request should succeed");
 
         assert!(resp.status().is_success());
         let bytes = resp.bytes().await.unwrap();
@@ -1257,7 +1286,10 @@ mod tests {
         match result {
             SourceCacheCheck::Miss { headers, .. } => {
                 let inm = headers.get(reqwest::header::IF_NONE_MATCH);
-                assert!(inm.is_some(), "If-None-Match should be set from disk cache etag");
+                assert!(
+                    inm.is_some(),
+                    "If-None-Match should be set from disk cache etag"
+                );
                 assert_eq!(inm.unwrap().to_str().unwrap(), "\"etag-abc\"");
             }
             SourceCacheCheck::Hit(_) => panic!("expected Miss (url_cache is empty)"),
@@ -1276,10 +1308,9 @@ mod tests {
         thread::spawn(move || {
             if let Ok(Some(req)) = server.recv_timeout(std::time::Duration::from_secs(5)) {
                 let body: &[u8] = b"[{\"id\":42}]";
-                let ct = tiny_http::Header::from_bytes(
-                    &b"Content-Type"[..],
-                    &b"application/json"[..],
-                ).expect("header");
+                let ct =
+                    tiny_http::Header::from_bytes(&b"Content-Type"[..], &b"application/json"[..])
+                        .expect("header");
                 let _ = req.respond(tiny_http::Response::new(
                     tiny_http::StatusCode(200),
                     vec![ct],
@@ -1306,8 +1337,12 @@ mod tests {
 
         let client = reqwest::Client::new();
         let resp = execute_source_request(
-            &client, &pool, &HttpMethod::Get, &url,
-            reqwest::header::HeaderMap::new(), None,
+            &client,
+            &pool,
+            &HttpMethod::Get,
+            &url,
+            reqwest::header::HeaderMap::new(),
+            None,
         )
         .await
         .expect("request");
@@ -1374,8 +1409,12 @@ mod tests {
 
         let client = reqwest::Client::new();
         let resp = execute_source_request(
-            &client, &pool, &HttpMethod::Get, &url,
-            reqwest::header::HeaderMap::new(), None,
+            &client,
+            &pool,
+            &HttpMethod::Get,
+            &url,
+            reqwest::header::HeaderMap::new(),
+            None,
         )
         .await
         .expect("request");
@@ -1424,7 +1463,12 @@ mod tests {
         // Seed the disk cache with invalid JSON.
         let mut data_cache = DataCache::open(root).unwrap();
         data_cache
-            .store(&cache_key, b"NOT VALID JSON {{{{", Some("\"etag-v1\""), None)
+            .store(
+                &cache_key,
+                b"NOT VALID JSON {{{{",
+                Some("\"etag-v1\""),
+                None,
+            )
             .unwrap();
 
         let mut sources = HashMap::new();
@@ -1441,8 +1485,12 @@ mod tests {
 
         let client = reqwest::Client::new();
         let resp = execute_source_request(
-            &client, &pool, &HttpMethod::Get, &url,
-            reqwest::header::HeaderMap::new(), None,
+            &client,
+            &pool,
+            &HttpMethod::Get,
+            &url,
+            reqwest::header::HeaderMap::new(),
+            None,
         )
         .await
         .expect("request");

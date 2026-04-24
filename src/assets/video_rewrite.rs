@@ -7,6 +7,7 @@
 use eyre::Result;
 use std::cell::RefCell;
 use std::collections::HashMap;
+use std::fmt::Write;
 use std::path::Path;
 use std::rc::Rc;
 
@@ -41,6 +42,11 @@ pub fn should_skip_url(url: &str) -> bool {
     url.starts_with("http://") || url.starts_with("https://") || url.starts_with("data:")
 }
 
+/// Returns `true` when `src` is a local, non-excluded URL suitable for optimization.
+fn is_optimizable(src: &str, exclude_patterns: &[String]) -> bool {
+    !should_skip_url(src) && !is_excluded(src.trim_start_matches('/'), exclude_patterns)
+}
+
 /// Collect video entries from HTML in document order.
 ///
 /// Returns one slot per `<video>` element in the DOM, in document order.
@@ -70,44 +76,29 @@ pub fn collect_video_entries(html: &str, exclude_patterns: &[String]) -> Vec<Opt
 
         // Form 1: <video src="...">
         if let Some(src) = video_el.value().attr("src") {
-            if should_skip_url(src) {
-                entries.push(None);
-                continue;
-            }
-            let check_path = src.trim_start_matches('/');
-            if is_excluded(check_path, exclude_patterns) {
-                entries.push(None);
-                continue;
-            }
-            entries.push(Some(VideoEntry {
-                src: src.to_string(),
-                is_form1: true,
-            }));
+            entries.push(if is_optimizable(src, exclude_patterns) {
+                Some(VideoEntry {
+                    src: src.to_string(),
+                    is_form1: true,
+                })
+            } else {
+                None
+            });
             continue;
         }
 
         // Form 2: first <source> child with src.
-        if let Some(source_el) = video_el.select(&source_sel).next()
-            && let Some(src) = source_el.value().attr("src")
-        {
-            if should_skip_url(src) {
-                entries.push(None);
-                continue;
-            }
-            let check_path = src.trim_start_matches('/');
-            if is_excluded(check_path, exclude_patterns) {
-                entries.push(None);
-                continue;
-            }
-            entries.push(Some(VideoEntry {
+        let form2 = video_el
+            .select(&source_sel)
+            .next()
+            .and_then(|el| el.value().attr("src"))
+            .filter(|src| is_optimizable(src, exclude_patterns))
+            .map(|src| VideoEntry {
                 src: src.to_string(),
                 is_form1: false,
-            }));
-            continue;
-        }
+            });
 
-        // No usable source found.
-        entries.push(None);
+        entries.push(form2);
     }
 
     entries
@@ -126,17 +117,19 @@ pub fn build_sources_html(variants: &VideoVariants) -> String {
 
     // VP9 sources (highest resolution first — already sorted descending).
     for v in &variants.vp9 {
-        html.push_str(&format!(
-            "<source src=\"{}\" type=\"video/webm; codecs=&quot;vp9&quot;\">",
+        let _ = write!(
+            html,
+            r#"<source src="{}" type="video/webm; codecs=&quot;vp9&quot;">"#,
             v.url_path,
-        ));
+        );
     }
 
     // Original fallback.
-    html.push_str(&format!(
-        "<source src=\"{}\" type=\"{}\">",
+    let _ = write!(
+        html,
+        r#"<source src="{}" type="{}">"#,
         variants.original.url_path, variants.original.mime_type,
-    ));
+    );
 
     html
 }
@@ -213,6 +206,16 @@ pub async fn optimize_and_rewrite_videos(
 // lol_html rewrite (single-pass, indexed)
 // ---------------------------------------------------------------------------
 
+/// Per-`<video>` state used during the lol_html rewrite pass.
+#[derive(Clone)]
+enum VideoRewriteState {
+    /// Form 1: sources already prepended; strip any original `<source>` children.
+    Form1,
+    /// Form 2: replace the first `<source>` child with these generated elements,
+    /// then remove subsequent `<source>` siblings.
+    Form2 { sources_html: String },
+}
+
 /// Single-pass lol_html rewrite of `<video>` and child `<source>` elements.
 ///
 /// Maintains a `video_index` counter incremented **unconditionally** for
@@ -224,26 +227,21 @@ pub fn rewrite_video_elements(
     entries: &[Option<VideoEntry>],
     variant_map: &VideoVariantMap,
 ) -> Result<String> {
-    let entries = entries.to_vec();
-    let map = variant_map.clone();
-
     // Index into `entries`, incremented unconditionally per <video>.
     let video_index: Rc<RefCell<usize>> = Rc::new(RefCell::new(0));
 
-    // Tracks state for the current <video> being processed.
-    // Some((is_form1, sources_html)) when the current video has variants.
-    // None when the current video was skipped or has no variants.
-    let current_state: Rc<RefCell<Option<(bool, String)>>> = Rc::new(RefCell::new(None));
+    // State for the current <video> being processed.
+    let current_state: Rc<RefCell<Option<VideoRewriteState>>> = Rc::new(RefCell::new(None));
 
     // Whether the first matching <source> within a Form 2 video has been
     // replaced already (we only replace once).
     let source_replaced: Rc<RefCell<bool>> = Rc::new(RefCell::new(false));
 
+    let entries_for_video = entries.to_vec();
+    let map_for_video = variant_map.clone();
     let idx_for_video = video_index.clone();
     let state_for_video = current_state.clone();
     let replaced_for_video = source_replaced.clone();
-    let entries_for_video = entries.clone();
-    let map_for_video = map.clone();
 
     let state_for_source = current_state.clone();
     let replaced_for_source = source_replaced.clone();
@@ -297,10 +295,11 @@ pub fn rewrite_video_elements(
                         // Form 1: remove src attr, prepend sources.
                         el.remove_attribute("src");
                         el.prepend(&sources_html, lol_html::html_content::ContentType::Html);
-                        *state_for_video.borrow_mut() = Some((true, String::new()));
+                        *state_for_video.borrow_mut() = Some(VideoRewriteState::Form1);
                     } else {
-                        // Form 2: keep element, source handler will replace children.
-                        *state_for_video.borrow_mut() = Some((false, sources_html));
+                        // Form 2: source handler will replace children.
+                        *state_for_video.borrow_mut() =
+                            Some(VideoRewriteState::Form2 { sources_html });
                     }
 
                     Ok(())
@@ -308,25 +307,27 @@ pub fn rewrite_video_elements(
                 // --- <source> handler (inside <video>) ---
                 lol_html::element!("video source", move |el| {
                     let state = state_for_source.borrow();
-                    let Some((is_form1, ref sources_html)) = *state else {
+                    let Some(ref rewrite_state) = *state else {
                         return Ok(());
                     };
 
-                    if is_form1 {
-                        // Form 1: the original <source> children should be removed
-                        // since we prepended our generated sources.
-                        el.remove();
-                        return Ok(());
-                    }
-
-                    // Form 2: replace the first matching <source> with generated
-                    // sources; remove subsequent siblings.
-                    let mut replaced = replaced_for_source.borrow_mut();
-                    if !*replaced {
-                        el.replace(sources_html, lol_html::html_content::ContentType::Html);
-                        *replaced = true;
-                    } else {
-                        el.remove();
+                    match rewrite_state {
+                        VideoRewriteState::Form1 => {
+                            // Original <source> children removed; we already
+                            // prepended generated sources.
+                            el.remove();
+                        }
+                        VideoRewriteState::Form2 { sources_html } => {
+                            // Replace the first <source> with generated elements;
+                            // remove subsequent siblings.
+                            let mut replaced = replaced_for_source.borrow_mut();
+                            if !*replaced {
+                                el.replace(sources_html, lol_html::html_content::ContentType::Html);
+                                *replaced = true;
+                            } else {
+                                el.remove();
+                            }
+                        }
                     }
 
                     Ok(())
@@ -432,20 +433,17 @@ mod tests {
                     url_path: "/assets/clip-1080p-abc.webm".to_string(),
                     height: 1080,
                     mime_type: "video/webm",
-                    codec: "vp9".into(),
                 },
                 VideoVariant {
                     url_path: "/assets/clip-720p-abc.webm".to_string(),
                     height: 720,
                     mime_type: "video/webm",
-                    codec: "vp9".into(),
                 },
             ],
             original: VideoVariant {
                 url_path: "/assets/clip-abc.mp4".to_string(),
                 height: 1080,
                 mime_type: "video/mp4",
-                codec: "h264".into(),
             },
             poster_url: "/assets/clip-poster-abc.webp".to_string(),
         };
@@ -486,13 +484,11 @@ mod tests {
                 url_path: format!("/assets/{stem}-1080p.webm"),
                 height: 1080,
                 mime_type: "video/webm",
-                codec: "vp9".into(),
             }],
             original: VideoVariant {
                 url_path: format!("/assets/{stem}.mp4"),
                 height: 1080,
                 mime_type: "video/mp4",
-                codec: "h264".into(),
             },
             poster_url: format!("/assets/{stem}-poster.webp"),
         }
@@ -719,7 +715,6 @@ mod tests {
 
         let config = VideoOptimConfig {
             optimize: true,
-            format: "vp9".into(),
             quality: 50,
             heights: vec![60],
             exclude: vec![],
@@ -762,7 +757,6 @@ mod tests {
 
         let config = VideoOptimConfig {
             optimize: false,
-            format: "vp9".into(),
             quality: 30,
             heights: vec![480, 720],
             exclude: vec![],
@@ -828,7 +822,6 @@ mod tests {
 
         let config = VideoOptimConfig {
             optimize: true,
-            format: "vp9".into(),
             quality: 50,
             heights: vec![60],
             exclude: vec![],
@@ -930,7 +923,6 @@ mod tests {
 
         let config = VideoOptimConfig {
             optimize: true,
-            format: "vp9".into(),
             quality: 50,
             heights: vec![60],
             exclude: vec![],
@@ -1003,7 +995,6 @@ mod tests {
 
         let config = VideoOptimConfig {
             optimize: true,
-            format: "vp9".into(),
             quality: 50,
             heights: vec![60, 120, 480],
             exclude: vec![],

@@ -26,26 +26,21 @@ pub fn load_global_data(project_root: &Path) -> Result<HashMap<String, Value>> {
         return Ok(data);
     }
 
-    for entry in WalkDir::new(&data_dir)
-        .into_iter()
-        .filter_map(|e| e.ok())
-    {
+    for entry in WalkDir::new(&data_dir).into_iter().filter_map(|e| e.ok()) {
         if !entry.file_type().is_file() {
             continue;
         }
 
         let path = entry.path();
-        let ext = path
-            .extension()
-            .and_then(|e| e.to_str())
-            .unwrap_or("");
+        let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
 
         let value = match ext {
             "yaml" | "yml" => {
                 let content = std::fs::read_to_string(path)
                     .wrap_err_with(|| format!("Failed to read {}", path.display()))?;
-                let content = interpolate_env_vars(&content)
-                    .wrap_err_with(|| format!("Failed to interpolate env vars in {}", path.display()))?;
+                let content = interpolate_env_vars(&content).wrap_err_with(|| {
+                    format!("Failed to interpolate env vars in {}", path.display())
+                })?;
                 let v: Value = serde_yaml::from_str(&content)
                     .wrap_err_with(|| format!("Failed to parse YAML in {}", path.display()))?;
                 v
@@ -53,8 +48,9 @@ pub fn load_global_data(project_root: &Path) -> Result<HashMap<String, Value>> {
             "json" => {
                 let content = std::fs::read_to_string(path)
                     .wrap_err_with(|| format!("Failed to read {}", path.display()))?;
-                let content = interpolate_env_vars(&content)
-                    .wrap_err_with(|| format!("Failed to interpolate env vars in {}", path.display()))?;
+                let content = interpolate_env_vars(&content).wrap_err_with(|| {
+                    format!("Failed to interpolate env vars in {}", path.display())
+                })?;
                 let v: Value = serde_json::from_str(&content)
                     .wrap_err_with(|| format!("Failed to parse JSON in {}", path.display()))?;
                 v

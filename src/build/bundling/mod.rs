@@ -91,18 +91,17 @@ pub fn bundle_assets(
             }
 
             if let Some(parent) = output_path.parent() {
-                std::fs::create_dir_all(parent)
-                    .wrap_err_with(|| format!(
+                std::fs::create_dir_all(parent).wrap_err_with(|| {
+                    format!(
                         "Failed to create directory for CSS bundle: {}",
                         parent.display()
-                    ))?;
+                    )
+                })?;
             }
 
-            std::fs::write(&output_path, &output_css)
-                .wrap_err_with(|| format!(
-                    "Failed to write CSS bundle to '{}'",
-                    output_path.display()
-                ))?;
+            std::fs::write(&output_path, &output_css).wrap_err_with(|| {
+                format!("Failed to write CSS bundle to '{}'", output_path.display())
+            })?;
 
             let href = format!("/{}", config.css_output);
             css_bundle_href = Some(href);
@@ -118,8 +117,8 @@ pub fn bundle_assets(
 
     // Step 4: JS bundling.
     if config.js && !refs.js_srcs.is_empty() {
-        let merged = js::merge_js_files(&refs.js_srcs, dist_dir)
-            .wrap_err("Failed to merge JS files")?;
+        let merged =
+            js::merge_js_files(&refs.js_srcs, dist_dir).wrap_err("Failed to merge JS files")?;
 
         if merged.is_empty() {
             tracing::warn!("Bundling: merged JS is empty (all files failed to load)");
@@ -135,18 +134,17 @@ pub fn bundle_assets(
             }
 
             if let Some(parent) = output_path.parent() {
-                std::fs::create_dir_all(parent)
-                    .wrap_err_with(|| format!(
+                std::fs::create_dir_all(parent).wrap_err_with(|| {
+                    format!(
                         "Failed to create directory for JS bundle: {}",
                         parent.display()
-                    ))?;
+                    )
+                })?;
             }
 
-            std::fs::write(&output_path, &merged)
-                .wrap_err_with(|| format!(
-                    "Failed to write JS bundle to '{}'",
-                    output_path.display()
-                ))?;
+            std::fs::write(&output_path, &merged).wrap_err_with(|| {
+                format!("Failed to write JS bundle to '{}'", output_path.display())
+            })?;
 
             let src = format!("/{}", config.js_output);
             js_bundle_src = Some(src);
@@ -169,12 +167,10 @@ pub fn bundle_assets(
             js_bundle_src.as_deref(),
             &refs.css_hrefs,
             &refs.js_srcs,
-        ).wrap_err("Failed to rewrite HTML files for bundles")?;
+        )
+        .wrap_err("Failed to rewrite HTML files for bundles")?;
 
-        tracing::info!(
-            "Bundling: rewrote {} HTML file(s)",
-            refs.html_files.len(),
-        );
+        tracing::info!("Bundling: rewrote {} HTML file(s)", refs.html_files.len(),);
     }
 
     Ok(generated_files)
@@ -191,10 +187,12 @@ fn minify_css_string(css: &str) -> Result<String> {
     let stylesheet = StyleSheet::parse(css, options)
         .map_err(|e| eyre::eyre!("CSS parse error during minification: {e}"))?;
 
-    let result = stylesheet.to_css(PrinterOptions {
-        minify: true,
-        ..PrinterOptions::default()
-    }).map_err(|e| eyre::eyre!("CSS serialization error: {e}"))?;
+    let result = stylesheet
+        .to_css(PrinterOptions {
+            minify: true,
+            ..PrinterOptions::default()
+        })
+        .map_err(|e| eyre::eyre!("CSS serialization error: {e}"))?;
 
     Ok(result.code)
 }
@@ -227,7 +225,10 @@ mod tests {
         let dist = tmp.path();
         write_file(dist, "index.html", "<html><body>No CSS or JS</body></html>");
 
-        let config = BundlingConfig { enabled: true, ..Default::default() };
+        let config = BundlingConfig {
+            enabled: true,
+            ..Default::default()
+        };
         let result = bundle_assets(dist, &config, false).unwrap();
         assert!(result.is_empty());
     }
@@ -238,7 +239,11 @@ mod tests {
         let dist = tmp.path();
 
         write_file(dist, "css/style.css", ".hero { color: red; }");
-        write_file(dist, "index.html", r#"<html><head><link rel="stylesheet" href="/css/style.css"></head><body><div class="hero">Hi</div></body></html>"#);
+        write_file(
+            dist,
+            "index.html",
+            r#"<html><head><link rel="stylesheet" href="/css/style.css"></head><body><div class="hero">Hi</div></body></html>"#,
+        );
 
         let config = BundlingConfig {
             enabled: true,
@@ -261,7 +266,11 @@ mod tests {
         let dist = tmp.path();
 
         write_file(dist, "js/app.js", "var x = 1;");
-        write_file(dist, "index.html", r#"<html><body><script src="/js/app.js"></script></body></html>"#);
+        write_file(
+            dist,
+            "index.html",
+            r#"<html><body><script src="/js/app.js"></script></body></html>"#,
+        );
 
         let config = BundlingConfig {
             enabled: true,
@@ -284,19 +293,30 @@ mod tests {
         let dist = tmp.path();
 
         write_file(dist, "css/reset.css", "* { margin: 0; }");
-        write_file(dist, "css/style.css", ".hero { color: red; } .unused { display: none; }");
+        write_file(
+            dist,
+            "css/style.css",
+            ".hero { color: red; } .unused { display: none; }",
+        );
         write_file(dist, "js/utils.js", "function util() {}");
         write_file(dist, "js/app.js", "util();");
-        write_file(dist, "index.html", r#"<html><head>
+        write_file(
+            dist,
+            "index.html",
+            r#"<html><head>
             <link rel="stylesheet" href="/css/reset.css">
             <link rel="stylesheet" href="/css/style.css">
         </head><body>
             <div class="hero">Hello</div>
             <script src="/js/utils.js"></script>
             <script src="/js/app.js"></script>
-        </body></html>"#);
+        </body></html>"#,
+        );
 
-        let config = BundlingConfig { enabled: true, ..Default::default() };
+        let config = BundlingConfig {
+            enabled: true,
+            ..Default::default()
+        };
         let result = bundle_assets(dist, &config, false).unwrap();
 
         assert_eq!(result.len(), 2);
@@ -332,7 +352,11 @@ mod tests {
         // Pre-existing file at bundle output path.
         write_file(dist, "css/bundle.css", "/* old content */");
         write_file(dist, "css/style.css", ".hero { color: red; }");
-        write_file(dist, "index.html", r#"<html><head><link rel="stylesheet" href="/css/style.css"></head><body><div class="hero">Hi</div></body></html>"#);
+        write_file(
+            dist,
+            "index.html",
+            r#"<html><head><link rel="stylesheet" href="/css/style.css"></head><body><div class="hero">Hi</div></body></html>"#,
+        );
 
         let config = BundlingConfig {
             enabled: true,

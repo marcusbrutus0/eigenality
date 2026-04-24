@@ -144,10 +144,7 @@ impl Plugin for StrapiPlugin {
         ))
     }
 
-    fn register_template_extensions(
-        &self,
-        env: &mut minijinja::Environment<'_>,
-    ) -> Result<()> {
+    fn register_template_extensions(&self, env: &mut minijinja::Environment<'_>) -> Result<()> {
         // Add a `strapi_media(url)` function that prepends the media base URL.
         let base = self.config.media_base_url.clone().unwrap_or_default();
         env.add_function("strapi_media", move |path: &str| -> String {
@@ -171,13 +168,11 @@ impl Plugin for StrapiPlugin {
 /// - Relative URLs in `"url"` fields → prepend media_base_url
 fn flatten_strapi_value(value: Value, media_base_url: Option<&str>) -> Value {
     match value {
-        Value::Array(arr) => {
-            Value::Array(
-                arr.into_iter()
-                    .map(|v| flatten_strapi_value(v, media_base_url))
-                    .collect(),
-            )
-        }
+        Value::Array(arr) => Value::Array(
+            arr.into_iter()
+                .map(|v| flatten_strapi_value(v, media_base_url))
+                .collect(),
+        ),
         Value::Object(mut map) => {
             // Pattern 1: { "id": ..., "attributes": { ... } }
             // Merge attributes into the parent, keeping id.
@@ -215,11 +210,7 @@ fn flatten_strapi_value(value: Value, media_base_url: Option<&str>) -> Value {
                             if s.starts_with("/uploads/") || s.starts_with("/uploads\\") {
                                 result.insert(
                                     k,
-                                    Value::String(format!(
-                                        "{}{}",
-                                        base.trim_end_matches('/'),
-                                        s
-                                    )),
+                                    Value::String(format!("{}{}", base.trim_end_matches('/'), s)),
                                 );
                                 continue;
                             }
@@ -604,10 +595,7 @@ mod tests {
         });
 
         let result = flatten_strapi_value(input, Some("http://localhost:1337/"));
-        assert_eq!(
-            result["url"],
-            "http://localhost:1337/uploads/photo.jpg"
-        );
+        assert_eq!(result["url"], "http://localhost:1337/uploads/photo.jpg");
     }
 
     #[test]
@@ -728,9 +716,7 @@ mod tests {
         let plugin = StrapiPlugin::new();
         let input = json!([{"id": 1, "attributes": {"title": "Test"}}]);
 
-        let result = plugin
-            .transform_data(input, Some("strapi"), None)
-            .unwrap();
+        let result = plugin.transform_data(input, Some("strapi"), None).unwrap();
         assert_eq!(result[0]["title"], "Test");
         assert!(result[0].get("attributes").is_none());
     }
@@ -772,8 +758,11 @@ mod tests {
         let mut env = minijinja::Environment::new();
         plugin.register_template_extensions(&mut env).unwrap();
 
-        env.add_template("test", "{{ strapi_media('https://cdn.example.com/photo.jpg') }}")
-            .unwrap();
+        env.add_template(
+            "test",
+            "{{ strapi_media('https://cdn.example.com/photo.jpg') }}",
+        )
+        .unwrap();
         let tmpl = env.get_template("test").unwrap();
         let result = tmpl.render(minijinja::context! {}).unwrap();
         assert_eq!(result, "https://cdn.example.com/photo.jpg");
@@ -896,7 +885,10 @@ mod tests {
         assert_eq!(result["id"], 1);
         assert_eq!(result["heroTitle"], "Welcome");
         assert_eq!(result["heroSubtitle"], "To my site");
-        assert_eq!(result["heroImage"]["url"], "http://cms.local/uploads/hero.jpg");
+        assert_eq!(
+            result["heroImage"]["url"],
+            "http://cms.local/uploads/hero.jpg"
+        );
         assert_eq!(result["heroImage"]["alternativeText"], "Hero image");
     }
 
@@ -948,33 +940,27 @@ mod tests {
 
     #[test]
     fn test_relation_wrapper_null_data() {
-        let map: Map<String, Value> =
-            serde_json::from_value(json!({"data": null})).unwrap();
+        let map: Map<String, Value> = serde_json::from_value(json!({"data": null})).unwrap();
         assert!(is_strapi_relation_wrapper(&map));
     }
 
     #[test]
     fn test_relation_wrapper_object_with_id() {
-        let map: Map<String, Value> =
-            serde_json::from_value(json!({"data": {"id": 1}})).unwrap();
+        let map: Map<String, Value> = serde_json::from_value(json!({"data": {"id": 1}})).unwrap();
         assert!(is_strapi_relation_wrapper(&map));
     }
 
     #[test]
     fn test_relation_wrapper_object_with_attributes() {
-        let map: Map<String, Value> = serde_json::from_value(
-            json!({"data": {"attributes": {"name": "test"}}}),
-        )
-        .unwrap();
+        let map: Map<String, Value> =
+            serde_json::from_value(json!({"data": {"attributes": {"name": "test"}}})).unwrap();
         assert!(is_strapi_relation_wrapper(&map));
     }
 
     #[test]
     fn test_relation_wrapper_array_of_objects_with_id() {
-        let map: Map<String, Value> = serde_json::from_value(
-            json!({"data": [{"id": 1}, {"id": 2}]}),
-        )
-        .unwrap();
+        let map: Map<String, Value> =
+            serde_json::from_value(json!({"data": [{"id": 1}, {"id": 2}]})).unwrap();
         assert!(is_strapi_relation_wrapper(&map));
     }
 
@@ -987,10 +973,8 @@ mod tests {
 
     #[test]
     fn test_not_relation_wrapper_extra_keys() {
-        let map: Map<String, Value> = serde_json::from_value(
-            json!({"data": {"id": 1}, "extra": "value"}),
-        )
-        .unwrap();
+        let map: Map<String, Value> =
+            serde_json::from_value(json!({"data": {"id": 1}, "extra": "value"})).unwrap();
         assert!(!is_strapi_relation_wrapper(&map));
     }
 

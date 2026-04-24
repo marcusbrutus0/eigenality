@@ -50,9 +50,7 @@ impl AssetCache {
 
         // Load all .meta files into the index.
         if cache_dir.is_dir() {
-            for entry in std::fs::read_dir(&cache_dir)
-                .wrap_err("Failed to read cache directory")?
-            {
+            for entry in std::fs::read_dir(&cache_dir).wrap_err("Failed to read cache directory")? {
                 let entry = entry?;
                 let path = entry.path();
                 if path.extension().and_then(|e| e.to_str()) == Some("meta") {
@@ -75,9 +73,9 @@ impl AssetCache {
 
     /// Get the path to the cached binary file for a URL.
     pub fn cached_file_path(&self, url: &str) -> Option<PathBuf> {
-        self.index.get(url).map(|meta| {
-            self.cache_dir.join(&meta.local_filename)
-        })
+        self.index
+            .get(url)
+            .map(|meta| self.cache_dir.join(&meta.local_filename))
     }
 
     /// Check if the cached binary file actually exists on disk.
@@ -101,16 +99,15 @@ impl AssetCache {
         content_type: Option<String>,
     ) -> Result<String> {
         // If the filename has no extension, try to derive one from content_type.
-        let local_filename: Cow<'_, str> =
-            if Path::new(local_filename).extension().is_none() {
-                if let Some(ext) = content_type.as_deref().and_then(mime_to_ext) {
-                    Cow::Owned(format!("{}.{}", local_filename, ext))
-                } else {
-                    Cow::Borrowed(local_filename)
-                }
+        let local_filename: Cow<'_, str> = if Path::new(local_filename).extension().is_none() {
+            if let Some(ext) = content_type.as_deref().and_then(mime_to_ext) {
+                Cow::Owned(format!("{}.{}", local_filename, ext))
             } else {
                 Cow::Borrowed(local_filename)
-            };
+            }
+        } else {
+            Cow::Borrowed(local_filename)
+        };
 
         // Write the binary data.
         let data_path = self.cache_dir.join(local_filename.as_ref());
@@ -165,10 +162,9 @@ impl AssetCache {
             if src.exists() {
                 std::fs::create_dir_all(dist_assets_dir)?;
                 let dst = dist_assets_dir.join(&meta.local_filename);
-                std::fs::copy(&src, &dst)
-                    .wrap_err_with(|| {
-                        format!("Failed to copy {} → {}", src.display(), dst.display())
-                    })?;
+                std::fs::copy(&src, &dst).wrap_err_with(|| {
+                    format!("Failed to copy {} → {}", src.display(), dst.display())
+                })?;
                 return Ok(Some(meta.local_filename.clone()));
             }
         }
@@ -193,10 +189,7 @@ pub fn local_filename_for_url(url: &str) -> String {
     let path_part = url.split('?').next().unwrap_or(url);
     let path_part = path_part.split('#').next().unwrap_or(path_part);
 
-    let last_segment = path_part
-        .rsplit('/')
-        .next()
-        .unwrap_or("asset");
+    let last_segment = path_part.rsplit('/').next().unwrap_or("asset");
 
     // Split into stem and extension.
     let (stem, ext) = if let Some(dot_pos) = last_segment.rfind('.') {
@@ -214,7 +207,11 @@ pub fn local_filename_for_url(url: &str) -> String {
         (sanitize_filename_part(last_segment), String::new())
     };
 
-    let stem = if stem.is_empty() { "asset".to_string() } else { stem };
+    let stem = if stem.is_empty() {
+        "asset".to_string()
+    } else {
+        stem
+    };
 
     if ext.is_empty() {
         format!("{}-{}", stem, hash)
@@ -301,7 +298,10 @@ mod tests {
     fn test_local_filename_special_chars() {
         let name = local_filename_for_url("https://example.com/my%20photo!@#.jpg");
         // Should only contain safe chars.
-        assert!(name.chars().all(|c| c.is_alphanumeric() || c == '-' || c == '_' || c == '.'));
+        assert!(
+            name.chars()
+                .all(|c| c.is_alphanumeric() || c == '-' || c == '_' || c == '.')
+        );
     }
 
     #[test]
@@ -346,7 +346,16 @@ mod tests {
         let url = "https://cms.example.com/uploads/file/abc123";
         // Filename has no extension (simulates substrukt hash-only URL).
         let filename = "abc123-deadbeef";
-        cache.store(url, b"<svg/>", filename, None, None, Some("image/svg+xml".to_string())).unwrap();
+        cache
+            .store(
+                url,
+                b"<svg/>",
+                filename,
+                None,
+                None,
+                Some("image/svg+xml".to_string()),
+            )
+            .unwrap();
 
         let meta = cache.get(url).unwrap();
         assert_eq!(meta.local_filename, "abc123-deadbeef.svg");
@@ -362,7 +371,16 @@ mod tests {
 
         let url = "https://cms.example.com/uploads/file/deadbeef";
         let filename = "deadbeef-cafebabe";
-        cache.store(url, b"\x89PNG\r\n", filename, None, None, Some("image/png".to_string())).unwrap();
+        cache
+            .store(
+                url,
+                b"\x89PNG\r\n",
+                filename,
+                None,
+                None,
+                Some("image/png".to_string()),
+            )
+            .unwrap();
 
         let meta = cache.get(url).unwrap();
         assert_eq!(meta.local_filename, "deadbeef-cafebabe.png");
@@ -376,7 +394,16 @@ mod tests {
         let url = "https://cms.example.com/images/photo.png";
         // URL already has extension so local_filename_for_url would produce "photo-<hash>.png"
         let filename = "photo-deadbeef.png";
-        cache.store(url, b"\x89PNG\r\n", filename, None, None, Some("image/png".to_string())).unwrap();
+        cache
+            .store(
+                url,
+                b"\x89PNG\r\n",
+                filename,
+                None,
+                None,
+                Some("image/png".to_string()),
+            )
+            .unwrap();
 
         let meta = cache.get(url).unwrap();
         // Should not become "photo-deadbeef.png.png"
@@ -390,7 +417,16 @@ mod tests {
 
         let url = "https://cms.example.com/uploads/file/xyz";
         let filename = "xyz-aabbccdd";
-        cache.store(url, b"data", filename, None, None, Some("application/octet-stream".to_string())).unwrap();
+        cache
+            .store(
+                url,
+                b"data",
+                filename,
+                None,
+                None,
+                Some("application/octet-stream".to_string()),
+            )
+            .unwrap();
 
         let meta = cache.get(url).unwrap();
         // Unknown MIME — no extension appended.
@@ -404,7 +440,9 @@ mod tests {
 
         let url = "https://cms.example.com/uploads/file/notype";
         let filename = "notype-11223344";
-        cache.store(url, b"data", filename, None, None, None).unwrap();
+        cache
+            .store(url, b"data", filename, None, None, None)
+            .unwrap();
 
         let meta = cache.get(url).unwrap();
         assert_eq!(meta.local_filename, "notype-11223344");
@@ -417,7 +455,16 @@ mod tests {
 
         let url = "https://cms.example.com/uploads/file/logosvg";
         let filename = "logosvg-aabbccdd"; // no ext
-        let returned = cache.store(url, b"<svg/>", filename, None, None, Some("image/svg+xml".to_string())).unwrap();
+        let returned = cache
+            .store(
+                url,
+                b"<svg/>",
+                filename,
+                None,
+                None,
+                Some("image/svg+xml".to_string()),
+            )
+            .unwrap();
 
         assert_eq!(returned, "logosvg-aabbccdd.svg");
     }

@@ -149,7 +149,12 @@ fn filter_truncate(value: &str, length: usize) -> String {
 fn filter_sort_by(value: Value, key: &str) -> Result<Value, Error> {
     let mut items: Vec<Value> = value
         .try_iter()
-        .map_err(|e| Error::new(ErrorKind::InvalidOperation, format!("sort_by requires a sequence: {}", e)))?
+        .map_err(|e| {
+            Error::new(
+                ErrorKind::InvalidOperation,
+                format!("sort_by requires a sequence: {}", e),
+            )
+        })?
         .collect();
 
     let (field, descending) = if let Some(stripped) = key.strip_prefix('-') {
@@ -175,7 +180,12 @@ fn filter_sort_by(value: Value, key: &str) -> Result<Value, Error> {
 fn filter_group_by(value: Value, key: &str) -> Result<Value, Error> {
     let items: Vec<Value> = value
         .try_iter()
-        .map_err(|e| Error::new(ErrorKind::InvalidOperation, format!("group_by requires a sequence: {}", e)))?
+        .map_err(|e| {
+            Error::new(
+                ErrorKind::InvalidOperation,
+                format!("group_by requires a sequence: {}", e),
+            )
+        })?
         .collect();
 
     let mut groups: BTreeMap<String, Vec<Value>> = BTreeMap::new();
@@ -197,9 +207,7 @@ fn filter_group_by(value: Value, key: &str) -> Result<Value, Error> {
 
     // Build a map using from_iter with string keys.
     Ok(Value::from_iter(
-        groups
-            .into_iter()
-            .map(|(k, v)| (k, Value::from(v)))
+        groups.into_iter().map(|(k, v)| (k, Value::from(v))),
     ))
 }
 
@@ -208,10 +216,16 @@ fn filter_group_by(value: Value, key: &str) -> Result<Value, Error> {
 /// Usage: `{{ data | json }}` or in `<script>var data = {{ data | json }};</script>`
 fn filter_json(value: Value) -> Result<String, Error> {
     let json_value: serde_json::Value = serde_json::to_value(&value).map_err(|e| {
-        Error::new(ErrorKind::InvalidOperation, format!("Cannot serialize to JSON: {}", e))
+        Error::new(
+            ErrorKind::InvalidOperation,
+            format!("Cannot serialize to JSON: {}", e),
+        )
     })?;
     serde_json::to_string_pretty(&json_value).map_err(|e| {
-        Error::new(ErrorKind::InvalidOperation, format!("JSON serialization error: {}", e))
+        Error::new(
+            ErrorKind::InvalidOperation,
+            format!("JSON serialization error: {}", e),
+        )
     })
 }
 
@@ -290,7 +304,8 @@ mod tests {
     #[test]
     fn test_filter_markdown_in_template() {
         let mut env = test_env();
-        env.add_template("test", "{{ content | markdown }}").unwrap();
+        env.add_template("test", "{{ content | markdown }}")
+            .unwrap();
         let tmpl = env.get_template("test").unwrap();
         let result = tmpl.render(context! { content => "# Title" }).unwrap();
         assert!(result.contains("<h1>Title</h1>"));
@@ -382,30 +397,42 @@ mod tests {
     #[test]
     fn test_filter_sort_by_in_template() {
         let mut env = test_env();
-        env.add_template("test", "{% for i in items | sort_by('name') %}{{ i.name }} {% endfor %}").unwrap();
+        env.add_template(
+            "test",
+            "{% for i in items | sort_by('name') %}{{ i.name }} {% endfor %}",
+        )
+        .unwrap();
         let tmpl = env.get_template("test").unwrap();
-        let result = tmpl.render(context! {
-            items => vec![
-                context!{ name => "Charlie" },
-                context!{ name => "Alice" },
-                context!{ name => "Bob" },
-            ]
-        }).unwrap();
+        let result = tmpl
+            .render(context! {
+                items => vec![
+                    context!{ name => "Charlie" },
+                    context!{ name => "Alice" },
+                    context!{ name => "Bob" },
+                ]
+            })
+            .unwrap();
         assert_eq!(result.trim(), "Alice Bob Charlie");
     }
 
     #[test]
     fn test_filter_sort_by_descending() {
         let mut env = test_env();
-        env.add_template("test", "{% for i in items | sort_by('-name') %}{{ i.name }} {% endfor %}").unwrap();
+        env.add_template(
+            "test",
+            "{% for i in items | sort_by('-name') %}{{ i.name }} {% endfor %}",
+        )
+        .unwrap();
         let tmpl = env.get_template("test").unwrap();
-        let result = tmpl.render(context! {
-            items => vec![
-                context!{ name => "Alice" },
-                context!{ name => "Charlie" },
-                context!{ name => "Bob" },
-            ]
-        }).unwrap();
+        let result = tmpl
+            .render(context! {
+                items => vec![
+                    context!{ name => "Alice" },
+                    context!{ name => "Charlie" },
+                    context!{ name => "Bob" },
+                ]
+            })
+            .unwrap();
         assert_eq!(result.trim(), "Charlie Bob Alice");
     }
 
@@ -418,13 +445,15 @@ mod tests {
             "{% set groups = items | group_by('cat') %}{% for k in groups | list %}{{ k }}:{{ groups[k] | length }} {% endfor %}"
         ).unwrap();
         let tmpl = env.get_template("test").unwrap();
-        let result = tmpl.render(context! {
-            items => vec![
-                context!{ name => "A", cat => "x" },
-                context!{ name => "B", cat => "y" },
-                context!{ name => "C", cat => "x" },
-            ]
-        }).unwrap();
+        let result = tmpl
+            .render(context! {
+                items => vec![
+                    context!{ name => "A", cat => "x" },
+                    context!{ name => "B", cat => "y" },
+                    context!{ name => "C", cat => "x" },
+                ]
+            })
+            .unwrap();
         // BTreeMap orders alphabetically: x, y
         assert!(result.contains("x:2"));
         assert!(result.contains("y:1"));
@@ -437,9 +466,11 @@ mod tests {
         let mut env = test_env();
         env.add_template("test", "{{ data | json }}").unwrap();
         let tmpl = env.get_template("test").unwrap();
-        let result = tmpl.render(context! {
-            data => context!{ key => "value", num => 42 }
-        }).unwrap();
+        let result = tmpl
+            .render(context! {
+                data => context!{ key => "value", num => 42 }
+            })
+            .unwrap();
         // Should be valid JSON.
         let parsed: serde_json::Value = serde_json::from_str(&result).unwrap();
         assert_eq!(parsed["key"], "value");
