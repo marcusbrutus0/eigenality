@@ -392,7 +392,8 @@ mod tests {
             localize: true,
             cdn_skip_hosts: Vec::new(),
             cdn_allow_hosts: Vec::new(),
-            images: Default::default()
+            images: Default::default(),
+            videos: Default::default(),
         }
     }
 
@@ -502,7 +503,8 @@ mod tests {
             localize: true,
             cdn_skip_hosts: vec!["mycdn.example.com".to_string()],
             cdn_allow_hosts: Vec::new(),
-            images: Default::default()
+            images: Default::default(),
+            videos: Default::default(),
         };
         assert!(should_skip_cdn("https://mycdn.example.com/assets/lib.js", &config));
     }
@@ -513,7 +515,8 @@ mod tests {
             localize: true,
             cdn_skip_hosts: Vec::new(),
             cdn_allow_hosts: vec!["cdn.jsdelivr.net".to_string()],
-            images: Default::default()
+            images: Default::default(),
+            videos: Default::default(),
         };
         // Normally this would be skipped, but allow_hosts overrides.
         assert!(!should_skip_cdn("https://cdn.jsdelivr.net/my-image.jpg", &config));
@@ -642,6 +645,7 @@ mod tests {
             cdn_skip_hosts: Vec::new(),
             cdn_allow_hosts: Vec::new(),
             images: Default::default(),
+            videos: Default::default(),
         };
         let html = r#"<img src="https://example.com/photo.jpg">"#;
 

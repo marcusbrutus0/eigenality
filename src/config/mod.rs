@@ -369,6 +369,9 @@ pub struct AssetsConfig {
     /// Image optimization configuration.
     #[serde(default)]
     pub images: ImageOptimConfig,
+    /// Video optimization configuration.
+    #[serde(default)]
+    pub videos: VideoOptimConfig,
 }
 
 impl Default for AssetsConfig {
@@ -378,6 +381,7 @@ impl Default for AssetsConfig {
             cdn_skip_hosts: Vec::new(),
             cdn_allow_hosts: Vec::new(),
             images: ImageOptimConfig::default(),
+            videos: VideoOptimConfig::default(),
         }
     }
 }
@@ -441,6 +445,52 @@ fn default_image_exclude() -> Vec<String> {
         "**/*.gif".to_string(),
     ]
 }
+
+/// Video optimization configuration.
+///
+/// Controls format conversion, compression quality, and responsive video
+/// generation.  Videos are transcoded to the target format and resized to
+/// the configured heights.  A poster image is also extracted for each variant.
+#[derive(Debug, Clone, Deserialize)]
+pub struct VideoOptimConfig {
+    /// Master switch — set to `false` to disable all video optimization.
+    #[serde(default = "default_true")]
+    pub optimize: bool,
+    /// Target output codec/format. Supported: `"vp9"`, `"h264"`.
+    #[serde(default = "default_video_format")]
+    pub format: String,
+    /// Compression quality (1–63 for VP9, 1–51 for H.264). Lower = better.
+    #[serde(default = "default_video_quality")]
+    pub quality: u8,
+    /// Responsive heights to generate.  Each source video is resized to
+    /// these heights (only if the original is taller).
+    #[serde(default = "default_video_heights")]
+    pub heights: Vec<u32>,
+    /// Glob patterns for files/paths to exclude from optimization.
+    #[serde(default)]
+    pub exclude: Vec<String>,
+    /// Quality for the poster image extracted from the first frame (1–100).
+    #[serde(default = "default_poster_quality")]
+    pub poster_quality: u8,
+}
+
+impl Default for VideoOptimConfig {
+    fn default() -> Self {
+        Self {
+            optimize: true,
+            format: default_video_format(),
+            quality: default_video_quality(),
+            heights: default_video_heights(),
+            exclude: Vec::new(),
+            poster_quality: default_poster_quality(),
+        }
+    }
+}
+
+fn default_video_format() -> String { "vp9".to_string() }
+fn default_video_quality() -> u8 { 30 }
+fn default_video_heights() -> Vec<u32> { vec![480, 720, 1080] }
+fn default_poster_quality() -> u8 { 80 }
 
 /// Configuration for critical CSS inlining.
 ///
@@ -2622,5 +2672,37 @@ host_url = ""
         let err = load_config_from_str(toml_str).unwrap_err();
         let msg = format!("{err}");
         assert!(msg.contains("host_url"), "error should mention host_url: {msg}");
+    }
+
+    #[test]
+    fn test_video_optim_config_defaults() {
+        let config = VideoOptimConfig::default();
+        assert!(config.optimize);
+        assert_eq!(config.format, "vp9");
+        assert_eq!(config.quality, 30);
+        assert_eq!(config.heights, vec![480, 720, 1080]);
+        assert!(config.exclude.is_empty());
+        assert_eq!(config.poster_quality, 80);
+    }
+
+    #[test]
+    fn test_assets_config_has_videos() {
+        let config = AssetsConfig::default();
+        assert!(config.videos.optimize);
+        assert_eq!(config.videos.format, "vp9");
+    }
+
+    #[test]
+    fn test_video_config_deserialize_partial() {
+        let toml_str = r#"
+            optimize = false
+            quality = 25
+        "#;
+        let config: VideoOptimConfig = toml::from_str(toml_str).unwrap();
+        assert!(!config.optimize);
+        assert_eq!(config.quality, 25);
+        assert_eq!(config.format, "vp9");
+        assert_eq!(config.heights, vec![480, 720, 1080]);
+        assert_eq!(config.poster_quality, 80);
     }
 }
