@@ -822,13 +822,27 @@ pub async fn optimize_video(
 }
 ```
 
-Note: the `cache_dir` field on `VideoCache` needs to be `pub(crate)` for `optimize_video` to use it for temp files. Update the field visibility:
+Add a `temp_path` method to `VideoCache` to keep encapsulation (instead of exposing `cache_dir`):
 
 ```rust
-pub struct VideoCache {
-    pub(crate) cache_dir: PathBuf,
+impl VideoCache {
+    // ... existing methods ...
+
+    /// Return a temporary file path within the cache directory.
+    pub fn temp_path(&self, name: &str) -> PathBuf {
+        self.cache_dir.join(format!("tmp-{}", name))
+    }
 }
 ```
+
+Then use `cache.temp_path(&variant_filename)` instead of `cache.cache_dir.join(...)` in `optimize_video`.
+
+Also note: the original video file is copied to dist with a content-hash filename
+(e.g., `demo-a1b2c3.mp4`) as a fallback. If asset localization already placed the
+file at `dist/assets/demo.mp4`, this creates a duplicate. The hash-named copy is
+needed for cache-busting. If this duplication is unacceptable for large videos,
+a future optimization could symlink instead of copy, or use the existing path
+as the fallback URL directly. For now, the copy approach is correct and simple.
 
 - [ ] **Step 4: Run tests**
 
@@ -844,21 +858,30 @@ git commit -m "feat: implement optimize_video with VP9 transcoding and poster ex
 
 ---
 
-### Task 6: Create video_rewrite.rs — HTML collection and rewriting
+### Task 6: Create video_rewrite.rs — HTML collection and source builder
 
 **Files:**
 - Create: `src/assets/video_rewrite.rs`
 
-- [ ] **Step 1: Write tests for video HTML rewriting**
+Uses `scraper` (already a dependency) for the collection phase to build an ordered list
+of video elements in document order. Each entry records the source URL and which form
+it uses (Form 1: `<video src>`, Form 2: `<video><source src>`). This ordered list
+drives a single-pass `lol_html` rewrite in Task 7 with an index counter, so each
+`<video>` element gets the correct poster and sources — even with multiple Form 2
+videos on the same page.
+
+- [ ] **Step 1: Write tests for video HTML collection and source builder**
 
 Create `src/assets/video_rewrite.rs` with tests first:
 
 ```rust
 //! HTML rewriting for optimized video elements.
 //!
-//! Uses `lol_html` to collect `<video>` elements, optimize them via
-//! the `videos` module, and rewrite the HTML with `<source>` elements,
-//! `poster`, and `preload` attributes.
+//! Uses `scraper` for document-order collection and `lol_html` for
+//! streaming HTML rewriting. This two-tool approach solves the problem
+//! of associating parent `<video>` elements with their child `<source>`
+//! URLs — scraper gives us the full DOM tree for collection, and
+//! lol_html gives us efficient streaming rewrite.
 
 use eyre::Result;
 use std::cell::RefCell;
@@ -867,73 +890,111 @@ use std::path::Path;
 use std::rc::Rc;
 
 use crate::config::VideoOptimConfig;
-use super::videos::{VideoCache, VideoVariants, is_excluded, optimize_video};
+use super::videos::{VideoCache, VideoVariant, VideoVariants, is_excluded, optimize_video};
 
 /// Mapping from original video URL path → generated variants.
 type VideoVariantMap = HashMap<String, VideoVariants>;
+
+/// A video element discovered during HTML collection.
+/// Records the source URL and which HTML form it uses.
+#[derive(Debug, Clone)]
+struct VideoEntry {
+    /// The video source URL (e.g., `/videos/demo.mp4`).
+    src: String,
+    /// True if the source came from `<video src="...">` (Form 1).
+    /// False if it came from `<video><source src="...">` (Form 2).
+    is_form1: bool,
+}
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn test_collect_video_srcs_form1() {
+    fn test_collect_video_entries_form1() {
         let html = r#"<html><body><video src="/videos/demo.mp4" controls></video></body></html>"#;
-        let srcs = collect_video_srcs(html).unwrap();
-        assert_eq!(srcs, vec!["/videos/demo.mp4"]);
+        let entries = collect_video_entries(html, &[]);
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].src, "/videos/demo.mp4");
+        assert!(entries[0].is_form1);
     }
 
     #[test]
-    fn test_collect_video_srcs_form2() {
+    fn test_collect_video_entries_form2() {
         let html = r#"<html><body><video controls><source src="/videos/demo.mp4" type="video/mp4"></video></body></html>"#;
-        let srcs = collect_video_srcs(html).unwrap();
-        assert_eq!(srcs, vec!["/videos/demo.mp4"]);
+        let entries = collect_video_entries(html, &[]);
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].src, "/videos/demo.mp4");
+        assert!(!entries[0].is_form1);
     }
 
     #[test]
-    fn test_collect_video_srcs_skips_external() {
+    fn test_collect_video_entries_skips_external() {
         let html = r#"<video src="https://cdn.example.com/video.mp4"></video>"#;
-        let srcs = collect_video_srcs(html).unwrap();
-        assert!(srcs.is_empty());
+        let entries = collect_video_entries(html, &[]);
+        assert!(entries.is_empty());
     }
 
     #[test]
-    fn test_collect_video_srcs_skips_data_no_optimize() {
+    fn test_collect_video_entries_skips_data_no_optimize() {
         let html = r#"<video src="/videos/demo.mp4" data-no-optimize></video>"#;
-        let srcs = collect_video_srcs(html).unwrap();
-        assert!(srcs.is_empty());
+        let entries = collect_video_entries(html, &[]);
+        assert!(entries.is_empty());
     }
 
     #[test]
-    fn test_collect_video_srcs_deduplicates() {
+    fn test_collect_video_entries_multiple_form2() {
         let html = r#"
-            <video src="/videos/demo.mp4"></video>
-            <video src="/videos/demo.mp4"></video>
+            <video controls><source src="/videos/a.mp4" type="video/mp4"></video>
+            <video controls><source src="/videos/b.mp4" type="video/mp4"></video>
         "#;
-        let srcs = collect_video_srcs(html).unwrap();
-        assert_eq!(srcs, vec!["/videos/demo.mp4"]);
+        let entries = collect_video_entries(html, &[]);
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0].src, "/videos/a.mp4");
+        assert_eq!(entries[1].src, "/videos/b.mp4");
+        assert!(!entries[0].is_form1);
+        assert!(!entries[1].is_form1);
     }
 
     #[test]
-    fn test_build_video_replacement_html() {
+    fn test_collect_video_entries_mixed_forms() {
+        let html = r#"
+            <video src="/videos/inline.mp4" controls></video>
+            <video controls><source src="/videos/sourced.mp4" type="video/mp4"></video>
+        "#;
+        let entries = collect_video_entries(html, &[]);
+        assert_eq!(entries.len(), 2);
+        assert!(entries[0].is_form1);
+        assert!(!entries[1].is_form1);
+    }
+
+    #[test]
+    fn test_collect_video_entries_respects_exclude() {
+        let html = r#"<video src="/promo/intro.mp4"></video>"#;
+        let entries = collect_video_entries(html, &["promo/*".to_string()]);
+        assert!(entries.is_empty());
+    }
+
+    #[test]
+    fn test_build_sources_html() {
         let variants = VideoVariants {
             original_width: 1920,
             original_height: 1080,
             vp9: vec![
-                super::super::videos::VideoVariant {
+                VideoVariant {
                     url_path: "/assets/demo-1080p-abc.webm".to_string(),
                     height: 1080,
                     mime_type: "video/webm".to_string(),
                     codec: "vp9".to_string(),
                 },
-                super::super::videos::VideoVariant {
+                VideoVariant {
                     url_path: "/assets/demo-720p-abc.webm".to_string(),
                     height: 720,
                     mime_type: "video/webm".to_string(),
                     codec: "vp9".to_string(),
                 },
             ],
-            original: super::super::videos::VideoVariant {
+            original: VideoVariant {
                 url_path: "/assets/demo-abc.mp4".to_string(),
                 height: 1080,
                 mime_type: "video/mp4".to_string(),
@@ -962,91 +1023,77 @@ mod tests {
 Run: `cargo test --lib assets::video_rewrite::tests`
 Expected: FAIL — functions don't exist yet.
 
-- [ ] **Step 3: Implement collect_video_srcs**
+- [ ] **Step 3: Implement collect_video_entries using scraper**
 
 Add above the `#[cfg(test)]` block:
 
 ```rust
-/// Collect all local video URLs from `<video>` elements in HTML.
+/// Collect all `<video>` elements from HTML in document order.
 ///
-/// Handles both `<video src="...">` and `<video><source src="...">` forms.
-/// Skips external URLs, data-no-optimize elements, and deduplicates.
-fn collect_video_srcs(html: &str) -> Result<Vec<String>> {
-    let srcs: Rc<RefCell<Vec<String>>> = Rc::new(RefCell::new(Vec::new()));
-    let seen: Rc<RefCell<std::collections::HashSet<String>>> =
-        Rc::new(RefCell::new(std::collections::HashSet::new()));
+/// Uses `scraper` for DOM parsing so we can associate parent `<video>`
+/// elements with their child `<source>` URLs — something lol_html's
+/// streaming model can't do reliably for Form 2 videos.
+///
+/// Returns an ordered list of `VideoEntry` where each entry records:
+/// - The source URL
+/// - Whether it's Form 1 (`<video src>`) or Form 2 (`<video><source src>`)
+///
+/// Skips: external URLs, data-no-optimize elements, excluded paths.
+fn collect_video_entries(html: &str, exclude_patterns: &[String]) -> Vec<VideoEntry> {
+    let document = scraper::Html::parse_document(html);
+    let video_selector = scraper::Selector::parse("video").unwrap();
 
-    // Track whether current <video> has data-no-optimize.
-    let skip_flag: Rc<RefCell<bool>> = Rc::new(RefCell::new(false));
+    let mut entries = Vec::new();
 
-    let srcs_video = Rc::clone(&srcs);
-    let seen_video = Rc::clone(&seen);
-    let skip_video = Rc::clone(&skip_flag);
+    for video_el in document.select(&video_selector) {
+        // Skip data-no-optimize.
+        if video_el.value().attr("data-no-optimize").is_some() {
+            continue;
+        }
 
-    let srcs_source = Rc::clone(&srcs);
-    let seen_source = Rc::clone(&seen);
-    let skip_source = Rc::clone(&skip_flag);
+        // Form 1: <video src="...">
+        if let Some(src) = video_el.value().attr("src") {
+            if should_skip_url(src) {
+                continue;
+            }
+            let check_path = src.trim_start_matches('/');
+            if is_excluded(check_path, exclude_patterns) {
+                continue;
+            }
+            entries.push(VideoEntry {
+                src: src.to_string(),
+                is_form1: true,
+            });
+            continue;
+        }
 
-    let skip_end = Rc::clone(&skip_flag);
+        // Form 2: <video><source src="...">
+        let source_selector = scraper::Selector::parse("source").unwrap();
+        for source_el in video_el.select(&source_selector) {
+            if let Some(src) = source_el.value().attr("src") {
+                if should_skip_url(src) {
+                    continue;
+                }
+                let check_path = src.trim_start_matches('/');
+                if is_excluded(check_path, exclude_patterns) {
+                    continue;
+                }
+                entries.push(VideoEntry {
+                    src: src.to_string(),
+                    is_form1: false,
+                });
+                break; // Only use the first <source> per <video>.
+            }
+        }
+    }
 
-    let mut rewriter = lol_html::HtmlRewriter::new(
-        lol_html::Settings {
-            element_content_handlers: vec![
-                lol_html::element!("video", move |el| {
-                    // Check data-no-optimize on <video>.
-                    if el.has_attribute("data-no-optimize") {
-                        *skip_video.borrow_mut() = true;
-                        return Ok(());
-                    }
-                    *skip_video.borrow_mut() = false;
+    entries
+}
 
-                    if let Some(src) = el.get_attribute("src") {
-                        if !src.starts_with("http://")
-                            && !src.starts_with("https://")
-                            && !src.starts_with("data:")
-                        {
-                            let mut seen = seen_video.borrow_mut();
-                            if !seen.contains(&src) {
-                                seen.insert(src.clone());
-                                srcs_video.borrow_mut().push(src);
-                            }
-                        }
-                    }
-                    Ok(())
-                }),
-                lol_html::element!("video source", move |el| {
-                    if *skip_source.borrow() {
-                        return Ok(());
-                    }
-                    if let Some(src) = el.get_attribute("src") {
-                        if !src.starts_with("http://")
-                            && !src.starts_with("https://")
-                            && !src.starts_with("data:")
-                        {
-                            let mut seen = seen_source.borrow_mut();
-                            if !seen.contains(&src) {
-                                seen.insert(src.clone());
-                                srcs_source.borrow_mut().push(src);
-                            }
-                        }
-                    }
-                    Ok(())
-                }),
-            ],
-            ..lol_html::Settings::new()
-        },
-        |_: &[u8]| {},
-    );
-
-    rewriter
-        .write(html.as_bytes())
-        .map_err(|e| eyre::eyre!("HTML parse error collecting video srcs: {}", e))?;
-    rewriter
-        .end()
-        .map_err(|e| eyre::eyre!("HTML parse error finalizing video src collection: {}", e))?;
-
-    let result = srcs.borrow().clone();
-    Ok(result)
+fn should_skip_url(url: &str) -> bool {
+    url.starts_with("http://")
+        || url.starts_with("https://")
+        || url.starts_with("data:")
 }
 
 /// Build the inner `<source>` elements HTML string for a rewritten `<video>`.
@@ -1080,27 +1127,29 @@ Expected: All tests PASS.
 
 ```bash
 git add src/assets/video_rewrite.rs
-git commit -m "feat: add video HTML collection and source element builder"
+git commit -m "feat: add video HTML collection (scraper) and source element builder"
 ```
 
 ---
 
-### Task 7: Implement optimize_and_rewrite_videos() — the main public function
+### Task 7: Implement optimize_and_rewrite_videos() — single-pass indexed rewrite
 
 **Files:**
 - Modify: `src/assets/video_rewrite.rs`
 
-- [ ] **Step 1: Write integration test**
+The rewrite phase uses a single lol_html pass with an index counter that increments
+for each `<video>` element encountered. The counter maps to the ordered `VideoEntry`
+list from `collect_video_entries()` (Task 6). This ensures each `<video>` gets the
+correct poster and sources — even with multiple Form 2 videos on the same page.
+
+- [ ] **Step 1: Write integration tests**
 
 Add to the `tests` module in `src/assets/video_rewrite.rs`:
 
 ```rust
 #[tokio::test]
-async fn test_optimize_and_rewrite_videos_with_ffmpeg() {
-    use super::super::videos::{check_ffmpeg, VideoCache};
-    use crate::config::VideoOptimConfig;
-
-    if check_ffmpeg().await.is_none() {
+async fn test_optimize_and_rewrite_form1_with_ffmpeg() {
+    if super::super::videos::check_ffmpeg().await.is_none() {
         eprintln!("Skipping test: ffmpeg not found on PATH");
         return;
     }
@@ -1109,7 +1158,6 @@ async fn test_optimize_and_rewrite_videos_with_ffmpeg() {
     let dist_dir = tmp.path().join("dist");
     std::fs::create_dir_all(dist_dir.join("videos")).unwrap();
 
-    // Generate a tiny test video.
     let src_path = dist_dir.join("videos").join("demo.mp4");
     let gen = tokio::process::Command::new("ffmpeg")
         .args([
@@ -1124,7 +1172,6 @@ async fn test_optimize_and_rewrite_videos_with_ffmpeg() {
     assert!(gen.status.success());
 
     let html = r#"<html><body><video src="/videos/demo.mp4" controls></video></body></html>"#;
-
     let config = VideoOptimConfig {
         optimize: true,
         format: "vp9".to_string(),
@@ -1133,22 +1180,16 @@ async fn test_optimize_and_rewrite_videos_with_ffmpeg() {
         exclude: vec![],
         poster_quality: 80,
     };
-
     let cache = VideoCache::open(tmp.path()).unwrap();
 
     let result = optimize_and_rewrite_videos(html, &config, &cache, &dist_dir).await.unwrap();
 
-    // Should have poster attribute.
     assert!(result.contains("poster="));
-    // Should have preload="none".
     assert!(result.contains(r#"preload="none""#));
-    // Should have VP9 source elements.
-    assert!(result.contains(r#"codecs=&quot;vp9&quot;"#) || result.contains("codecs"));
-    // Should have original fallback.
+    assert!(result.contains("vp9"));
     assert!(result.contains("video/mp4"));
-    // Original src attribute should be removed.
+    // Original src removed.
     assert!(!result.contains(r#"src="/videos/demo.mp4""#));
-    // controls preserved.
     assert!(result.contains("controls"));
 }
 
@@ -1158,9 +1199,9 @@ async fn test_rewrite_skips_when_disabled() {
         optimize: false,
         ..VideoOptimConfig::default()
     };
-    let cache_dir = tempfile::TempDir::new().unwrap();
-    let cache = super::super::videos::VideoCache::open(cache_dir.path()).unwrap();
-    let dist_dir = cache_dir.path().join("dist");
+    let tmp = tempfile::TempDir::new().unwrap();
+    let cache = VideoCache::open(tmp.path()).unwrap();
+    let dist_dir = tmp.path().join("dist");
 
     let html = r#"<video src="/videos/demo.mp4" controls></video>"#;
     let result = optimize_and_rewrite_videos(html, &config, &cache, &dist_dir).await.unwrap();
@@ -1169,9 +1210,7 @@ async fn test_rewrite_skips_when_disabled() {
 
 #[tokio::test]
 async fn test_rewrite_preserves_explicit_preload() {
-    use super::super::videos::check_ffmpeg;
-
-    if check_ffmpeg().await.is_none() {
+    if super::super::videos::check_ffmpeg().await.is_none() {
         eprintln!("Skipping test: ffmpeg not found on PATH");
         return;
     }
@@ -1194,6 +1233,55 @@ async fn test_rewrite_preserves_explicit_preload() {
     assert!(gen.status.success());
 
     let html = r#"<video src="/videos/bg.mp4" preload="auto" autoplay muted loop></video>"#;
+    let config = VideoOptimConfig {
+        optimize: true,
+        format: "vp9".to_string(),
+        quality: 50,
+        heights: vec![60],
+        exclude: vec![],
+        poster_quality: 80,
+    };
+    let cache = VideoCache::open(tmp.path()).unwrap();
+    let result = optimize_and_rewrite_videos(html, &config, &cache, &dist_dir).await.unwrap();
+
+    assert!(result.contains(r#"preload="auto""#));
+    assert!(result.contains("autoplay"));
+    assert!(result.contains("muted"));
+    assert!(result.contains("loop"));
+}
+
+/// Critical test: multiple Form 2 videos on same page must get correct posters.
+#[tokio::test]
+async fn test_rewrite_multiple_form2_correct_posters() {
+    if super::super::videos::check_ffmpeg().await.is_none() {
+        eprintln!("Skipping test: ffmpeg not found on PATH");
+        return;
+    }
+
+    let tmp = tempfile::TempDir::new().unwrap();
+    let dist_dir = tmp.path().join("dist");
+    std::fs::create_dir_all(dist_dir.join("videos")).unwrap();
+
+    // Generate two distinct test videos.
+    for (name, color) in [("a", "red"), ("b", "blue")] {
+        let path = dist_dir.join("videos").join(format!("{}.mp4", name));
+        let gen = tokio::process::Command::new("ffmpeg")
+            .args([
+                "-y", "-f", "lavfi", "-i",
+                &format!("color=c={}:size=80x60:duration=0.5:rate=1", color),
+                "-c:v", "libx264", "-pix_fmt", "yuv420p",
+            ])
+            .arg(&path)
+            .output()
+            .await
+            .expect("Failed to generate test video");
+        assert!(gen.status.success());
+    }
+
+    let html = r#"<html><body>
+        <video controls><source src="/videos/a.mp4" type="video/mp4"></video>
+        <video controls><source src="/videos/b.mp4" type="video/mp4"></video>
+    </body></html>"#;
 
     let config = VideoOptimConfig {
         optimize: true,
@@ -1203,16 +1291,21 @@ async fn test_rewrite_preserves_explicit_preload() {
         exclude: vec![],
         poster_quality: 80,
     };
-
-    let cache = super::super::videos::VideoCache::open(tmp.path()).unwrap();
+    let cache = VideoCache::open(tmp.path()).unwrap();
     let result = optimize_and_rewrite_videos(html, &config, &cache, &dist_dir).await.unwrap();
 
-    // Explicit preload="auto" should be preserved, not overridden.
-    assert!(result.contains(r#"preload="auto""#));
-    // Other attributes preserved.
-    assert!(result.contains("autoplay"));
-    assert!(result.contains("muted"));
-    assert!(result.contains("loop"));
+    // Both videos should have poster attributes.
+    let poster_count = result.matches("poster=").count();
+    assert_eq!(poster_count, 2, "Expected 2 poster attributes, got {}", poster_count);
+
+    // Poster URLs should be different (different source videos).
+    let doc = scraper::Html::parse_document(&result);
+    let sel = scraper::Selector::parse("video").unwrap();
+    let posters: Vec<String> = doc.select(&sel)
+        .filter_map(|el| el.value().attr("poster").map(String::from))
+        .collect();
+    assert_eq!(posters.len(), 2);
+    assert_ne!(posters[0], posters[1], "Form 2 videos got the same poster — bug!");
 }
 ```
 
@@ -1221,16 +1314,22 @@ async fn test_rewrite_preserves_explicit_preload() {
 Run: `cargo test --lib assets::video_rewrite::tests::test_optimize_and_rewrite`
 Expected: FAIL — `optimize_and_rewrite_videos` does not exist.
 
-- [ ] **Step 3: Implement optimize_and_rewrite_videos**
+- [ ] **Step 3: Implement optimize_and_rewrite_videos with single-pass indexed rewrite**
 
 Add above the `#[cfg(test)]` block in `src/assets/video_rewrite.rs`:
 
 ```rust
 /// Optimize videos and rewrite `<video>` elements in HTML.
 ///
-/// Two-phase approach:
-/// 1. Collect all local `<video>` src URLs.
-/// 2. Optimize each video (transcode, poster, cache) and rewrite HTML.
+/// Phase 1 (scraper): Collect all `<video>` entries in document order, recording
+/// the source URL and form (Form 1 vs Form 2) for each.
+///
+/// Phase 2: Optimize each unique video (transcode, poster, cache).
+///
+/// Phase 3 (lol_html): Single-pass rewrite using an index counter. Each `<video>`
+/// element encountered increments the counter and looks up `entries[index]` to
+/// decide what attributes and sources to emit. This guarantees correct poster
+/// assignment even with multiple Form 2 videos on the same page.
 pub async fn optimize_and_rewrite_videos(
     html: &str,
     config: &VideoOptimConfig,
@@ -1241,35 +1340,33 @@ pub async fn optimize_and_rewrite_videos(
         return Ok(html.to_string());
     }
 
-    // Phase 1: Collect video sources.
-    let video_srcs = collect_video_srcs(html)?;
-    if video_srcs.is_empty() {
+    // Phase 1: Collect video entries in document order.
+    let entries = collect_video_entries(html, &config.exclude);
+    if entries.is_empty() {
         return Ok(html.to_string());
     }
 
-    // Filter by exclusion patterns and resolve to filesystem.
+    // Phase 2: Optimize each unique video source.
     let mut variant_map: VideoVariantMap = HashMap::new();
-    for src in &video_srcs {
-        let check_path = src.trim_start_matches('/');
-        if is_excluded(check_path, &config.exclude) {
-            tracing::debug!("Video excluded from optimization: {}", src);
+    for entry in &entries {
+        if variant_map.contains_key(&entry.src) {
             continue;
         }
 
-        let fs_path = super::images::url_to_dist_path(src, dist_dir);
+        let fs_path = super::images::url_to_dist_path(&entry.src, dist_dir);
         if !fs_path.exists() {
             tracing::warn!("Video file not found, skipping: {}", fs_path.display());
             continue;
         }
 
-        let url_prefix = super::images::url_dir_prefix(src);
+        let url_prefix = super::images::url_dir_prefix(&entry.src);
 
         match optimize_video(&fs_path, &url_prefix, config, cache, dist_dir).await {
             Ok(variants) => {
-                variant_map.insert(src.clone(), variants);
+                variant_map.insert(entry.src.clone(), variants);
             }
             Err(e) => {
-                tracing::warn!("Failed to optimize video {}: {}", src, e);
+                tracing::warn!("Failed to optimize video {}: {}", entry.src, e);
             }
         }
     }
@@ -1278,93 +1375,107 @@ pub async fn optimize_and_rewrite_videos(
         return Ok(html.to_string());
     }
 
-    // Phase 2: Rewrite HTML.
-    rewrite_video_elements(html, &variant_map)
+    // Phase 3: Single-pass rewrite with indexed lookup.
+    rewrite_video_elements(html, &entries, &variant_map)
 }
 
-/// Rewrite `<video>` elements in HTML using the variant map.
-fn rewrite_video_elements(html: &str, variant_map: &VideoVariantMap) -> Result<String> {
+/// Rewrite `<video>` elements in a single lol_html pass.
+///
+/// Uses an index counter that increments for each `<video>` element.
+/// The counter maps to the ordered `entries` list from `collect_video_entries()`,
+/// which tells us the source URL and form for each video.
+fn rewrite_video_elements(
+    html: &str,
+    entries: &[VideoEntry],
+    variant_map: &VideoVariantMap,
+) -> Result<String> {
     let output = Rc::new(RefCell::new(Vec::new()));
     let output_write = Rc::clone(&output);
 
-    // Track which <video> elements we're currently rewriting.
-    let active_src: Rc<RefCell<Option<String>>> = Rc::new(RefCell::new(None));
-    let active_video = Rc::clone(&active_src);
-    let active_source = Rc::clone(&active_src);
+    let video_index: Rc<RefCell<usize>> = Rc::new(RefCell::new(0));
+    let vi_video = Rc::clone(&video_index);
+    let vi_source = Rc::clone(&video_index);
 
-    let variant_map_rc: Rc<VideoVariantMap> = Rc::new(variant_map.clone());
-    let vm_video = Rc::clone(&variant_map_rc);
-    let vm_source = Rc::clone(&variant_map_rc);
+    let entries_rc: Rc<Vec<VideoEntry>> = Rc::new(entries.to_vec());
+    let entries_video = Rc::clone(&entries_rc);
+    let entries_source = Rc::clone(&entries_rc);
+
+    let vm = Rc::new(variant_map.clone());
+    let vm_video = Rc::clone(&vm);
+    let vm_source = Rc::clone(&vm);
+
+    // Track whether the current <video> was handled (Form 1 with variants).
+    let current_handled: Rc<RefCell<bool>> = Rc::new(RefCell::new(false));
+    let ch_video = Rc::clone(&current_handled);
+    let ch_source = Rc::clone(&current_handled);
 
     let mut rewriter = lol_html::HtmlRewriter::new(
         lol_html::Settings {
             element_content_handlers: vec![
                 lol_html::element!("video", move |el| {
-                    // Determine the video src (from attribute or child source).
-                    let src = el.get_attribute("src");
+                    let idx = *vi_video.borrow();
+                    *vi_video.borrow_mut() = idx + 1;
+                    *ch_video.borrow_mut() = false;
 
-                    let matching_src = src.as_ref().and_then(|s| {
-                        if vm_video.contains_key(s.as_str()) {
-                            Some(s.clone())
-                        } else {
-                            None
-                        }
-                    });
+                    if idx >= entries_video.len() {
+                        return Ok(());
+                    }
 
-                    if let Some(ref src_val) = matching_src {
-                        let variants = &vm_video[src_val.as_str()];
+                    let entry = &entries_video[idx];
+                    let variants = match vm_video.get(&entry.src) {
+                        Some(v) => v,
+                        None => return Ok(()),
+                    };
 
-                        // Remove src attribute (content moves to <source> children).
+                    if entry.is_form1 {
+                        // Form 1: remove src, add poster/preload, prepend sources.
                         el.remove_attribute("src");
-
-                        // Add poster.
                         el.set_attribute("poster", &variants.poster_url)
-                            .map_err(|e| eyre::eyre!("Failed to set poster: {}", e))?;
-
-                        // Set preload="none" unless explicitly set.
+                            .map_err(|e| eyre::eyre!("{}", e))?;
                         if el.get_attribute("preload").is_none() {
                             el.set_attribute("preload", "none")
-                                .map_err(|e| eyre::eyre!("Failed to set preload: {}", e))?;
+                                .map_err(|e| eyre::eyre!("{}", e))?;
                         }
-
-                        // Strip data-no-optimize if present.
                         el.remove_attribute("data-no-optimize");
-
-                        // Prepend source elements as first children.
                         let sources = build_sources_html(variants);
                         el.prepend(&sources, lol_html::html_content::ContentType::Html);
-
-                        *active_video.borrow_mut() = Some(src_val.clone());
+                        *ch_video.borrow_mut() = true;
                     } else {
-                        // No src attribute — might have <source> children.
-                        // We'll check in the source handler.
-                        *active_video.borrow_mut() = None;
+                        // Form 2: add poster/preload to parent <video>.
+                        // Child <source> replacement happens in the source handler.
+                        el.set_attribute("poster", &variants.poster_url)
+                            .map_err(|e| eyre::eyre!("{}", e))?;
+                        if el.get_attribute("preload").is_none() {
+                            el.set_attribute("preload", "none")
+                                .map_err(|e| eyre::eyre!("{}", e))?;
+                        }
+                        el.remove_attribute("data-no-optimize");
                     }
 
                     Ok(())
                 }),
-                // Handle <source> children inside <video> — for Form 2 and cleanup.
                 lol_html::element!("video source", move |el| {
+                    if *ch_source.borrow() {
+                        // Parent was Form 1 — remove original <source> children.
+                        el.remove();
+                        return Ok(());
+                    }
+
+                    // Form 2: check if this <source> matches the current entry.
+                    // Index was already incremented in the <video> handler,
+                    // so the current entry is at idx - 1.
+                    let idx = vi_source.borrow().checked_sub(1).unwrap_or(0);
+                    if idx >= entries_source.len() {
+                        return Ok(());
+                    }
+
+                    let entry = &entries_source[idx];
                     if let Some(src) = el.get_attribute("src") {
-                        if let Some(variants) = vm_source.get(src.as_str()) {
-                            // This is Form 2: <video><source src="..."></video>.
-                            // If we haven't already handled this via <video src>,
-                            // we need to set attributes on the parent.
-                            // But lol_html doesn't give us parent access from a child handler.
-                            // Instead, we replace this <source> with the full source set
-                            // and handle the parent <video> in a second pass if needed.
-
-                            // For now: if active_src is set, this source is already
-                            // covered by the prepend — remove it.
-                            if active_source.borrow().is_some() {
-                                el.remove();
-                                return Ok(());
+                        if src == entry.src {
+                            if let Some(variants) = vm_source.get(&entry.src) {
+                                let sources = build_sources_html(variants);
+                                el.replace(&sources, lol_html::html_content::ContentType::Html);
                             }
-
-                            // Form 2: replace this <source> with the generated sources.
-                            let sources = build_sources_html(variants);
-                            el.replace(&sources, lol_html::html_content::ContentType::Html);
-                            *active_source.borrow_mut() = Some(src);
                         }
                     }
                     Ok(())
@@ -1389,169 +1500,16 @@ fn rewrite_video_elements(html: &str, variant_map: &VideoVariantMap) -> Result<S
 }
 ```
 
-Note: For Form 2 (video with `<source>` children), we need a second pass to add `poster` and `preload` to the parent `<video>`. The simplest approach: if no `<video src>` matched but a child `<source>` did, do a lightweight second rewrite pass to add attributes to the parent `<video>`. Update `optimize_and_rewrite_videos` to handle this:
-
-After the first rewrite, check if any Form 2 videos need parent attribute updates. The simplest correct implementation: during `collect_video_srcs`, also record which form each video uses. Then in the rewrite pass, handle Form 2 `<video>` elements by matching on their child source's URL. Here's the updated approach — replace the `rewrite_video_elements` function with one that handles both forms in a single pass using a lookup by source URL:
-
-```rust
-fn rewrite_video_elements(html: &str, variant_map: &VideoVariantMap) -> Result<String> {
-    // For Form 2 handling, we need to know which parent <video> elements
-    // contain <source> children that map to our variant map.
-    // Strategy: two-pass.
-    // Pass 1: rewrite <video src="..."> (Form 1) and <source> elements.
-    // Pass 2: add poster/preload to <video> parents of rewritten Form 2 sources.
-
-    let form2_srcs: Rc<RefCell<Vec<String>>> = Rc::new(RefCell::new(Vec::new()));
-    let output1 = Rc::new(RefCell::new(Vec::new()));
-    let output1_write = Rc::clone(&output1);
-
-    let vm1 = Rc::new(variant_map.clone());
-    let vm1_video = Rc::clone(&vm1);
-    let vm1_source = Rc::clone(&vm1);
-    let form2_collect = Rc::clone(&form2_srcs);
-
-    // Track whether the current <video> was handled via Form 1.
-    let handled_form1: Rc<RefCell<bool>> = Rc::new(RefCell::new(false));
-    let hf1_video = Rc::clone(&handled_form1);
-    let hf1_source = Rc::clone(&handled_form1);
-
-    let mut rewriter = lol_html::HtmlRewriter::new(
-        lol_html::Settings {
-            element_content_handlers: vec![
-                lol_html::element!("video", move |el| {
-                    *hf1_video.borrow_mut() = false;
-
-                    if let Some(src) = el.get_attribute("src") {
-                        if let Some(variants) = vm1_video.get(src.as_str()) {
-                            el.remove_attribute("src");
-                            el.set_attribute("poster", &variants.poster_url)
-                                .map_err(|e| eyre::eyre!("{}", e))?;
-                            if el.get_attribute("preload").is_none() {
-                                el.set_attribute("preload", "none")
-                                    .map_err(|e| eyre::eyre!("{}", e))?;
-                            }
-                            el.remove_attribute("data-no-optimize");
-                            let sources = build_sources_html(variants);
-                            el.prepend(&sources, lol_html::html_content::ContentType::Html);
-                            *hf1_video.borrow_mut() = true;
-                        }
-                    }
-                    Ok(())
-                }),
-                lol_html::element!("video source", move |el| {
-                    if *hf1_source.borrow() {
-                        // Parent was Form 1 — remove original <source> children.
-                        el.remove();
-                        return Ok(());
-                    }
-
-                    if let Some(src) = el.get_attribute("src") {
-                        if let Some(variants) = vm1_source.get(src.as_str()) {
-                            let sources = build_sources_html(variants);
-                            el.replace(&sources, lol_html::html_content::ContentType::Html);
-                            form2_collect.borrow_mut().push(src);
-                        }
-                    }
-                    Ok(())
-                }),
-            ],
-            ..lol_html::Settings::new()
-        },
-        move |chunk: &[u8]| {
-            output1_write.borrow_mut().extend_from_slice(chunk);
-        },
-    );
-
-    rewriter
-        .write(html.as_bytes())
-        .map_err(|e| eyre::eyre!("HTML rewrite error: {}", e))?;
-    rewriter
-        .end()
-        .map_err(|e| eyre::eyre!("HTML rewrite finalize error: {}", e))?;
-
-    let pass1_bytes = output1.borrow().clone();
-    let pass1_html = String::from_utf8(pass1_bytes)
-        .wrap_err("HTML rewrite produced invalid UTF-8")?;
-
-    // Pass 2: add poster/preload to Form 2 parent <video> elements.
-    let form2_list = form2_srcs.borrow();
-    if form2_list.is_empty() {
-        return Ok(pass1_html);
-    }
-
-    let vm2 = variant_map.clone();
-    let output2 = Rc::new(RefCell::new(Vec::new()));
-    let output2_write = Rc::clone(&output2);
-
-    // For Form 2, the <video> element itself was not modified in pass 1.
-    // We need to find <video> elements that don't have poster yet and whose
-    // content contains our rewritten sources.
-    // Simplest approach: any <video> without poster that doesn't have src.
-    let form2_variants: HashMap<String, &VideoVariants> = form2_list
-        .iter()
-        .filter_map(|src| vm2.get(src.as_str()).map(|v| (src.clone(), v)))
-        .collect();
-
-    // We know there's exactly one set of variants per Form 2 video,
-    // so we can use the first form2 source's poster as a simple heuristic.
-    // More precisely: match by checking if the rewritten content contains
-    // the variant URLs.
-    let form2_posters: Vec<(&str, &str)> = form2_variants
-        .values()
-        .map(|v| (v.vp9.first().map(|vv| vv.url_path.as_str()).unwrap_or(""), v.poster_url.as_str()))
-        .collect();
-
-    let mut rewriter2 = lol_html::HtmlRewriter::new(
-        lol_html::Settings {
-            element_content_handlers: vec![
-                lol_html::element!("video", move |el| {
-                    if el.get_attribute("poster").is_none()
-                        && el.get_attribute("src").is_none()
-                    {
-                        // This is likely a Form 2 video. Find the matching poster.
-                        for (_, poster) in &form2_posters {
-                            el.set_attribute("poster", poster)
-                                .map_err(|e| eyre::eyre!("{}", e))?;
-                            if el.get_attribute("preload").is_none() {
-                                el.set_attribute("preload", "none")
-                                    .map_err(|e| eyre::eyre!("{}", e))?;
-                            }
-                            el.remove_attribute("data-no-optimize");
-                            break;
-                        }
-                    }
-                    Ok(())
-                }),
-            ],
-            ..lol_html::Settings::new()
-        },
-        move |chunk: &[u8]| {
-            output2_write.borrow_mut().extend_from_slice(chunk);
-        },
-    );
-
-    rewriter2
-        .write(pass1_html.as_bytes())
-        .map_err(|e| eyre::eyre!("HTML rewrite pass 2 error: {}", e))?;
-    rewriter2
-        .end()
-        .map_err(|e| eyre::eyre!("HTML rewrite pass 2 finalize error: {}", e))?;
-
-    let bytes = output2.borrow().clone();
-    String::from_utf8(bytes).wrap_err("HTML rewrite pass 2 produced invalid UTF-8")
-}
-```
-
 - [ ] **Step 4: Run tests**
 
 Run: `cargo test --lib assets::video_rewrite::tests`
-Expected: All tests PASS.
+Expected: All tests PASS, including `test_rewrite_multiple_form2_correct_posters`.
 
 - [ ] **Step 5: Commit**
 
 ```bash
 git add src/assets/video_rewrite.rs
-git commit -m "feat: implement optimize_and_rewrite_videos with two-phase HTML rewriting"
+git commit -m "feat: implement optimize_and_rewrite_videos with single-pass indexed rewrite"
 ```
 
 ---
@@ -1683,10 +1641,10 @@ Note: `finalize_page_html` needs to be `async` for this `.await`. Check if it's 
 
 - [ ] **Step 4: Add video optimization to fragment processing**
 
-In `optimize_fragment_images()` (around line 1302), rename it to `optimize_fragment_assets()` or add a separate function. Add video rewriting after image rewriting for each fragment:
+In `optimize_fragment_images()` (around line 1302), rename it to `optimize_fragment_assets()` and make it `async`. **Do not use `block_on`** — calling `tokio::runtime::Handle::current().block_on()` from an async context will deadlock. Since the caller (`finalize_page_html`) is already async, just `.await` the result:
 
 ```rust
-fn optimize_fragment_assets(
+async fn optimize_fragment_assets(
     frags: &[fragments::Fragment],
     image_config: &crate::config::ImageOptimConfig,
     image_cache: &ImageCache,
@@ -1695,7 +1653,6 @@ fn optimize_fragment_assets(
     ffmpeg_available: bool,
     dist_dir: &Path,
 ) -> Result<Vec<fragments::Fragment>> {
-    let rt = tokio::runtime::Handle::current();
     let mut result = Vec::with_capacity(frags.len());
     for frag in frags {
         let optimized_html = assets::optimize_and_rewrite_images(
@@ -1712,12 +1669,12 @@ fn optimize_fragment_assets(
             dist_dir,
         )?;
         let optimized_html = if ffmpeg_available && video_config.optimize {
-            rt.block_on(assets::optimize_and_rewrite_videos(
+            assets::optimize_and_rewrite_videos(
                 &optimized_html,
                 video_config,
                 video_cache,
                 dist_dir,
-            ))?
+            ).await?
         } else {
             optimized_html
         };
@@ -1730,7 +1687,7 @@ fn optimize_fragment_assets(
 }
 ```
 
-Update the call site (around line 691) to pass the additional parameters.
+Update the call site (around line 691) to `.await` the result and pass the additional parameters.
 
 - [ ] **Step 5: Verify compilation and existing tests pass**
 
