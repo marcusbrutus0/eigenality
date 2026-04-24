@@ -146,9 +146,7 @@ pub fn video_mime_type(ext: &str) -> &'static str {
 fn codec_from_ext(ext: &str) -> String {
     match ext.to_lowercase().as_str() {
         "webm" => "vp9".into(),
-        "mp4" | "m4v" | "mov" => "h264".into(),
-        "avi" => "h264".into(),
-        "mkv" => "h264".into(),
+        "mp4" | "m4v" | "mov" | "avi" | "mkv" => "h264".into(),
         "ogv" => "theora".into(),
         _ => "unknown".into(),
     }
