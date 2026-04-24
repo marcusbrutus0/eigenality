@@ -17,6 +17,7 @@ pub mod download;
 pub mod html_rewrite;
 pub mod images;
 mod rewrite;
+pub mod videos;
 
 pub use html_rewrite::optimize_and_rewrite_images;
 pub use html_rewrite::rewrite_css_background_images;
