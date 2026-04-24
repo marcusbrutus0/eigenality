@@ -4,7 +4,7 @@
 //! extracts a poster frame as WebP, and copies the original as a fallback.
 //! Uses ffmpeg/ffprobe under the hood; falls back gracefully when unavailable.
 
-use eyre::{Result, WrapErr};
+use eyre::{Result, WrapErr, bail};
 use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
 
@@ -140,6 +140,155 @@ pub fn video_mime_type(ext: &str) -> &'static str {
     }
 }
 
+/// Derive a codec label from a file extension (best-effort, no probing).
+fn codec_from_ext(ext: &str) -> String {
+    match ext.to_lowercase().as_str() {
+        "webm" => "vp9".into(),
+        "mp4" | "m4v" | "mov" => "h264".into(),
+        "avi" => "h264".into(),
+        "mkv" => "h264".into(),
+        "ogv" => "theora".into(),
+        _ => "unknown".into(),
+    }
+}
+
+/// Compute the set of output heights from the configured tiers and the
+/// actual source height.
+///
+/// Rules:
+/// - Keep only configured heights that are strictly less than `source_height`.
+/// - Always include `source_height` itself.
+/// - Return sorted descending.
+pub fn compute_heights(configured: &[u32], source_height: u32) -> Vec<u32> {
+    let mut heights: Vec<u32> = configured
+        .iter()
+        .copied()
+        .filter(|&h| h < source_height)
+        .collect();
+    heights.push(source_height);
+    heights.sort_unstable();
+    heights.dedup();
+    heights.reverse();
+    heights
+}
+
+/// Probe the width and height of a video file using ffprobe.
+pub async fn probe_dimensions(path: &Path) -> Result<(u32, u32)> {
+    let output = tokio::process::Command::new("ffprobe")
+        .args([
+            "-v",
+            "quiet",
+            "-print_format",
+            "json",
+            "-show_streams",
+            "-select_streams",
+            "v:0",
+        ])
+        .arg(path)
+        .output()
+        .await
+        .wrap_err("Failed to run ffprobe")?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        bail!("ffprobe failed for {}: {}", path.display(), stderr);
+    }
+
+    let json: serde_json::Value =
+        serde_json::from_slice(&output.stdout).wrap_err("Failed to parse ffprobe JSON output")?;
+
+    let stream = json["streams"]
+        .as_array()
+        .and_then(|s| s.first())
+        .ok_or_else(|| eyre::eyre!("No video stream found in {}", path.display()))?;
+
+    let width = stream["width"]
+        .as_u64()
+        .ok_or_else(|| eyre::eyre!("Missing width in ffprobe output"))? as u32;
+    let height = stream["height"]
+        .as_u64()
+        .ok_or_else(|| eyre::eyre!("Missing height in ffprobe output"))? as u32;
+
+    Ok((width, height))
+}
+
+/// Transcode a video to VP9/WebM at the given height tier.
+///
+/// Uses constant-quality mode (`-crf`).  When `height < source_height` the
+/// video is scaled down (keeping aspect ratio via `-2`).
+pub async fn transcode_vp9(
+    input: &Path,
+    output: &Path,
+    height: u32,
+    crf: u8,
+    source_height: u32,
+) -> Result<()> {
+    let mut cmd = tokio::process::Command::new("ffmpeg");
+    cmd.args(["-y", "-i"]);
+    cmd.arg(input);
+    cmd.args(["-c:v", "libvpx-vp9"]);
+    cmd.args(["-crf", &crf.to_string()]);
+    cmd.args(["-b:v", "0"]);
+
+    if height < source_height {
+        cmd.args(["-vf", &format!("scale=-2:{height}")]);
+    }
+
+    cmd.args(["-c:a", "libopus", "-b:a", "128k"]);
+    cmd.arg(output);
+
+    let result = cmd
+        .output()
+        .await
+        .wrap_err("Failed to run ffmpeg for VP9 transcode")?;
+
+    if !result.status.success() {
+        let stderr = String::from_utf8_lossy(&result.stderr);
+        bail!(
+            "ffmpeg VP9 transcode failed for {}: {}",
+            input.display(),
+            stderr,
+        );
+    }
+
+    Ok(())
+}
+
+/// Extract the first frame of a video as a WebP poster image.
+pub async fn extract_poster(input: &Path, output: &Path, quality: u8) -> Result<()> {
+    let result = tokio::process::Command::new("ffmpeg")
+        .args(["-y", "-i"])
+        .arg(input)
+        .args(["-vframes", "1", "-f", "image2", "-c:v", "libwebp"])
+        .args(["-quality", &quality.to_string()])
+        .arg(output)
+        .output()
+        .await
+        .wrap_err("Failed to run ffmpeg for poster extraction")?;
+
+    if !result.status.success() {
+        let stderr = String::from_utf8_lossy(&result.stderr);
+        bail!(
+            "ffmpeg poster extraction failed for {}: {}",
+            input.display(),
+            stderr,
+        );
+    }
+
+    Ok(())
+}
+
+/// Write bytes to `path`, creating parent directories as needed.
+pub fn write_variant_file(path: &Path, data: &[u8]) -> Result<()> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)
+            .wrap_err_with(|| format!("Failed to create dir {}", parent.display()))?;
+    }
+    std::fs::write(path, data)
+        .wrap_err_with(|| format!("Failed to write video variant {}", path.display()))?;
+    Ok(())
+}
+
 // ===========================================================================
 // Tests
 // ===========================================================================
@@ -210,5 +359,24 @@ mod tests {
         if let Some(line) = &result {
             assert!(line.contains("ffmpeg"));
         }
+    }
+
+    #[test]
+    fn test_compute_heights() {
+        // 1080p source
+        assert_eq!(
+            compute_heights(&[480, 720, 1080], 1080),
+            vec![1080, 720, 480],
+        );
+        // 900p source — 1080 is dropped, 900 added
+        assert_eq!(compute_heights(&[480, 720, 1080], 900), vec![900, 720, 480],);
+        // 360p source — everything above is dropped
+        assert_eq!(compute_heights(&[480, 720, 1080], 360), vec![360],);
+    }
+
+    #[tokio::test]
+    async fn test_probe_dimensions_bad_path() {
+        let result = probe_dimensions(Path::new("/nonexistent/video.mp4")).await;
+        assert!(result.is_err());
     }
 }
