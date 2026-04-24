@@ -43,13 +43,18 @@ pub fn should_skip_url(url: &str) -> bool {
 
 /// Collect video entries from HTML in document order.
 ///
+/// Returns one slot per `<video>` element in the DOM, in document order.
+/// Slots are `None` for videos that should be skipped (data-no-optimize,
+/// external URLs, excluded paths, no usable source).  This 1:1 mapping
+/// ensures the rewrite phase (which increments unconditionally per
+/// `<video>`) stays index-aligned with the collection phase.
+///
 /// For each `<video>` element:
-/// - Skip if `data-no-optimize` attribute is present.
-/// - Form 1: `<video src="...">` — record src with `is_form1 = true`.
-/// - Form 2: no `src` attr, first `<source src="...">` child — record with
-///   `is_form1 = false`.
-/// - Skip external URLs and paths matching exclude glob patterns.
-pub fn collect_video_entries(html: &str, exclude_patterns: &[String]) -> Vec<VideoEntry> {
+/// - `None` if `data-no-optimize` attribute is present.
+/// - Form 1: `<video src="...">` — `Some(VideoEntry { is_form1: true })`.
+/// - Form 2: no `src` attr, first `<source src="...">` child — `Some(VideoEntry { is_form1: false })`.
+/// - `None` for external URLs, excluded paths, or no source found.
+pub fn collect_video_entries(html: &str, exclude_patterns: &[String]) -> Vec<Option<VideoEntry>> {
     let document = scraper::Html::parse_document(html);
     let video_sel = scraper::Selector::parse("video").expect("valid selector");
     let source_sel = scraper::Selector::parse("source").expect("valid selector");
@@ -59,22 +64,25 @@ pub fn collect_video_entries(html: &str, exclude_patterns: &[String]) -> Vec<Vid
     for video_el in document.select(&video_sel) {
         // Skip videos marked with data-no-optimize.
         if video_el.value().attr("data-no-optimize").is_some() {
+            entries.push(None);
             continue;
         }
 
         // Form 1: <video src="...">
         if let Some(src) = video_el.value().attr("src") {
             if should_skip_url(src) {
+                entries.push(None);
                 continue;
             }
             let check_path = src.trim_start_matches('/');
             if is_excluded(check_path, exclude_patterns) {
+                entries.push(None);
                 continue;
             }
-            entries.push(VideoEntry {
+            entries.push(Some(VideoEntry {
                 src: src.to_string(),
                 is_form1: true,
-            });
+            }));
             continue;
         }
 
@@ -83,18 +91,24 @@ pub fn collect_video_entries(html: &str, exclude_patterns: &[String]) -> Vec<Vid
         if let Some(source_el) = first_source {
             if let Some(src) = source_el.value().attr("src") {
                 if should_skip_url(src) {
+                    entries.push(None);
                     continue;
                 }
                 let check_path = src.trim_start_matches('/');
                 if is_excluded(check_path, exclude_patterns) {
+                    entries.push(None);
                     continue;
                 }
-                entries.push(VideoEntry {
+                entries.push(Some(VideoEntry {
                     src: src.to_string(),
                     is_form1: false,
-                });
+                }));
+                continue;
             }
         }
+
+        // No usable source found.
+        entries.push(None);
     }
 
     entries
@@ -148,15 +162,17 @@ pub async fn optimize_and_rewrite_videos(
         return Ok(html.to_string());
     }
 
-    // Phase 1: Collect entries.
+    // Phase 1: Collect entries (one slot per <video>, None for skipped).
     let entries = collect_video_entries(html, &config.exclude);
-    if entries.is_empty() {
+
+    // Check if any entries are actionable.
+    if !entries.iter().any(|e| e.is_some()) {
         return Ok(html.to_string());
     }
 
     // Phase 2: Optimize each unique source video.
     let mut variant_map: VideoVariantMap = HashMap::new();
-    for entry in &entries {
+    for entry in entries.iter().flatten() {
         if variant_map.contains_key(&entry.src) {
             continue;
         }
@@ -200,20 +216,19 @@ pub async fn optimize_and_rewrite_videos(
 
 /// Single-pass lol_html rewrite of `<video>` and child `<source>` elements.
 ///
-/// Maintains a `video_index` counter incremented for each `<video>` element
-/// that was collected (i.e., those that passed the same skip predicates used
-/// during collection). Videos that were skipped during collection (e.g.,
-/// `data-no-optimize`, external, excluded) are also skipped here so indices
-/// stay aligned.
+/// Maintains a `video_index` counter incremented **unconditionally** for
+/// every `<video>` element encountered.  The `entries` slice has one slot
+/// per `<video>` (with `None` for skipped ones), so unconditional
+/// incrementing keeps indices aligned without re-deriving skip predicates.
 pub fn rewrite_video_elements(
     html: &str,
-    entries: &[VideoEntry],
+    entries: &[Option<VideoEntry>],
     variant_map: &VideoVariantMap,
 ) -> Result<String> {
     let entries = entries.to_vec();
     let map = variant_map.clone();
 
-    // Index into `entries`, incremented for each qualifying <video>.
+    // Index into `entries`, incremented unconditionally per <video>.
     let video_index: Rc<RefCell<usize>> = Rc::new(RefCell::new(0));
 
     // Tracks state for the current <video> being processed.
@@ -244,34 +259,21 @@ pub fn rewrite_video_elements(
                     *state_for_video.borrow_mut() = None;
                     *replaced_for_video.borrow_mut() = false;
 
-                    // Check if this video was skipped during collection.
-                    // Apply the same predicates: data-no-optimize → skip entirely.
-                    if el.get_attribute("data-no-optimize").is_some() {
-                        // Not in entries — don't increment index.
-                        // Still strip the attribute for clean output.
-                        el.remove_attribute("data-no-optimize");
-                        return Ok(());
-                    }
-
-                    // Check skip predicates on the src (same as collection).
-                    // For Form 2 videos (no src), we rely on the entries list
-                    // already having filtered during collection.
-                    if let Some(s) = el.get_attribute("src") {
-                        if should_skip_url(&s) {
-                            return Ok(());
-                        }
-                    }
-
-                    // This video corresponds to entries[video_index].
+                    // Unconditionally consume the next slot.
                     let mut idx = idx_for_video.borrow_mut();
                     let current_idx = *idx;
-
-                    if current_idx >= entries_for_video.len() {
-                        return Ok(());
-                    }
-
-                    let entry = &entries_for_video[current_idx];
                     *idx += 1;
+
+                    // Look up the entry for this video.
+                    let entry = match entries_for_video.get(current_idx) {
+                        Some(Some(e)) => e,
+                        _ => {
+                            // Skipped or out of bounds — strip data-no-optimize
+                            // for clean output but don't process further.
+                            el.remove_attribute("data-no-optimize");
+                            return Ok(());
+                        }
+                    };
 
                     // Look up variants.
                     let variants = match map_for_video.get(&entry.src) {
@@ -354,8 +356,9 @@ mod tests {
         let html = r#"<html><body><video src="/assets/clip.mp4" controls></video></body></html>"#;
         let entries = collect_video_entries(html, &[]);
         assert_eq!(entries.len(), 1);
-        assert_eq!(entries[0].src, "/assets/clip.mp4");
-        assert!(entries[0].is_form1);
+        let e = entries[0].as_ref().unwrap();
+        assert_eq!(e.src, "/assets/clip.mp4");
+        assert!(e.is_form1);
     }
 
     #[test]
@@ -363,8 +366,9 @@ mod tests {
         let html = r#"<html><body><video controls><source src="/assets/clip.mp4" type="video/mp4"></video></body></html>"#;
         let entries = collect_video_entries(html, &[]);
         assert_eq!(entries.len(), 1);
-        assert_eq!(entries[0].src, "/assets/clip.mp4");
-        assert!(!entries[0].is_form1);
+        let e = entries[0].as_ref().unwrap();
+        assert_eq!(e.src, "/assets/clip.mp4");
+        assert!(!e.is_form1);
     }
 
     #[test]
@@ -372,14 +376,16 @@ mod tests {
         let html =
             r#"<html><body><video src="https://cdn.example.com/video.mp4"></video></body></html>"#;
         let entries = collect_video_entries(html, &[]);
-        assert!(entries.is_empty());
+        assert_eq!(entries.len(), 1); // one slot
+        assert!(entries[0].is_none()); // but skipped
     }
 
     #[test]
     fn test_collect_video_entries_skips_data_no_optimize() {
         let html = r#"<html><body><video src="/assets/clip.mp4" data-no-optimize></video></body></html>"#;
         let entries = collect_video_entries(html, &[]);
-        assert!(entries.is_empty());
+        assert_eq!(entries.len(), 1); // one slot
+        assert!(entries[0].is_none()); // but skipped
     }
 
     #[test]
@@ -390,8 +396,8 @@ mod tests {
         </body></html>"#;
         let entries = collect_video_entries(html, &[]);
         assert_eq!(entries.len(), 2);
-        assert_eq!(entries[0].src, "/assets/a.mp4");
-        assert_eq!(entries[1].src, "/assets/b.mp4");
+        assert_eq!(entries[0].as_ref().unwrap().src, "/assets/a.mp4");
+        assert_eq!(entries[1].as_ref().unwrap().src, "/assets/b.mp4");
     }
 
     #[test]
@@ -402,8 +408,8 @@ mod tests {
         </body></html>"#;
         let entries = collect_video_entries(html, &[]);
         assert_eq!(entries.len(), 2);
-        assert!(entries[0].is_form1);
-        assert!(!entries[1].is_form1);
+        assert!(entries[0].as_ref().unwrap().is_form1);
+        assert!(!entries[1].as_ref().unwrap().is_form1);
     }
 
     #[test]
@@ -411,7 +417,8 @@ mod tests {
         let html = r#"<html><body><video src="/raw/clip.mp4"></video></body></html>"#;
         let patterns = vec!["raw/*".to_string()];
         let entries = collect_video_entries(html, &patterns);
-        assert!(entries.is_empty());
+        assert_eq!(entries.len(), 1); // one slot
+        assert!(entries[0].is_none()); // but skipped
     }
 
     #[test]
@@ -466,6 +473,203 @@ mod tests {
         assert!(should_skip_url("data:video/mp4;base64,abc"));
         assert!(!should_skip_url("/assets/clip.mp4"));
         assert!(!should_skip_url("assets/clip.mp4"));
+    }
+
+    // --- Rewrite unit tests (no ffmpeg needed) ---
+
+    /// Helper: build a simple VideoVariants for testing rewrite logic.
+    fn test_variants(stem: &str) -> VideoVariants {
+        use super::super::videos::VideoVariant;
+        VideoVariants {
+            original_width: 1920,
+            original_height: 1080,
+            vp9: vec![VideoVariant {
+                url_path: format!("/assets/{stem}-1080p.webm"),
+                height: 1080,
+                mime_type: "video/webm",
+                codec: "vp9".into(),
+            }],
+            original: VideoVariant {
+                url_path: format!("/assets/{stem}.mp4"),
+                height: 1080,
+                mime_type: "video/mp4",
+                codec: "h264".into(),
+            },
+            poster_url: format!("/assets/{stem}-poster.webp"),
+        }
+    }
+
+    #[test]
+    fn test_rewrite_form1_basic() {
+        let html = r#"<html><body><video src="/assets/clip.mp4" controls></video></body></html>"#;
+        let entries = vec![Some(VideoEntry {
+            src: "/assets/clip.mp4".into(),
+            is_form1: true,
+        })];
+        let mut map = VideoVariantMap::new();
+        map.insert("/assets/clip.mp4".into(), test_variants("clip"));
+
+        let result = rewrite_video_elements(html, &entries, &map).unwrap();
+
+        // src attribute removed from <video> element (no longer an attribute).
+        // The video tag should not have src= anymore, but <source> children will.
+        assert!(
+            !result.contains(r#"<video src="#),
+            "Original src should be removed from <video> tag",
+        );
+        // Poster added.
+        assert!(result.contains(r#"poster="/assets/clip-poster.webp""#));
+        // preload="none" added.
+        assert!(result.contains(r#"preload="none""#));
+        // controls preserved.
+        assert!(result.contains("controls"));
+        // VP9 source injected.
+        assert!(result.contains("clip-1080p.webm"));
+        // Original fallback source injected.
+        assert!(result.contains(r#"type="video/mp4""#));
+    }
+
+    #[test]
+    fn test_rewrite_form2_basic() {
+        let html = r#"<html><body><video><source src="/assets/clip.mp4" type="video/mp4"></video></body></html>"#;
+        let entries = vec![Some(VideoEntry {
+            src: "/assets/clip.mp4".into(),
+            is_form1: false,
+        })];
+        let mut map = VideoVariantMap::new();
+        map.insert("/assets/clip.mp4".into(), test_variants("clip"));
+
+        let result = rewrite_video_elements(html, &entries, &map).unwrap();
+
+        // Poster added.
+        assert!(result.contains(r#"poster="/assets/clip-poster.webp""#));
+        // preload="none" added.
+        assert!(result.contains(r#"preload="none""#));
+        // VP9 source present.
+        assert!(result.contains("clip-1080p.webm"));
+        // Original <source> replaced (original was type="video/mp4").
+        // The new sources include a video/mp4 fallback too.
+        assert!(result.contains(r#"type="video/mp4""#));
+    }
+
+    #[test]
+    fn test_rewrite_preserves_preload_attr() {
+        let html = r#"<html><body><video src="/assets/clip.mp4" preload="auto"></video></body></html>"#;
+        let entries = vec![Some(VideoEntry {
+            src: "/assets/clip.mp4".into(),
+            is_form1: true,
+        })];
+        let mut map = VideoVariantMap::new();
+        map.insert("/assets/clip.mp4".into(), test_variants("clip"));
+
+        let result = rewrite_video_elements(html, &entries, &map).unwrap();
+
+        // Explicit preload="auto" preserved, not overwritten.
+        assert!(result.contains(r#"preload="auto""#));
+        assert!(!result.contains(r#"preload="none""#));
+    }
+
+    #[test]
+    fn test_rewrite_skipped_video_in_middle_alignment() {
+        // Three <video> elements: first and third are valid, second is
+        // skipped (e.g., excluded or external). Verifies the third video
+        // gets its own poster, not the second entry's.
+        let html = r#"<html><body>
+            <video><source src="/assets/alpha.mp4" type="video/mp4"></video>
+            <video><source src="https://external.com/skip.mp4" type="video/mp4"></video>
+            <video><source src="/assets/beta.mp4" type="video/mp4"></video>
+        </body></html>"#;
+
+        let entries = vec![
+            Some(VideoEntry {
+                src: "/assets/alpha.mp4".into(),
+                is_form1: false,
+            }),
+            None, // skipped (external)
+            Some(VideoEntry {
+                src: "/assets/beta.mp4".into(),
+                is_form1: false,
+            }),
+        ];
+
+        let mut map = VideoVariantMap::new();
+        map.insert("/assets/alpha.mp4".into(), test_variants("alpha"));
+        map.insert("/assets/beta.mp4".into(), test_variants("beta"));
+
+        let result = rewrite_video_elements(html, &entries, &map).unwrap();
+
+        // Extract poster values.
+        let poster_re = regex::Regex::new(r#"poster="([^"]+)""#).unwrap();
+        let posters: Vec<String> = poster_re
+            .captures_iter(&result)
+            .map(|c| c[1].to_string())
+            .collect();
+
+        assert_eq!(posters.len(), 2, "Expected 2 poster attributes: {posters:?}");
+        assert!(
+            posters[0].contains("alpha"),
+            "First poster should be alpha: {}",
+            posters[0],
+        );
+        assert!(
+            posters[1].contains("beta"),
+            "Third video (second valid) should get beta poster: {}",
+            posters[1],
+        );
+    }
+
+    #[test]
+    fn test_rewrite_data_no_optimize_stripped_from_skipped() {
+        // A video with data-no-optimize: the attribute should be stripped
+        // from the output even though the video is not optimized.
+        let html = r#"<html><body><video src="/assets/clip.mp4" data-no-optimize controls></video></body></html>"#;
+        let entries = vec![None]; // skipped
+        let map = VideoVariantMap::new();
+
+        let result = rewrite_video_elements(html, &entries, &map).unwrap();
+
+        // data-no-optimize removed.
+        assert!(!result.contains("data-no-optimize"));
+        // Original src and controls preserved.
+        assert!(result.contains(r#"src="/assets/clip.mp4""#));
+        assert!(result.contains("controls"));
+    }
+
+    #[test]
+    fn test_rewrite_two_form2_different_posters() {
+        // Two Form 2 videos — verifies they each get their own poster.
+        let html = r#"<html><body>
+            <video><source src="/assets/alpha.mp4" type="video/mp4"></video>
+            <video><source src="/assets/beta.mp4" type="video/mp4"></video>
+        </body></html>"#;
+
+        let entries = vec![
+            Some(VideoEntry {
+                src: "/assets/alpha.mp4".into(),
+                is_form1: false,
+            }),
+            Some(VideoEntry {
+                src: "/assets/beta.mp4".into(),
+                is_form1: false,
+            }),
+        ];
+
+        let mut map = VideoVariantMap::new();
+        map.insert("/assets/alpha.mp4".into(), test_variants("alpha"));
+        map.insert("/assets/beta.mp4".into(), test_variants("beta"));
+
+        let result = rewrite_video_elements(html, &entries, &map).unwrap();
+
+        let poster_re = regex::Regex::new(r#"poster="([^"]+)""#).unwrap();
+        let posters: Vec<String> = poster_re
+            .captures_iter(&result)
+            .map(|c| c[1].to_string())
+            .collect();
+
+        assert_eq!(posters.len(), 2);
+        assert_ne!(posters[0], posters[1]);
+        assert!(posters[0].contains("alpha"));
+        assert!(posters[1].contains("beta"));
     }
 
     // --- Task 7: Integration tests (require ffmpeg) ---
