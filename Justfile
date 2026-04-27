@@ -1,9 +1,14 @@
+# Sync design system CSS + fonts from sibling repo
+sync-design:
+    rm -rf website/static/css/wavefunk
+    cp -r ../design/css website/static/css/wavefunk
+
 # Build the website
-website-build:
+website-build: sync-design
     cargo run -- build -p website -v
 
 # Start dev server for the website
-website-dev:
+website-dev: sync-design
     cargo run -- dev -p website -v
 
 # Run audit on the website

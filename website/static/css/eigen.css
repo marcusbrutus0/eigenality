@@ -1,0 +1,9 @@
+:root {
+  --accent: #d65d0e;
+  --accent-ink: #ffffff;
+}
+
+[data-mode="light"] {
+  --accent: #d65d0e;
+  --accent-ink: #ffffff;
+}
