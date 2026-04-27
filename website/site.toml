@@ -33,6 +33,7 @@ max_prefetch = 5
 
 [build.content_hash]
 enabled = true
+exclude = ["css/wavefunk/**"]
 
 [build.bundling]
 enabled = true
