@@ -3191,6 +3191,66 @@ minify = false
 
 // ============================================================================
 
+#[tokio::test]
+async fn test_file_linked_data() {
+    let tmp = TempDir::new().unwrap();
+    let root = tmp.path();
+
+    // site.toml
+    write(
+        root,
+        "site.toml",
+        r#"
+[site]
+name = "File Link Test"
+base_url = "http://localhost"
+
+[build]
+minify = false
+"#,
+    );
+
+    // External markdown file
+    write(root, "content/hello.md", "# Hello\n\nFrom a linked file.");
+
+    // Data file with _file reference
+    write(
+        root,
+        "_data/pages.yaml",
+        "- title: Hello\n  slug: hello\n  body_file: \"content/hello.md\"\n",
+    );
+
+    // Base template
+    write(
+        root,
+        "templates/_base.html",
+        "<!DOCTYPE html><html><body>{% block content %}{% endblock %}</body></html>",
+    );
+
+    // Dynamic page template
+    write(
+        root,
+        "templates/[page].html",
+        "---\ncollection:\n  file: \"pages.yaml\"\nslug_field: slug\nitem_as: page\n---\n{% extends \"_base.html\" %}\n{% block content %}{{ page.body | markdown }}{% endblock %}",
+    );
+
+    eigen::build::build(root, true, false, false).await.unwrap();
+
+    let output = fs::read_to_string(root.join("dist/hello.html")).unwrap();
+    assert!(
+        output.contains("<h1>Hello</h1>"),
+        "rendered page should contain markdown from linked file: {}",
+        output
+    );
+    assert!(
+        output.contains("From a linked file."),
+        "rendered page should contain body text from linked file: {}",
+        output
+    );
+}
+
+// ============================================================================
+
 /// Recursively copy a directory.
 fn copy_dir_all(src: &Path, dst: &Path) {
     fs::create_dir_all(dst).unwrap();
