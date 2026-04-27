@@ -7,6 +7,7 @@
 //! - `_data/nav.yaml`           → key `"nav"`
 //! - `_data/footer/links.yaml`  → key `"footer_links"`
 
+use super::file_links::resolve_file_links;
 use crate::config::interpolate_env_vars;
 use eyre::{Result, WrapErr};
 use serde_json::Value;
@@ -73,6 +74,8 @@ pub fn load_global_data(project_root: &Path) -> Result<HashMap<String, Value>> {
             continue;
         }
 
+        let value = resolve_file_links(value, project_root)
+            .wrap_err_with(|| format!("Failed to resolve file links in {}", path.display()))?;
         data.insert(key, value);
     }
 
@@ -219,5 +222,22 @@ mod tests {
         assert_eq!(data.len(), 1);
         assert!(data.contains_key("a_b_c"));
         assert_eq!(data["a_b_c"]["value"], "deep");
+    }
+
+    #[test]
+    fn test_file_links_resolved() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path();
+        write(root, "docs/hello.md", "# Hello from file");
+        write(
+            root,
+            "_data/pages.yaml",
+            "- title: Hello\n  content_file: \"docs/hello.md\"\n",
+        );
+
+        let data = load_global_data(root).unwrap();
+        let pages = data["pages"].as_array().unwrap();
+        assert_eq!(pages[0]["content"], "# Hello from file");
+        assert!(pages[0].get("content_file").is_none());
     }
 }
