@@ -1,13 +1,91 @@
 {% extends "_base.html" %}
 
-{% block content %}
-<div class="docs-layout">
+{% block body %}
+<div class="wf-docs-shell">
   {% block sidebar %}
-  {% include "_partials/sidebar.html" %}
+    {% include "_partials/sidebar.html" %}
   {% endblock %}
-  <div class="sidebar-overlay" id="sidebar-overlay" onclick="closeSidebar()"></div>
-  <article class="doc-content" id="doc-content">
-    {% block doc_content %}{% endblock %}
-  </article>
+
+  {% block doc_content %}
+    <div id="doc-content" class="wf-docs-content">
+      <article class="wf-prose">
+        <div class="wf-crumbs">
+          <a href="/">HOME</a><span class="sep">/</span>
+          <a href="/docs/index">DOCS</a><span class="sep">/</span>
+          {% if doc.category is defined %}
+            <span>{{ doc.category | upper }}</span><span class="sep">/</span>
+          {% endif %}
+          <span aria-current="page">{{ doc.title | upper }}</span>
+        </div>
+
+        <h1>{{ doc.title }}</h1>
+        {% if doc.description is defined and doc.description %}
+          <p class="wf-lead">{{ doc.description }}</p>
+        {% endif %}
+
+        <div id="docs-content">
+          {% block docs_body %}{% endblock %}
+        </div>
+      </article>
+      <div class="wf-docs-pager">
+        {% if doc.prev_slug is defined and doc.prev_slug %}
+          <a href="/docs/{{ doc.prev_slug }}"
+             hx-get="/_fragments/docs/{{ doc.prev_slug }}/doc_content.html"
+             hx-target="#doc-content"
+             hx-swap="outerHTML"
+             hx-push-url="/docs/{{ doc.prev_slug }}">
+            <span class="wf-docs-pager-k">&larr; PREV</span>
+            <span class="wf-docs-pager-t">{{ doc.prev_title }}</span>
+          </a>
+        {% else %}
+          <span></span>
+        {% endif %}
+        {% if doc.next_slug is defined and doc.next_slug %}
+          <a href="/docs/{{ doc.next_slug }}" class="next"
+             hx-get="/_fragments/docs/{{ doc.next_slug }}/doc_content.html"
+             hx-target="#doc-content"
+             hx-swap="outerHTML"
+             hx-push-url="/docs/{{ doc.next_slug }}">
+            <span class="wf-docs-pager-k">NEXT &rarr;</span>
+            <span class="wf-docs-pager-t">{{ doc.next_title }}</span>
+          </a>
+        {% else %}
+          <span></span>
+        {% endif %}
+      </div>
+    </div>
+  {% endblock %}
+
+  {% include "_partials/docs-toc.html" %}
 </div>
+
+<script>
+function buildToc() {
+  var content = document.getElementById('docs-content');
+  var toc = document.getElementById('docs-toc-links');
+  if (!content || !toc) return;
+  while (toc.firstChild) toc.removeChild(toc.firstChild);
+  var headings = content.querySelectorAll('h2');
+  headings.forEach(function(h) {
+    var id = h.textContent.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
+    h.id = id;
+    var a = document.createElement('a');
+    a.href = '#' + id;
+    a.textContent = h.textContent;
+    toc.appendChild(a);
+  });
+}
+buildToc();
+document.body.addEventListener('htmx:afterSettle', function() {
+  buildToc();
+  window.scrollTo(0, 0);
+});
+document.addEventListener('click', function(e) {
+  var a = e.target.closest('a[href]');
+  if (!a) return;
+  var href = a.getAttribute('href').replace(/\/+$/, '');
+  var path = window.location.pathname.replace(/\/+$/, '');
+  if (href === path) e.preventDefault();
+});
+</script>
 {% endblock %}
