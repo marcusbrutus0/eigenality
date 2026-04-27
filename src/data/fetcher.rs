@@ -80,8 +80,6 @@ pub struct DataFetcher {
     file_cache: HashMap<String, Value>,
     /// Path to the project's `_data/` directory.
     data_dir: PathBuf,
-    /// Path to the project root, used for resolving `_file` links.
-    project_root: PathBuf,
     /// HTTP client (reused across requests). `pub(crate)` so `fetch_unlocked`
     /// in `query.rs` can clone it during the check phase (before releasing the lock).
     pub(crate) client: reqwest::Client,
@@ -105,7 +103,6 @@ impl DataFetcher {
             url_cache: HashMap::new(),
             file_cache: HashMap::new(),
             data_dir: project_root.join("_data"),
-            project_root: project_root.to_path_buf(),
             client: reqwest::Client::new(),
             data_cache,
             rate_limiter,
@@ -324,7 +321,8 @@ impl DataFetcher {
             ),
         };
 
-        let value = resolve_file_links(value, &self.project_root)
+        let project_root = self.data_dir.parent().expect("data_dir is always <root>/_data");
+        let value = resolve_file_links(value, project_root)
             .wrap_err_with(|| format!("Failed to resolve file links in {}", full_path.display()))?;
 
         self.file_cache.insert(file_path.to_string(), value.clone());

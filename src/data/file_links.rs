@@ -1,5 +1,3 @@
-//! Resolve `_file` key suffix references in data values.
-
 use eyre::{Result, WrapErr, bail};
 use serde_json::Value;
 use std::path::Path;
