@@ -10,6 +10,7 @@
     <div id="doc-content" class="wf-docs-content">
       <article class="wf-prose">
         <div class="wf-crumbs">
+          <button class="wf-docs-menu-btn" onclick="toggleSidebar()" aria-label="Open navigation">&#9776;</button>
           <a href="/">HOME</a><span class="sep">/</span>
           <a href="/docs/index">DOCS</a><span class="sep">/</span>
           {% if doc.category is defined %}
@@ -27,32 +28,6 @@
           {% block docs_body %}{% endblock %}
         </div>
       </article>
-      <div class="wf-docs-pager">
-        {% if doc.prev_slug is defined and doc.prev_slug %}
-          <a href="/docs/{{ doc.prev_slug }}"
-             hx-get="/_fragments/docs/{{ doc.prev_slug }}/doc_content.html"
-             hx-target="#doc-content"
-             hx-swap="outerHTML"
-             hx-push-url="/docs/{{ doc.prev_slug }}">
-            <span class="wf-docs-pager-k">&larr; PREV</span>
-            <span class="wf-docs-pager-t">{{ doc.prev_title }}</span>
-          </a>
-        {% else %}
-          <span></span>
-        {% endif %}
-        {% if doc.next_slug is defined and doc.next_slug %}
-          <a href="/docs/{{ doc.next_slug }}" class="next"
-             hx-get="/_fragments/docs/{{ doc.next_slug }}/doc_content.html"
-             hx-target="#doc-content"
-             hx-swap="outerHTML"
-             hx-push-url="/docs/{{ doc.next_slug }}">
-            <span class="wf-docs-pager-k">NEXT &rarr;</span>
-            <span class="wf-docs-pager-t">{{ doc.next_title }}</span>
-          </a>
-        {% else %}
-          <span></span>
-        {% endif %}
-      </div>
     </div>
   {% endblock %}
 
@@ -75,17 +50,48 @@ function buildToc() {
     toc.appendChild(a);
   });
 }
+
+function addCopyButtons() {
+  document.querySelectorAll('.wf-prose pre').forEach(function(pre) {
+    if (pre.querySelector('.copy-btn')) return;
+    var btn = document.createElement('button');
+    btn.className = 'copy-btn';
+    btn.textContent = 'copy';
+    btn.addEventListener('click', function() {
+      var code = pre.querySelector('code');
+      navigator.clipboard.writeText(code ? code.textContent : pre.textContent);
+      btn.textContent = 'copied';
+      setTimeout(function() { btn.textContent = 'copy'; }, 1500);
+    });
+    pre.style.position = 'relative';
+    pre.appendChild(btn);
+  });
+}
+
+function toggleSidebar() {
+  document.getElementById('sidebar').classList.toggle('is-open');
+}
+
 buildToc();
+addCopyButtons();
+
 document.body.addEventListener('htmx:afterSettle', function() {
   buildToc();
+  addCopyButtons();
+  var main = document.getElementById('doc-content');
+  if (main) main.scrollTop = 0;
   window.scrollTo(0, 0);
 });
+
 document.addEventListener('click', function(e) {
   var a = e.target.closest('a[href]');
   if (!a) return;
   var href = a.getAttribute('href').replace(/\/+$/, '');
   var path = window.location.pathname.replace(/\/+$/, '');
   if (href === path) e.preventDefault();
+  if (a.closest('.wf-docs-side')) {
+    document.getElementById('sidebar').classList.remove('is-open');
+  }
 });
 </script>
 {% endblock %}

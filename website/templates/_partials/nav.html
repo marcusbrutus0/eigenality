@@ -1,16 +1,14 @@
-<div class="mk-nav">
-  <div class="wf-mnav" style="padding: 0;">
-    <div class="wf-wordmark">
-      <img src="/favicon.svg" alt="eigen" width="22" height="22">
-      <span class="wf-wordmark-name">EIGEN</span>
-    </div>
-    {% for item in nav %}
-      {% if item.external %}
-        <a href="{{ item.url }}" target="_blank" rel="noopener">{{ item.label }}</a>
-      {% else %}
-        <a {{ link_to(item.url) }}>{{ item.label }}</a>
-      {% endif %}
-    {% endfor %}
-    <div class="wf-mnav-spacer"></div>
+<div class="wf-mnav">
+  <div class="wf-wordmark">
+    <img src="/favicon.svg" alt="eigen" width="22" height="22">
+    <span class="wf-wordmark-name">EIGEN</span>
   </div>
+  {% for item in nav %}
+    {% if item.external %}
+      <a href="{{ item.url }}" target="_blank" rel="noopener">{{ item.label }}</a>
+    {% else %}
+      <a {{ link_to(item.url) }}>{{ item.label }}</a>
+    {% endif %}
+  {% endfor %}
+  <div class="wf-mnav-spacer"></div>
 </div>
