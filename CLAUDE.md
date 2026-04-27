@@ -24,7 +24,7 @@ Always create a git branch for the work.
 Create atomic commits for coherent work done.
 Branch does not get merged unless the feature has tests that are passing.
 Integration tests (if required, not mandatory) should be in rust as well.
-Always write docs for any new feature under `docs/<feature_name>.md` which you can later read for your own reference. These docs are for your reference.
+Always write docs for any new feature under `website/docs/<feature_name>.md` which you can later read for your own reference. These docs are for your reference and are also rendered on the eigen website via `_file` links.
 If there any updates to a feature, do not merge unless the docs for the feature are also updated.
 Finally, run `/simplify` to make the new code reasonable before commiting.
 Use `bd` to track tasks.

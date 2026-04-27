@@ -228,14 +228,14 @@ pub fn rewrite_video_elements(
     variant_map: &VideoVariantMap,
 ) -> Result<String> {
     // Index into `entries`, incremented unconditionally per <video>.
-    let video_index: Rc<RefCell<usize>> = Rc::new(RefCell::new(0));
+    let video_index = Rc::new(RefCell::new(0_usize));
 
     // State for the current <video> being processed.
     let current_state: Rc<RefCell<Option<VideoRewriteState>>> = Rc::new(RefCell::new(None));
 
     // Whether the first matching <source> within a Form 2 video has been
     // replaced already (we only replace once).
-    let source_replaced: Rc<RefCell<bool>> = Rc::new(RefCell::new(false));
+    let source_replaced = Rc::new(RefCell::new(false));
 
     let entries_for_video = entries.to_vec();
     let map_for_video = variant_map.clone();
