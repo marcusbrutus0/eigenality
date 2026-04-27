@@ -19,11 +19,6 @@
           <span aria-current="page">{{ doc.title | upper }}</span>
         </div>
 
-        <h1>{{ doc.title }}</h1>
-        {% if doc.description is defined and doc.description %}
-          <p class="wf-lead">{{ doc.description }}</p>
-        {% endif %}
-
         <div id="docs-content">
           {% block docs_body %}{% endblock %}
         </div>
