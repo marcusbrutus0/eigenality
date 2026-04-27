@@ -10,21 +10,88 @@ seo:
 schema:
   type: WebSite
 ---
-{% extends "_base.html" %}
+{% extends "_marketing.html" %}
 
 {% block title %}eigen — a static site generator that thinks in fragments{% endblock %}
 
 {% block content %}
-<section class="hero">
-  <h1 class="hero-title">eigen</h1>
-  <p class="hero-tagline">A static site generator that thinks in fragments.</p>
-  <div class="hero-actions">
-    <a href="/docs/quickstart" class="btn btn-primary">Get Started</a>
-    <a href="https://github.com/wavefunk/eigen" class="btn btn-secondary" target="_blank" rel="noopener">View on GitHub</a>
+<section class="mk-hero">
+  <div class="mk-hero-grid" aria-hidden="true"></div>
+  <div class="mk-hero-inner">
+    <div class="mk-hero-eyebrow">EIGEN &middot; STATIC SITE GENERATOR</div>
+    <h1>Static sites that think in <em>fragments</em>.</h1>
+    <p>A Rust-powered static site generator with htmx fragment navigation, data fetching from anywhere, and built-in optimization. Every template block becomes a swappable partial.</p>
+    <div class="mk-hero-cta">
+      <a href="/docs/quickstart" class="wf-btn lg primary">Get Started</a>
+      <a href="https://github.com/wavefunk/eigen" class="wf-btn lg" target="_blank" rel="noopener">View on GitHub</a>
+      <span class="sep"></span>
+      <code class="shell-line"><span class="prompt">$</span>cargo install eigen</code>
+    </div>
   </div>
-  <div class="hero-code">
-    <span class="code-label">site.toml</span>
-    <pre><code>[site]
+  <div class="mk-hero-stats">
+    <div><div class="l">FRAGMENTS</div><div class="v">&#x2713;</div></div>
+    <div><div class="l">DATA SOURCES</div><div class="v">&#x221E;</div></div>
+    <div><div class="l">BUILD</div><div class="v">ASYNC</div></div>
+    <div><div class="l">RUNTIME JS</div><div class="v">0</div></div>
+  </div>
+</section>
+
+<section class="mk-sect">
+  <div class="mk-sect-head">
+    <div>
+      <div class="mk-sect-kicker">&mdash; 01 / FEATURES</div>
+      <h2 class="mk-sect-title">Everything you need, nothing you don't.</h2>
+    </div>
+    <p class="mk-sect-sub">Templates, data fetching, optimization, and SEO — configured in one file, built in milliseconds.</p>
+  </div>
+  <div class="mk-features">
+    {% for feature in features %}
+    <div class="mk-feat">
+      <div class="mk-feat-num">&mdash; {{ "%02d" | format(loop.index) }}</div>
+      <h3 class="mk-feat-t">{{ feature.title }}</h3>
+      <p class="mk-feat-b">{{ feature.description }}</p>
+    </div>
+    {% endfor %}
+  </div>
+</section>
+
+<section class="mk-sect">
+  <div class="mk-sect-head">
+    <div>
+      <div class="mk-sect-kicker">&mdash; 02 / HOW IT WORKS</div>
+      <h2 class="mk-sect-title">Three steps to production.</h2>
+    </div>
+    <p class="mk-sect-sub">Write templates, configure data, build and deploy. No plugins, no framework lock-in.</p>
+  </div>
+  <div class="mk-steps">
+    <div class="mk-step">
+      <div class="mk-step-num">&mdash; 01</div>
+      <h3 class="mk-step-t">Write templates</h3>
+      <p class="mk-step-b">Jinja2 templates with frontmatter. Define data sources, SEO, and schema in YAML. Use blocks for fragment boundaries.</p>
+    </div>
+    <div class="mk-step">
+      <div class="mk-step-num">&mdash; 02</div>
+      <h3 class="mk-step-t">Configure data</h3>
+      <p class="mk-step-b">Pull from local YAML, REST APIs, GraphQL, or Notion. One config block per source with caching and auth built in.</p>
+    </div>
+    <div class="mk-step">
+      <div class="mk-step-num">&mdash; 03</div>
+      <h3 class="mk-step-t">Build &amp; deploy</h3>
+      <p class="mk-step-b">Async Rust pipeline renders pages, extracts fragments, optimizes assets. Deploy the dist folder to any CDN.</p>
+    </div>
+  </div>
+</section>
+
+<section class="mk-sect mk-code">
+  <div class="mk-sect-head">
+    <div>
+      <div class="mk-sect-kicker">&mdash; 03 / QUICK START</div>
+      <h2 class="mk-sect-title">Up and running in seconds.</h2>
+    </div>
+    <p class="mk-sect-sub">One config file. One build command. Zero JavaScript frameworks.</p>
+  </div>
+  <pre><code><span class="comment"># site.toml</span>
+[site]
 name = "my-site"
 base_url = "https://example.com"
 
@@ -32,57 +99,18 @@ base_url = "https://example.com"
 fragments = true
 clean_links = true
 
+<span class="comment"># Data from anywhere</span>
 [sources.api]
 url = "https://api.example.com"</code></pre>
-  </div>
 </section>
 
-<section class="section">
-  <h2 class="section-title">Features</h2>
-  <div class="features-grid">
-    {% for feature in features %}
-    <div class="feature-card">
-      <h3>{{ feature.title }}</h3>
-      <p>{{ feature.description }}</p>
-    </div>
-    {% endfor %}
+<section class="mk-sect" style="text-align: center; padding: 100px 32px;">
+  <div class="mk-sect-kicker" style="justify-content: center;">&mdash; 04 / START HERE</div>
+  <h2 class="mk-sect-title" style="max-width: none; margin: 0 auto 20px;">Build your next site with eigen.</h2>
+  <p class="mk-sect-sub" style="margin: 0 auto 32px;">One config file. Millisecond builds. Fragment navigation out of the box.</p>
+  <div style="display: flex; gap: 12px; justify-content: center;">
+    <a href="/docs/quickstart" class="wf-btn lg primary">Get Started</a>
+    <a href="/docs/index" class="wf-btn lg">Read the Docs</a>
   </div>
-</section>
-
-<section class="section">
-  <h2 class="section-title">How It Works</h2>
-  <div class="steps">
-    <div class="step">
-      <span class="step-number">01</span>
-      <h3>Write templates</h3>
-      <pre><code>{{ "<h1>" }}{{ "{{" }} post.title {{ "}}" }}{{ "</h1>" }}
-{{ "{{" }} post.body | markdown {{ "}}" }}</code></pre>
-    </div>
-    <div class="step">
-      <span class="step-number">02</span>
-      <h3>Configure data</h3>
-      <pre><code>data:
-  posts:
-    source: blog_api
-    path: /posts
-    limit: 10</code></pre>
-    </div>
-    <div class="step">
-      <span class="step-number">03</span>
-      <h3>Build &amp; deploy</h3>
-      <pre><code>$ eigen build
-  Rendered 47 pages
-  Extracted 47 fragments
-  Built in 0.8s</code></pre>
-    </div>
-  </div>
-</section>
-
-<section class="section cta">
-  <div class="cta-install">
-    <code>cargo install eigen</code>
-    <button class="cta-copy" onclick="navigator.clipboard.writeText('cargo install eigen')" aria-label="Copy install command" title="Copy to clipboard">&#x2398;</button>
-  </div>
-  <p><a href="/docs/quickstart">Read the quickstart guide &rarr;</a></p>
 </section>
 {% endblock %}
