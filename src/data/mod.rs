@@ -10,10 +10,12 @@ mod cache;
 mod fetcher;
 mod global;
 mod query;
+mod file_links;
 mod transforms;
 
 pub use cache::DataCache;
 pub use fetcher::DataFetcher;
+pub use file_links::resolve_file_links;
 
 /// Open the data cache unless `fresh` mode is active.
 ///
