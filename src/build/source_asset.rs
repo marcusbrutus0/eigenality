@@ -310,6 +310,51 @@ pub async fn store_source_assets_and_rewrite(
     Ok(result)
 }
 
+/// Build a dev proxy URL for a source asset.
+///
+/// - Same-host URLs: strip the source base path and use `/_proxy/{source}/{relative}`.
+///   The proxy handler prepends the source base URL, so only the relative tail is needed.
+/// - Cross-host URLs: use `/_proxy/{source}/__source_asset__/{full_url}`.
+pub fn build_proxy_url(source_name: &str, resolved_url: &str, source_base_url: &str) -> String {
+    let base_host = extract_host(source_base_url);
+    let url_host = extract_host(resolved_url);
+
+    if base_host == url_host {
+        let base_path = extract_path(source_base_url);
+        let resolved_path = extract_path(resolved_url);
+        let relative = resolved_path
+            .strip_prefix(base_path)
+            .unwrap_or(resolved_path);
+        let relative = relative.trim_start_matches('/');
+        format!("/_proxy/{}/{}", source_name, relative)
+    } else {
+        format!(
+            "/_proxy/{}/{}{}",
+            source_name, SOURCE_ASSET_PROXY_PREFIX, resolved_url
+        )
+    }
+}
+
+/// Extract the path portion of a URL (everything after `scheme://host[:port]`).
+pub fn extract_path(url: &str) -> &str {
+    url.find("://")
+        .and_then(|i| url[i + 3..].find('/').map(|j| &url[i + 3 + j..]))
+        .unwrap_or("/")
+}
+
+/// Extract hostname from a URL (without port).
+pub fn extract_host(url: &str) -> &str {
+    url.find("://")
+        .map(|i| &url[i + 3..])
+        .unwrap_or(url)
+        .split('/')
+        .next()
+        .unwrap_or("")
+        .split(':')
+        .next()
+        .unwrap_or("")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -616,5 +661,54 @@ mod tests {
 
         assert!(to_download.is_empty());
         assert!(already_cached.is_empty());
+    }
+
+    #[test]
+    fn build_proxy_url_same_host_relative() {
+        let result = build_proxy_url("my_cms", "https://cms.example.com/uploads/photo.jpg", "https://cms.example.com");
+        assert_eq!(result, "/_proxy/my_cms/uploads/photo.jpg");
+    }
+
+    #[test]
+    fn build_proxy_url_same_host_with_base_path() {
+        let result = build_proxy_url(
+            "cms_assets",
+            "http://localhost:4001/apps/id8nxt/uploads/file/abc123/hero.png",
+            "http://localhost:4001/apps/id8nxt/uploads/file",
+        );
+        assert_eq!(result, "/_proxy/cms_assets/abc123/hero.png");
+    }
+
+    #[test]
+    fn build_proxy_url_cross_host() {
+        let result = build_proxy_url(
+            "my_cms",
+            "https://media.example.com/photo.jpg",
+            "https://cms.example.com",
+        );
+        assert_eq!(
+            result,
+            "/_proxy/my_cms/__source_asset__/https://media.example.com/photo.jpg",
+        );
+    }
+
+    #[test]
+    fn extract_host_basic() {
+        assert_eq!(extract_host("https://cms.example.com/api"), "cms.example.com");
+    }
+
+    #[test]
+    fn extract_host_with_port() {
+        assert_eq!(extract_host("http://localhost:4001/api"), "localhost");
+    }
+
+    #[test]
+    fn extract_path_basic() {
+        assert_eq!(extract_path("https://cms.example.com/api/v1"), "/api/v1");
+    }
+
+    #[test]
+    fn extract_path_no_path() {
+        assert_eq!(extract_path("https://cms.example.com"), "/");
     }
 }

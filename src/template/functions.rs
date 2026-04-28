@@ -13,7 +13,7 @@ use minijinja::Value;
 
 use crate::build::clean_link::to_clean_link;
 use crate::build::content_hash::AssetManifest;
-use crate::build::source_asset::{SOURCE_ASSET_PROXY_PREFIX, SourceAssetCollector, resolve_url};
+use crate::build::source_asset::{SourceAssetCollector, resolve_url, build_proxy_url};
 use crate::config::SiteConfig;
 
 /// Register all custom functions on the given environment.
@@ -161,54 +161,6 @@ fn compute_fragment_path(page_path: &str, fragment_dir: &str, block: &str) -> St
     } else {
         format!("/{}/{}/{}.html", fragment_dir, stem, block)
     }
-}
-
-/// Build a dev proxy URL for a source asset.
-///
-/// - Same-host URLs: strip the source base path and use `/_proxy/{source}/{relative}`.
-///   The proxy handler prepends the source base URL, so only the relative tail is needed.
-/// - Cross-host URLs: use `/_proxy/{source}/__source_asset__/{full_url}`.
-fn build_proxy_url(source_name: &str, resolved_url: &str, source_base_url: &str) -> String {
-    let base_host = extract_host(source_base_url);
-    let url_host = extract_host(resolved_url);
-
-    if base_host == url_host {
-        // Same host — extract the path portion relative to the source base URL's path.
-        // The proxy handler prepends the full source base URL, so we only emit the
-        // portion after that base path to avoid doubling (e.g. `/api/uploads` appearing twice).
-        let base_path = extract_path(source_base_url);
-        let resolved_path = extract_path(resolved_url);
-        let relative = resolved_path
-            .strip_prefix(base_path)
-            .unwrap_or(resolved_path);
-        let relative = relative.trim_start_matches('/');
-        format!("/_proxy/{}/{}", source_name, relative)
-    } else {
-        format!(
-            "/_proxy/{}/{}{}",
-            source_name, SOURCE_ASSET_PROXY_PREFIX, resolved_url
-        )
-    }
-}
-
-/// Extract the path portion of a URL (everything after `scheme://host[:port]`).
-fn extract_path(url: &str) -> &str {
-    url.find("://")
-        .and_then(|i| url[i + 3..].find('/').map(|j| &url[i + 3 + j..]))
-        .unwrap_or("/")
-}
-
-/// Extract hostname from a URL (without port).
-fn extract_host(url: &str) -> &str {
-    url.find("://")
-        .map(|i| &url[i + 3..])
-        .unwrap_or(url)
-        .split('/')
-        .next()
-        .unwrap_or("")
-        .split(':')
-        .next()
-        .unwrap_or("")
 }
 
 #[cfg(test)]
