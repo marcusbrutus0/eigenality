@@ -17,6 +17,7 @@ mod transforms;
 pub use cache::DataCache;
 pub use fetcher::DataFetcher;
 pub use file_links::resolve_file_links;
+pub use html_urls::resolve_html_urls_in_value;
 
 /// Open the data cache unless `fresh` mode is active.
 ///
