@@ -1467,6 +1467,7 @@ mod tests {
                 url: format!("http://{}", addr),
                 headers: HashMap::new(),
                 rate_limit: None,
+                resolve_html_urls: false,
             },
         );
         let pool = no_op_pool();

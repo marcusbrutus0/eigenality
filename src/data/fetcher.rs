@@ -1107,6 +1107,7 @@ mod tests {
                 url: format!("http://127.0.0.1:{}", port),
                 headers: HashMap::new(),
                 rate_limit: None,
+                resolve_html_urls: false,
             },
         );
 
@@ -1148,6 +1149,7 @@ mod tests {
                 url: "http://api.example.com".to_string(),
                 headers: HashMap::new(),
                 rate_limit: None,
+                resolve_html_urls: false,
             },
         );
         let pool = Arc::new(RateLimiterPool::new(None, &HashMap::new()));
@@ -1180,6 +1182,7 @@ mod tests {
                 url: "http://api.example.com".to_string(),
                 headers: HashMap::new(),
                 rate_limit: None,
+                resolve_html_urls: false,
             },
         );
         let pool = Arc::new(RateLimiterPool::new(None, &HashMap::new()));
@@ -1279,6 +1282,7 @@ mod tests {
                 url: "http://api.example.com".to_string(),
                 headers: HashMap::new(),
                 rate_limit: None,
+                resolve_html_urls: false,
             },
         );
         let pool = Arc::new(RateLimiterPool::new(None, &HashMap::new()));
@@ -1335,6 +1339,7 @@ mod tests {
                 url: format!("http://{}", addr),
                 headers: HashMap::new(),
                 rate_limit: None,
+                resolve_html_urls: false,
             },
         );
         let pool = Arc::new(RateLimiterPool::new(None, &HashMap::new()));
@@ -1407,6 +1412,7 @@ mod tests {
                 url: format!("http://{}", addr),
                 headers: HashMap::new(),
                 rate_limit: None,
+                resolve_html_urls: false,
             },
         );
         let pool = Arc::new(RateLimiterPool::new(None, &HashMap::new()));
@@ -1483,6 +1489,7 @@ mod tests {
                 url: format!("http://{}", addr),
                 headers: HashMap::new(),
                 rate_limit: None,
+                resolve_html_urls: false,
             },
         );
         let pool = Arc::new(RateLimiterPool::new(None, &HashMap::new()));

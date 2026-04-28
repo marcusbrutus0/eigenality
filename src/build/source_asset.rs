@@ -424,6 +424,7 @@ mod tests {
                     h
                 },
                 rate_limit: None,
+                resolve_html_urls: false,
             },
         );
 
@@ -528,6 +529,7 @@ mod tests {
                 url: format!("http://{}", addr),
                 headers: HashMap::new(),
                 rate_limit: None,
+                resolve_html_urls: false,
             },
         );
 

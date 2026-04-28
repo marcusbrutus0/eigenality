@@ -104,6 +104,7 @@ mod tests {
             url: url.to_string(),
             headers: HashMap::new(),
             rate_limit,
+            resolve_html_urls: false,
         }
     }
 

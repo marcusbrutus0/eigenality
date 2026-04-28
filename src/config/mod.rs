@@ -868,6 +868,10 @@ pub struct SourceConfig {
     /// Overrides the global `[build] rate_limit` for this source's host.
     #[serde(default)]
     pub rate_limit: Option<u32>,
+    /// When true, root-relative URLs in HTML fields returned by this source
+    /// are resolved against the source's base URL before rendering.
+    #[serde(default)]
+    pub resolve_html_urls: bool,
 }
 
 /// Load and parse `site.toml` from the given project root.
@@ -2736,5 +2740,36 @@ host_url = ""
         assert_eq!(config.quality, 25);
         assert_eq!(config.heights, vec![480, 720, 1080]);
         assert_eq!(config.poster_quality, 80);
+    }
+
+    #[test]
+    fn source_config_resolve_html_urls_defaults_false() {
+        let toml_str = r#"
+[site]
+name = "Test"
+base_url = "https://example.com"
+
+[sources.cms]
+url = "https://cms.example.com/api"
+"#;
+        let config: SiteConfig = toml::from_str(toml_str).unwrap();
+        let source = config.sources.get("cms").unwrap();
+        assert!(!source.resolve_html_urls);
+    }
+
+    #[test]
+    fn source_config_resolve_html_urls_enabled() {
+        let toml_str = r#"
+[site]
+name = "Test"
+base_url = "https://example.com"
+
+[sources.cms]
+url = "https://cms.example.com/api"
+resolve_html_urls = true
+"#;
+        let config: SiteConfig = toml::from_str(toml_str).unwrap();
+        let source = config.sources.get("cms").unwrap();
+        assert!(source.resolve_html_urls);
     }
 }

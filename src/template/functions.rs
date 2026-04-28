@@ -588,6 +588,7 @@ mod tests {
                     auth.to_string(),
                 )]),
                 rate_limit: None,
+                resolve_html_urls: false,
             },
         );
         config

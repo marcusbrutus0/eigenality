@@ -226,6 +226,7 @@ mod tests {
                 url: "https://api.example.com".into(),
                 headers: HashMap::new(),
                 rate_limit: None,
+                resolve_html_urls: false,
             },
         );
         SiteConfig {
