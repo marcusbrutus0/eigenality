@@ -11,15 +11,19 @@
 /// EventSource auto-reconnects on its own; we only force a full page reload
 /// when a previously-established connection is permanently lost (server restart).
 const RELOAD_SCRIPT: &str = r#"<script>
-  const es = new EventSource("/_reload");
-  let wasOpen = false;
-  es.onopen = () => { wasOpen = true; };
-  es.addEventListener("reload", () => window.location.reload());
-  es.onerror = () => {
+(function() {
+  if (window.__eigen_reload) return;
+  window.__eigen_reload = true;
+  var es = new EventSource("/_reload");
+  var wasOpen = false;
+  es.onopen = function() { wasOpen = true; };
+  es.addEventListener("reload", function() { window.location.reload(); });
+  es.onerror = function() {
     if (wasOpen && es.readyState === EventSource.CLOSED) {
-      setTimeout(() => window.location.reload(), 1000);
+      setTimeout(function() { window.location.reload(); }, 1000);
     }
   };
+})();
 </script>"#;
 
 /// Inject the live-reload script into rendered HTML.
