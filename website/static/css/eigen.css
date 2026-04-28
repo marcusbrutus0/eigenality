@@ -51,9 +51,14 @@
   line-height: 1.55; font-family: var(--font-mono);
 }
 
+.mk-feat-t-link { text-decoration: none; color: inherit; }
+.mk-feat-t-link:hover .mk-feat-t { color: var(--accent); }
+
 .mk-feat-links { margin-top: auto; padding-top: 16px; }
 .mk-feat-link {
   display: block; font-family: var(--font-mono); font-size: 11px;
   letter-spacing: 0.04em; text-transform: uppercase;
-  color: var(--fg-muted); text-decoration: none; padding: 3px 0;
+  color: var(--fg-muted); text-decoration: none; padding: 4px 0;
+  border-bottom: 1px solid transparent; transition: color 0.15s, border-color 0.15s;
 }
+.mk-feat-link:hover { color: var(--accent); border-bottom-color: var(--accent); }

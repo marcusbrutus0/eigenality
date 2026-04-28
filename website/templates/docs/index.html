@@ -32,7 +32,9 @@ schema:
     {% for cat in categories %}
     <div class="mk-feat">
       <div class="mk-feat-num">&mdash; {{ "%02d" | format(loop.index) }}</div>
-      <h3 class="mk-feat-t">{{ cat.name }}</h3>
+      <a href="/docs/{{ (docs_list | selectattr('category', 'equalto', cat.name) | first).slug }}" class="mk-feat-t-link">
+        <h3 class="mk-feat-t">{{ cat.name }}</h3>
+      </a>
       <p class="mk-feat-b">{{ cat.desc }}</p>
       <div class="mk-feat-links">
         {% for d in docs_list %}
