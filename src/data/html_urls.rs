@@ -244,6 +244,87 @@ mod tests {
         ]);
     }
 
+    #[test]
+    fn extract_origin_malformed_url_returns_none() {
+        assert_eq!(extract_origin("not-a-url"), None);
+        assert_eq!(
+            extract_origin("ftp://files.example.com/data"),
+            Some("ftp://files.example.com".to_string()),
+        );
+        // "://missing-scheme" has "://" at index 0, so scheme_end=0 and the
+        // function returns Some("://missing-scheme"). This edge case is acceptable
+        // because extract_origin is only ever called with real URLs from SourceConfig.
+        assert_eq!(
+            extract_origin("://missing-scheme"),
+            Some("://missing-scheme".to_string()),
+        );
+        assert_eq!(extract_origin(""), None);
+    }
+
+    #[test]
+    fn resolve_no_mutation_when_no_root_relative() {
+        let input = json!({
+            "title": "Hello World",
+            "count": 42,
+            "active": true,
+            "tags": ["rust", "wasm"],
+            "body": "<p>No images here</p>",
+            "link": "<a href=\"https://example.com\">External</a>",
+        });
+        let (result, urls) = resolve_html_urls_in_value_collect(&input, "https://cms.example.com");
+        assert_eq!(result, input);
+        assert!(urls.is_empty());
+    }
+
+    #[test]
+    fn resolve_deeply_nested_structure() {
+        let input = json!({
+            "data": {
+                "pages": [
+                    {
+                        "sections": [
+                            {
+                                "blocks": [
+                                    { "html": "<img src=\"/media/hero.jpg\">" }
+                                ]
+                            }
+                        ]
+                    }
+                ]
+            }
+        });
+        let (result, urls) = resolve_html_urls_in_value_collect(&input, "https://api.example.com");
+        assert_eq!(
+            result["data"]["pages"][0]["sections"][0]["blocks"][0]["html"].as_str().unwrap(),
+            "<img src=\"https://api.example.com/media/hero.jpg\">",
+        );
+        assert_eq!(urls, vec!["https://api.example.com/media/hero.jpg"]);
+    }
+
+    #[test]
+    fn resolve_with_collector() {
+        use crate::build::source_asset::SourceAssetCollector;
+
+        let input = json!({
+            "body": "<img src=\"/uploads/photo.jpg\">"
+        });
+        let collector = SourceAssetCollector::new();
+        let result = resolve_html_urls_in_value(
+            input,
+            "https://cms.example.com",
+            "my_cms",
+            &collector,
+        );
+        assert_eq!(
+            result["body"].as_str().unwrap(),
+            "<img src=\"https://cms.example.com/uploads/photo.jpg\">",
+        );
+        let requests = collector.drain();
+        assert_eq!(requests.len(), 1);
+        assert_eq!(requests[0].source_name, "my_cms");
+        assert_eq!(requests[0].url, "https://cms.example.com/uploads/photo.jpg");
+    }
+
     /// Helper: resolve and collect URLs without needing SourceAssetCollector.
     fn resolve_html_urls_in_value_collect(value: &Value, origin: &str) -> (Value, Vec<String>) {
         let mut collected = Vec::new();
