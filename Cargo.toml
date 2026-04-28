@@ -55,6 +55,7 @@ hex = "0.4.3"
 tempfile = "3"
 hegel = { git = "https://github.com/hegeldev/hegel-rust", package = "hegeltest" }
 tiny_http = "0.12"
+mockito = "1"
 
 # The profile that 'dist' will build with
 [profile.dist]

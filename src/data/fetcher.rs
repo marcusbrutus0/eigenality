@@ -171,6 +171,40 @@ impl DataFetcher {
         // Apply transforms: filter → sort → limit.
         let result = apply_transforms(transformed, &query.filter, &query.sort, &query.limit);
 
+        // Resolve root-relative HTML URLs if the source has resolve_html_urls enabled.
+        let result = if let Some(ref source_name) = query.source {
+            if let Some(source) = self.sources.get(source_name) {
+                if source.resolve_html_urls {
+                    match (super::html_urls::extract_origin(&source.url), &self.source_asset_collector) {
+                        (Some(origin), Some(collector)) => {
+                            super::html_urls::resolve_html_urls_in_value(result, &origin, source_name, collector)
+                        }
+                        (None, _) => {
+                            tracing::warn!(
+                                source = source_name,
+                                url = %source.url,
+                                "resolve_html_urls enabled but could not extract origin from source URL",
+                            );
+                            result
+                        }
+                        (_, None) => {
+                            tracing::warn!(
+                                source = source_name,
+                                "resolve_html_urls enabled but no source asset collector available",
+                            );
+                            result
+                        }
+                    }
+                } else {
+                    result
+                }
+            } else {
+                result
+            }
+        } else {
+            result
+        };
+
         Ok(result)
     }
 
@@ -1463,6 +1497,116 @@ mod tests {
 
         // Value should be promoted to the in-memory url_cache.
         assert!(fetcher.url_cache.contains_key(&cache_key));
+    }
+
+    #[tokio::test]
+    async fn fetch_resolves_html_urls_when_enabled() {
+        use crate::build::source_asset::SourceAssetCollector;
+
+        let mut server = mockito::Server::new_async().await;
+        let mock = server.mock("GET", "/api/entries")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(r#"{"body": "<img src=\"/uploads/photo.jpg\">"}"#)
+            .create_async().await;
+
+        let mut sources = HashMap::new();
+        sources.insert("cms".to_string(), SourceConfig {
+            url: server.url() + "/api",
+            headers: HashMap::new(),
+            rate_limit: None,
+            resolve_html_urls: true,
+        });
+
+        let collector = SourceAssetCollector::new();
+        let pool = Arc::new(RateLimiterPool::new(None, &sources));
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("_data")).unwrap();
+
+        let mut fetcher = DataFetcher::new(
+            &sources,
+            dir.path(),
+            None,
+            pool,
+            Some(collector.clone()),
+        );
+
+        let query = DataQuery {
+            source: Some("cms".to_string()),
+            path: Some("/entries".to_string()),
+            ..Default::default()
+        };
+
+        let result = fetcher.fetch(&query, None).await.unwrap();
+
+        let body = result["body"].as_str().unwrap();
+        let expected_url = format!("{}/uploads/photo.jpg", server.url());
+        assert!(
+            body.contains(&expected_url),
+            "Expected body to contain '{}', got: '{}'",
+            expected_url,
+            body,
+        );
+
+        let requests = collector.drain();
+        assert_eq!(requests.len(), 1);
+        assert_eq!(requests[0].source_name, "cms");
+        assert_eq!(requests[0].url, expected_url);
+
+        mock.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn fetch_does_not_resolve_html_urls_when_disabled() {
+        use crate::build::source_asset::SourceAssetCollector;
+
+        let mut server = mockito::Server::new_async().await;
+        let mock = server.mock("GET", "/api/entries")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(r#"{"body": "<img src=\"/uploads/photo.jpg\">"}"#)
+            .create_async().await;
+
+        let mut sources = HashMap::new();
+        sources.insert("cms".to_string(), SourceConfig {
+            url: server.url() + "/api",
+            headers: HashMap::new(),
+            rate_limit: None,
+            resolve_html_urls: false,
+        });
+
+        let collector = SourceAssetCollector::new();
+        let pool = Arc::new(RateLimiterPool::new(None, &sources));
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("_data")).unwrap();
+
+        let mut fetcher = DataFetcher::new(
+            &sources,
+            dir.path(),
+            None,
+            pool,
+            Some(collector.clone()),
+        );
+
+        let query = DataQuery {
+            source: Some("cms".to_string()),
+            path: Some("/entries".to_string()),
+            ..Default::default()
+        };
+
+        let result = fetcher.fetch(&query, None).await.unwrap();
+
+        let body = result["body"].as_str().unwrap();
+        assert_eq!(
+            body,
+            r#"<img src="/uploads/photo.jpg">"#,
+            "URLs should NOT be resolved when resolve_html_urls is false",
+        );
+
+        let requests = collector.drain();
+        assert!(requests.is_empty(), "No asset requests when disabled");
+
+        mock.assert_async().await;
     }
 
     /// `store_source_result` with a 304 and a corrupt disk body returns `StoreResult::RetryNeeded`.
