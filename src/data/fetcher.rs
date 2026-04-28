@@ -74,7 +74,8 @@ pub async fn execute_source_request(
 /// Fetches and caches data from local files and remote HTTP sources.
 pub struct DataFetcher {
     /// Source definitions from `site.toml`.
-    sources: HashMap<String, SourceConfig>,
+    /// `pub(crate)` so `fetch_unlocked` in `query.rs` can read resolve_html_urls config.
+    pub(crate) sources: HashMap<String, SourceConfig>,
     /// Cache for HTTP responses keyed by full URL.
     url_cache: HashMap<String, Value>,
     /// Cache for local file data keyed by file path (relative to `_data/`).

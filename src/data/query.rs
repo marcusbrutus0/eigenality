@@ -23,6 +23,7 @@ static ENV_VAR_RE: LazyLock<Regex> =
 
 static REMAINING_INTERP_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\{\{.*?\}\}").unwrap());
 
+use crate::build::source_asset::SourceAssetCollector;
 use crate::frontmatter::{DataQuery, Frontmatter};
 use crate::plugins::registry::PluginRegistry;
 
@@ -509,17 +510,35 @@ async fn fetch_unlocked(
     let path = query.path.as_deref().unwrap_or("");
 
     // Phase 1: check cache under lock; clone Arc handles for HTTP.
-    let (check, client, rate_limiter) = {
+    let (check, client, rate_limiter, html_url_ctx) = {
         let f = fetcher.lock().await;
         let check = f.check_source_cache(source_name, path, &query.method, query.body.as_ref())?;
         let client = f.client.clone();
         let rate_limiter = Arc::clone(&f.rate_limiter);
-        (check, client, rate_limiter)
+        let html_url_ctx = f.sources.get(source_name)
+            .filter(|s| s.resolve_html_urls)
+            .and_then(|s| {
+                let origin = match crate::data::html_urls::extract_origin(&s.url) {
+                    Some(o) => o,
+                    None => {
+                        tracing::warn!(
+                            source = source_name,
+                            url = %s.url,
+                            "resolve_html_urls enabled but could not extract origin from source URL",
+                        );
+                        return None;
+                    }
+                };
+                let collector = f.source_asset_collector.clone()?;
+                Some((origin, collector))
+            });
+        (check, client, rate_limiter, html_url_ctx)
     }; // lock released here
 
     let (cache_key, full_url, mut headers) = match check {
         SourceCacheCheck::Hit(value) => {
-            return apply_post_fetch(value, query, plugin_registry);
+            let value = apply_post_fetch(value, query, plugin_registry)?;
+            return Ok(apply_html_url_resolution(value, source_name, &html_url_ctx));
         }
         SourceCacheCheck::Miss {
             cache_key,
@@ -549,7 +568,8 @@ async fn fetch_unlocked(
 
         match store_result {
             StoreResult::Value(value) => {
-                return apply_post_fetch(value, query, plugin_registry);
+                let value = apply_post_fetch(value, query, plugin_registry)?;
+                return Ok(apply_html_url_resolution(value, source_name, &html_url_ctx));
             }
             StoreResult::RetryNeeded { fresh_headers } => {
                 // Corrupt 304 disk cache — retry HTTP without the lock.
@@ -565,6 +585,19 @@ async fn fetch_unlocked(
                 .await?;
             }
         }
+    }
+}
+
+fn apply_html_url_resolution(
+    value: Value,
+    source_name: &str,
+    ctx: &Option<(String, SourceAssetCollector)>,
+) -> Value {
+    match ctx {
+        Some((origin, collector)) => {
+            crate::data::html_urls::resolve_html_urls_in_value(value, origin, source_name, collector)
+        }
+        None => value,
     }
 }
 
@@ -1509,5 +1542,54 @@ mod tests {
 
         assert_eq!(data1["items"], json!([{"id": 1}]));
         assert_eq!(data2["items"], json!([{"id": 1}]));
+    }
+
+    #[tokio::test]
+    async fn fetch_unlocked_resolves_html_urls() {
+        use crate::build::source_asset::SourceAssetCollector;
+
+        let mut server = mockito::Server::new_async().await;
+        let _mock = server.mock("GET", "/api/entries")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(r#"[{"body": "<img src=\"/uploads/photo.jpg\">"}]"#)
+            .create_async().await;
+
+        let mut sources = HashMap::new();
+        sources.insert("cms".to_string(), crate::config::SourceConfig {
+            url: server.url() + "/api",
+            headers: HashMap::new(),
+            rate_limit: None,
+            resolve_html_urls: true,
+        });
+
+        let collector = SourceAssetCollector::new();
+        let pool = Arc::new(RateLimiterPool::new(None, &sources));
+        let root = TempDir::new().unwrap();
+        fs::create_dir_all(root.path().join("_data")).unwrap();
+
+        let fetcher = Arc::new(AsyncMutex::new(DataFetcher::new(
+            &sources,
+            root.path(),
+            None,
+            pool,
+            Some(collector.clone()),
+        )));
+
+        let query = DataQuery {
+            source: Some("cms".to_string()),
+            path: Some("/entries".to_string()),
+            ..Default::default()
+        };
+
+        let result = fetch_unlocked(&fetcher, &query, None).await.unwrap();
+
+        let body = result[0]["body"].as_str().unwrap();
+        let expected_url = format!("{}/uploads/photo.jpg", server.url());
+        assert!(body.contains(&expected_url), "got: {}", body);
+
+        let requests = collector.drain();
+        assert_eq!(requests.len(), 1);
+        assert_eq!(requests[0].source_name, "cms");
     }
 }
