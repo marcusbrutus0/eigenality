@@ -68,6 +68,13 @@ When data is fetched from a source with `resolve_html_urls = true`:
 - Non-HTML string values — only attribute patterns are matched
 - File-based data (`_data/*.json`) — only remote sources
 
+## Dev mode
+
+In dev mode (`eigen dev`), resolved URLs are rewritten to proxy paths
+(`/_proxy/{source}/...`) instead of absolute CMS URLs. The dev server
+forwards these requests with the source's auth headers, so images and
+links work during local development without downloading assets to disk.
+
 ## Comparison with `source_asset()`
 
 | | `source_asset()` | `resolve_html_urls` |
@@ -76,4 +83,4 @@ When data is fetched from a source with `resolve_html_urls = true`:
 | Usage | Explicit template call | Automatic on fetch |
 | Best for | Individual image fields | Rich text / HTML content |
 | Auth | Yes | Yes |
-| Dev proxy | Yes | No (resolved at fetch time) |
+| Dev proxy | Yes | Yes (proxy URLs in dev mode) |
