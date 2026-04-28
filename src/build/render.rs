@@ -263,6 +263,7 @@ pub async fn build(project_root: &Path, dev: bool, fresh: bool, full: bool) -> R
         data_cache,
         Arc::clone(&rate_limiter),
         Some(source_asset_collector.clone()),
+        false,
     );
 
     // Asset localization.

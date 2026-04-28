@@ -93,6 +93,8 @@ pub struct DataFetcher {
     /// Collector for source assets discovered during HTML URL resolution.
     /// `pub(crate)` so `fetch_unlocked` in `query.rs` can access it in Task 6.
     pub(crate) source_asset_collector: Option<SourceAssetCollector>,
+    /// Whether this fetcher is running in dev mode (used to emit proxy URLs).
+    pub(crate) dev_mode: bool,
 }
 
 impl DataFetcher {
@@ -103,6 +105,7 @@ impl DataFetcher {
         data_cache: Option<super::cache::DataCache>,
         rate_limiter: Arc<RateLimiterPool>,
         source_asset_collector: Option<SourceAssetCollector>,
+        dev_mode: bool,
     ) -> Self {
         Self {
             sources: sources.clone(),
@@ -113,6 +116,7 @@ impl DataFetcher {
             data_cache,
             rate_limiter,
             source_asset_collector,
+            dev_mode,
         }
     }
 
@@ -639,13 +643,29 @@ mod tests {
             None,
             pool,
             Some(collector),
+            false,
         );
+    }
+
+    #[test]
+    fn new_accepts_dev_mode() {
+        let pool = Arc::new(RateLimiterPool::new(None, &HashMap::new()));
+        let dir = tempfile::tempdir().unwrap();
+        let fetcher = DataFetcher::new(
+            &HashMap::new(),
+            dir.path(),
+            None,
+            pool,
+            None,
+            true,
+        );
+        assert!(fetcher.dev_mode);
     }
 
     /// Create a fetcher with no remote sources, pointed at a temp dir.
     fn test_fetcher(root: &Path) -> DataFetcher {
         let pool = Arc::new(RateLimiterPool::new(None, &HashMap::new()));
-        DataFetcher::new(&HashMap::new(), root, None, pool, None)
+        DataFetcher::new(&HashMap::new(), root, None, pool, None, false)
     }
 
     /// Helper to write a file.
@@ -1166,7 +1186,7 @@ mod tests {
         );
 
         let pool = Arc::new(RateLimiterPool::new(None, &HashMap::new()));
-        let mut fetcher = DataFetcher::new(&sources, root, Some(data_cache), pool, None);
+        let mut fetcher = DataFetcher::new(&sources, root, Some(data_cache), pool, None, false);
 
         // First fetch: should get 200 with data.
         let result1 = fetcher
@@ -1207,7 +1227,7 @@ mod tests {
             },
         );
         let pool = Arc::new(RateLimiterPool::new(None, &HashMap::new()));
-        let mut fetcher = DataFetcher::new(&sources, root, None, pool, None);
+        let mut fetcher = DataFetcher::new(&sources, root, None, pool, None, false);
 
         // Pre-populate the in-memory url_cache.
         let key = "GET:http://api.example.com/posts".to_string();
@@ -1240,7 +1260,7 @@ mod tests {
             },
         );
         let pool = Arc::new(RateLimiterPool::new(None, &HashMap::new()));
-        let fetcher = DataFetcher::new(&sources, root, None, pool, None);
+        let fetcher = DataFetcher::new(&sources, root, None, pool, None, false);
 
         let result = fetcher
             .check_source_cache("api", "/items", &HttpMethod::Get, None)
@@ -1265,7 +1285,7 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let root = tmp.path();
         let pool = Arc::new(RateLimiterPool::new(None, &HashMap::new()));
-        let fetcher = DataFetcher::new(&HashMap::new(), root, None, pool, None);
+        let fetcher = DataFetcher::new(&HashMap::new(), root, None, pool, None, false);
 
         let result = fetcher.check_source_cache("missing", "/x", &HttpMethod::Get, None);
         assert!(result.is_err());
@@ -1340,7 +1360,7 @@ mod tests {
             },
         );
         let pool = Arc::new(RateLimiterPool::new(None, &HashMap::new()));
-        let fetcher = DataFetcher::new(&sources, root, Some(data_cache), pool, None);
+        let fetcher = DataFetcher::new(&sources, root, Some(data_cache), pool, None, false);
 
         let result = fetcher
             .check_source_cache("api", "/items", &HttpMethod::Get, None)
@@ -1397,7 +1417,7 @@ mod tests {
             },
         );
         let pool = Arc::new(RateLimiterPool::new(None, &HashMap::new()));
-        let mut fetcher = DataFetcher::new(&sources, root, None, pool.clone(), None);
+        let mut fetcher = DataFetcher::new(&sources, root, None, pool.clone(), None, false);
 
         let client = reqwest::Client::new();
         let resp = execute_source_request(
@@ -1470,7 +1490,7 @@ mod tests {
             },
         );
         let pool = Arc::new(RateLimiterPool::new(None, &HashMap::new()));
-        let mut fetcher = DataFetcher::new(&sources, root, Some(data_cache), pool.clone(), None);
+        let mut fetcher = DataFetcher::new(&sources, root, Some(data_cache), pool.clone(), None, false);
 
         let client = reqwest::Client::new();
         let resp = execute_source_request(
@@ -1528,6 +1548,7 @@ mod tests {
             None,
             pool,
             Some(collector.clone()),
+            false,
         );
 
         let query = DataQuery {
@@ -1585,6 +1606,7 @@ mod tests {
             None,
             pool,
             Some(collector.clone()),
+            false,
         );
 
         let query = DataQuery {
@@ -1657,7 +1679,7 @@ mod tests {
             },
         );
         let pool = Arc::new(RateLimiterPool::new(None, &HashMap::new()));
-        let mut fetcher = DataFetcher::new(&sources, root, Some(data_cache), pool.clone(), None);
+        let mut fetcher = DataFetcher::new(&sources, root, Some(data_cache), pool.clone(), None, false);
 
         let client = reqwest::Client::new();
         let resp = execute_source_request(

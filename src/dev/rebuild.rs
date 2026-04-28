@@ -85,7 +85,7 @@ impl DevBuildState {
             config.build.rate_limit,
             &config.sources,
         ));
-        let fetcher = DataFetcher::new(&config.sources, project_root, data_cache, rate_limiter, None);
+        let fetcher = DataFetcher::new(&config.sources, project_root, data_cache, rate_limiter, None, true);
         let plugin_registry = registry::build_registry(&config.plugins, project_root)?;
         let asset_cache = AssetCache::open(project_root).wrap_err("Failed to open asset cache")?;
         let asset_client = reqwest::Client::new();
@@ -131,6 +131,7 @@ impl DevBuildState {
                         data_cache,
                         rate_limiter,
                         None,
+                        true,
                     );
                     self.plugin_registry =
                         registry::build_registry(&self.config.plugins, &self.project_root)?;
