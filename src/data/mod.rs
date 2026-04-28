@@ -11,6 +11,7 @@ mod fetcher;
 mod global;
 mod query;
 mod file_links;
+mod html_urls;
 mod transforms;
 
 pub use cache::DataCache;
