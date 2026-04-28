@@ -562,7 +562,7 @@ mod tests {
         .unwrap();
 
         let pool = no_op_pool();
-        let mut fetcher = DataFetcher::new(&std::collections::HashMap::new(), root, None, pool);
+        let mut fetcher = DataFetcher::new(&std::collections::HashMap::new(), root, None, pool, None);
         let site = test_site_meta();
         let config = test_feed_config();
 
@@ -601,7 +601,7 @@ mod tests {
         fs::write(data_dir.join("posts.json"), "[]").unwrap();
 
         let pool = no_op_pool();
-        let mut fetcher = DataFetcher::new(&std::collections::HashMap::new(), root, None, pool);
+        let mut fetcher = DataFetcher::new(&std::collections::HashMap::new(), root, None, pool, None);
         let site = test_site_meta();
         let config = test_feed_config();
 
@@ -643,7 +643,7 @@ mod tests {
         .unwrap();
 
         let pool = no_op_pool();
-        let mut fetcher = DataFetcher::new(&std::collections::HashMap::new(), root, None, pool);
+        let mut fetcher = DataFetcher::new(&std::collections::HashMap::new(), root, None, pool, None);
         let site = test_site_meta();
         let mut config = test_feed_config();
         config.limit = 2;
@@ -682,7 +682,7 @@ mod tests {
         .unwrap();
 
         let pool = no_op_pool();
-        let mut fetcher = DataFetcher::new(&std::collections::HashMap::new(), root, None, pool);
+        let mut fetcher = DataFetcher::new(&std::collections::HashMap::new(), root, None, pool, None);
         let site = test_site_meta();
         let mut config = test_feed_config();
         config.path = "blog/feed.xml".into();
@@ -714,7 +714,7 @@ mod tests {
         fs::write(data_dir.join("posts.json"), "[]").unwrap();
 
         let pool = no_op_pool();
-        let mut fetcher = DataFetcher::new(&std::collections::HashMap::new(), root, None, pool);
+        let mut fetcher = DataFetcher::new(&std::collections::HashMap::new(), root, None, pool, None);
         let site = test_site_meta();
         let mut config = test_feed_config();
         config.author = Some("Jane Doe".into());
@@ -748,7 +748,7 @@ mod tests {
         fs::write(data_dir.join("posts.json"), "[]").unwrap();
 
         let pool = no_op_pool();
-        let mut fetcher = DataFetcher::new(&std::collections::HashMap::new(), root, None, pool);
+        let mut fetcher = DataFetcher::new(&std::collections::HashMap::new(), root, None, pool, None);
         let mut site = test_site_meta();
         site.schema.author = Some("Schema Author".into());
         let config = test_feed_config(); // no author set

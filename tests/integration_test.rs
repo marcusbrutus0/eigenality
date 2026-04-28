@@ -2520,7 +2520,7 @@ async fn test_post_method_body_interpolation_via_resolve_item_data() {
     let pool = std::sync::Arc::new(eigen::build::rate_limit::RateLimiterPool::new(
         None, &sources,
     ));
-    let mut fetcher = eigen::data::DataFetcher::new(&sources, root, None, pool);
+    let mut fetcher = eigen::data::DataFetcher::new(&sources, root, None, pool, None);
 
     // Simulate a dynamic page's frontmatter with a POST query whose body
     // references the current item.

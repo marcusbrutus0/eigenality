@@ -784,7 +784,7 @@ mod tests {
         write(root, "_data/nav.yaml", "- label: Home\n  url: /\n");
 
         let pool = no_op_pool();
-        let mut fetcher = DataFetcher::new(&HashMap::new(), root, None, pool);
+        let mut fetcher = DataFetcher::new(&HashMap::new(), root, None, pool, None);
         let fm = Frontmatter {
             data: {
                 let mut m = HashMap::new();
@@ -813,7 +813,7 @@ mod tests {
         write(root, "_data/config.json", r#"{"debug": false}"#);
 
         let pool = no_op_pool();
-        let mut fetcher = DataFetcher::new(&HashMap::new(), root, None, pool);
+        let mut fetcher = DataFetcher::new(&HashMap::new(), root, None, pool, None);
         let fm = Frontmatter {
             data: {
                 let mut m = HashMap::new();
@@ -847,7 +847,7 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let root = tmp.path();
         let pool = no_op_pool();
-        let mut fetcher = DataFetcher::new(&HashMap::new(), root, None, pool);
+        let mut fetcher = DataFetcher::new(&HashMap::new(), root, None, pool, None);
         let fm = Frontmatter::default();
 
         let result = resolve_page_data(&fm, &mut fetcher, None).await.unwrap();
@@ -867,7 +867,7 @@ mod tests {
         );
 
         let pool = no_op_pool();
-        let mut fetcher = DataFetcher::new(&HashMap::new(), root, None, pool);
+        let mut fetcher = DataFetcher::new(&HashMap::new(), root, None, pool, None);
         let fm = Frontmatter {
             collection: Some(DataQuery {
                 file: Some("posts.json".into()),
@@ -888,7 +888,7 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let root = tmp.path();
         let pool = no_op_pool();
-        let mut fetcher = DataFetcher::new(&HashMap::new(), root, None, pool);
+        let mut fetcher = DataFetcher::new(&HashMap::new(), root, None, pool, None);
         let fm = Frontmatter::default();
 
         let result = resolve_dynamic_page_data(&fm, &mut fetcher, None).await;
@@ -908,7 +908,7 @@ mod tests {
         );
 
         let pool = no_op_pool();
-        let mut fetcher = DataFetcher::new(&HashMap::new(), root, None, pool);
+        let mut fetcher = DataFetcher::new(&HashMap::new(), root, None, pool, None);
 
         let fm = Frontmatter {
             item_as: "post".into(),
@@ -949,7 +949,7 @@ mod tests {
         write(root, "_data/sidebar.yaml", "- widget: recent\n");
 
         let pool = no_op_pool();
-        let mut fetcher = DataFetcher::new(&HashMap::new(), root, None, pool);
+        let mut fetcher = DataFetcher::new(&HashMap::new(), root, None, pool, None);
 
         let fm = Frontmatter {
             item_as: "post".into(),
@@ -1012,7 +1012,7 @@ mod tests {
         write(root, "_data/items.json", r#"[{"id": 1}, {"id": 2}]"#);
 
         let pool = no_op_pool();
-        let mut fetcher = DataFetcher::new(&HashMap::new(), root, None, pool);
+        let mut fetcher = DataFetcher::new(&HashMap::new(), root, None, pool, None);
         let mut registry = PluginRegistry::new();
         registry.register(Box::new(TagPlugin));
 
@@ -1078,7 +1078,7 @@ mod tests {
         );
 
         let pool = no_op_pool();
-        let mut fetcher = DataFetcher::new(&HashMap::new(), root, None, pool);
+        let mut fetcher = DataFetcher::new(&HashMap::new(), root, None, pool, None);
         let mut registry = PluginRegistry::new();
         registry.register(Box::new(EnrichPlugin));
 
@@ -1264,7 +1264,7 @@ mod tests {
         write(root, "_data/sidebar.yaml", "- widget: recent\n");
 
         let pool = no_op_pool();
-        let mut fetcher = DataFetcher::new(&HashMap::new(), root, None, pool);
+        let mut fetcher = DataFetcher::new(&HashMap::new(), root, None, pool, None);
         let mut registry = PluginRegistry::new();
         registry.register(Box::new(PassthroughPlugin));
 
@@ -1334,6 +1334,7 @@ mod tests {
             root,
             None,
             pool,
+            None,
         )));
 
         let fm = Frontmatter {
@@ -1370,6 +1371,7 @@ mod tests {
             root,
             None,
             pool,
+            None,
         )));
 
         let fm = Frontmatter {
@@ -1399,6 +1401,7 @@ mod tests {
             root,
             None,
             pool,
+            None,
         )));
 
         let fm = Frontmatter {
@@ -1472,7 +1475,7 @@ mod tests {
         );
         let pool = no_op_pool();
         let fetcher = Arc::new(AsyncMutex::new(DataFetcher::new(
-            &sources, root, None, pool,
+            &sources, root, None, pool, None,
         )));
 
         let fm = Frontmatter {
