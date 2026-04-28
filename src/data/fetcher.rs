@@ -182,12 +182,20 @@ impl DataFetcher {
                 if source.resolve_html_urls {
                     match super::html_urls::extract_origin(&source.url) {
                         Some(origin) => {
+                            let dev_ctx = if self.dev_mode {
+                                Some(super::html_urls::DevRewriteCtx {
+                                    source_name,
+                                    source_base_url: &source.url,
+                                })
+                            } else {
+                                None
+                            };
                             super::html_urls::resolve_html_urls_in_value(
                                 result,
                                 &origin,
                                 source_name,
                                 self.source_asset_collector.as_ref(),
-                                None,
+                                dev_ctx.as_ref(),
                             )
                         }
                         None => {
@@ -1627,6 +1635,65 @@ mod tests {
 
         let requests = collector.drain();
         assert!(requests.is_empty(), "No asset requests when disabled");
+
+        mock.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn fetch_dev_mode_rewrites_to_proxy_urls() {
+        use crate::build::source_asset::SourceAssetCollector;
+
+        let mut server = mockito::Server::new_async().await;
+        let mock = server.mock("GET", "/api/entries")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(r#"{"body": "<img src=\"/uploads/photo.jpg\">"}"#)
+            .create_async().await;
+
+        let mut sources = HashMap::new();
+        sources.insert("cms".to_string(), SourceConfig {
+            url: server.url() + "/api",
+            headers: HashMap::new(),
+            rate_limit: None,
+            resolve_html_urls: true,
+        });
+
+        let collector = SourceAssetCollector::new();
+        let pool = Arc::new(RateLimiterPool::new(None, &sources));
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("_data")).unwrap();
+
+        let mut fetcher = DataFetcher::new(
+            &sources,
+            dir.path(),
+            None,
+            pool,
+            Some(collector.clone()),
+            true, // dev_mode
+        );
+
+        let query = DataQuery {
+            source: Some("cms".to_string()),
+            path: Some("/entries".to_string()),
+            ..Default::default()
+        };
+
+        let result = fetcher.fetch(&query, None).await.unwrap();
+
+        let body = result["body"].as_str().unwrap();
+        assert!(
+            body.contains("/_proxy/cms/"),
+            "Expected proxy URL in dev mode, got: '{}'",
+            body,
+        );
+        assert!(
+            !body.contains(&server.url()),
+            "Should not contain absolute server URL in dev mode, got: '{}'",
+            body,
+        );
+
+        let requests = collector.drain();
+        assert!(requests.is_empty(), "Dev mode should not collect source assets");
 
         mock.assert_async().await;
     }

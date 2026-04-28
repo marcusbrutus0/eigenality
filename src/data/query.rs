@@ -530,7 +530,9 @@ async fn fetch_unlocked(
                     }
                 };
                 let collector = f.source_asset_collector.clone();
-                Some((origin, collector))
+                let dev_mode = f.dev_mode;
+                let source_base_url = s.url.clone();
+                Some((origin, collector, dev_mode, source_base_url))
             });
         (check, client, rate_limiter, html_url_ctx)
     }; // lock released here
@@ -591,16 +593,24 @@ async fn fetch_unlocked(
 fn apply_html_url_resolution(
     value: Value,
     source_name: &str,
-    ctx: &Option<(String, Option<SourceAssetCollector>)>,
+    ctx: &Option<(String, Option<SourceAssetCollector>, bool, String)>,
 ) -> Value {
     match ctx {
-        Some((origin, collector)) => {
+        Some((origin, collector, dev_mode, source_base_url)) => {
+            let dev_ctx = if *dev_mode {
+                Some(crate::data::html_urls::DevRewriteCtx {
+                    source_name,
+                    source_base_url,
+                })
+            } else {
+                None
+            };
             crate::data::html_urls::resolve_html_urls_in_value(
                 value,
                 origin,
                 source_name,
                 collector.as_ref(),
-                None,
+                dev_ctx.as_ref(),
             )
         }
         None => value,
