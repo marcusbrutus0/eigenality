@@ -176,22 +176,20 @@ impl DataFetcher {
         let result = if let Some(ref source_name) = query.source {
             if let Some(source) = self.sources.get(source_name) {
                 if source.resolve_html_urls {
-                    match (super::html_urls::extract_origin(&source.url), &self.source_asset_collector) {
-                        (Some(origin), Some(collector)) => {
-                            super::html_urls::resolve_html_urls_in_value(result, &origin, source_name, collector)
+                    match super::html_urls::extract_origin(&source.url) {
+                        Some(origin) => {
+                            super::html_urls::resolve_html_urls_in_value(
+                                result,
+                                &origin,
+                                source_name,
+                                self.source_asset_collector.as_ref(),
+                            )
                         }
-                        (None, _) => {
+                        None => {
                             tracing::warn!(
                                 source = source_name,
                                 url = %source.url,
                                 "resolve_html_urls enabled but could not extract origin from source URL",
-                            );
-                            result
-                        }
-                        (_, None) => {
-                            tracing::warn!(
-                                source = source_name,
-                                "resolve_html_urls enabled but no source asset collector available",
                             );
                             result
                         }

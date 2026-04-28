@@ -32,12 +32,14 @@ pub fn resolve_html_urls_in_value(
     value: Value,
     origin: &str,
     source_name: &str,
-    collector: &SourceAssetCollector,
+    collector: Option<&SourceAssetCollector>,
 ) -> Value {
     let mut urls = Vec::new();
     let result = resolve_value(value, origin, &mut urls);
-    for url in urls {
-        collector.push(source_name.to_string(), url);
+    if let Some(collector) = collector {
+        for url in urls {
+            collector.push(source_name.to_string(), url);
+        }
     }
     result
 }
@@ -313,7 +315,7 @@ mod tests {
             input,
             "https://cms.example.com",
             "my_cms",
-            &collector,
+            Some(&collector),
         );
         assert_eq!(
             result["body"].as_str().unwrap(),

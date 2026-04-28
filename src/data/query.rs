@@ -529,7 +529,7 @@ async fn fetch_unlocked(
                         return None;
                     }
                 };
-                let collector = f.source_asset_collector.clone()?;
+                let collector = f.source_asset_collector.clone();
                 Some((origin, collector))
             });
         (check, client, rate_limiter, html_url_ctx)
@@ -591,11 +591,16 @@ async fn fetch_unlocked(
 fn apply_html_url_resolution(
     value: Value,
     source_name: &str,
-    ctx: &Option<(String, SourceAssetCollector)>,
+    ctx: &Option<(String, Option<SourceAssetCollector>)>,
 ) -> Value {
     match ctx {
         Some((origin, collector)) => {
-            crate::data::html_urls::resolve_html_urls_in_value(value, origin, source_name, collector)
+            crate::data::html_urls::resolve_html_urls_in_value(
+                value,
+                origin,
+                source_name,
+                collector.as_ref(),
+            )
         }
         None => value,
     }
@@ -1474,7 +1479,7 @@ mod tests {
         // Tiny HTTP server that handles two requests and returns JSON.
         let server = tiny_http::Server::http("127.0.0.1:0").expect("bind");
         let addr = server.server_addr().to_ip().expect("addr");
-        let url = format!("http://{}/items", addr);
+        let _url = format!("http://{}/items", addr);
 
         thread::spawn(move || {
             let body: &[u8] = b"[{\"id\":1}]";
