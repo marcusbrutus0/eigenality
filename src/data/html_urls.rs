@@ -2,7 +2,7 @@ use regex::Regex;
 use serde_json::Value;
 use std::sync::LazyLock;
 
-use crate::build::source_asset::SourceAssetCollector;
+use crate::build::source_asset::{build_proxy_url, SourceAssetCollector};
 
 static ROOT_RELATIVE_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r#"(?i)\b(?:src|href)\s*=\s*"(/[^/"][^"]*)""#).unwrap()
@@ -11,6 +11,12 @@ static ROOT_RELATIVE_RE: LazyLock<Regex> = LazyLock::new(|| {
 static ROOT_RELATIVE_SQ_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r#"(?i)\b(?:src|href)\s*=\s*'(/[^/'][^']*)'"#).unwrap()
 });
+
+/// Context for dev mode URL rewriting via the local proxy.
+pub struct DevRewriteCtx<'a> {
+    pub source_name: &'a str,
+    pub source_base_url: &'a str,
+}
 
 /// Extract the origin (scheme + host + optional port) from a URL.
 ///
@@ -33,49 +39,78 @@ pub fn resolve_html_urls_in_value(
     origin: &str,
     source_name: &str,
     collector: Option<&SourceAssetCollector>,
+    dev_ctx: Option<&DevRewriteCtx<'_>>,
 ) -> Value {
     let mut urls = Vec::new();
-    let result = resolve_value(value, origin, &mut urls);
-    if let Some(collector) = collector {
-        for url in urls {
-            collector.push(source_name.to_string(), url);
+    let result = resolve_value_with_mode(value, origin, &mut urls, dev_ctx);
+    if dev_ctx.is_none() {
+        if let Some(collector) = collector {
+            for url in urls {
+                collector.push(source_name.to_string(), url);
+            }
         }
     }
     result
 }
 
-fn resolve_value(value: Value, origin: &str, collected: &mut Vec<String>) -> Value {
+pub fn resolve_value_with_mode(
+    value: Value,
+    origin: &str,
+    collected: &mut Vec<String>,
+    dev_ctx: Option<&DevRewriteCtx<'_>>,
+) -> Value {
     match value {
-        Value::String(s) => Value::String(resolve_string(&s, origin, collected)),
-        Value::Array(arr) => {
-            Value::Array(arr.into_iter().map(|v| resolve_value(v, origin, collected)).collect())
+        Value::String(s) => {
+            Value::String(resolve_string_with_mode(&s, origin, collected, dev_ctx))
         }
+        Value::Array(arr) => Value::Array(
+            arr.into_iter()
+                .map(|v| resolve_value_with_mode(v, origin, collected, dev_ctx))
+                .collect(),
+        ),
         Value::Object(map) => Value::Object(
             map.into_iter()
-                .map(|(k, v)| (k, resolve_value(v, origin, collected)))
+                .map(|(k, v)| (k, resolve_value_with_mode(v, origin, collected, dev_ctx)))
                 .collect(),
         ),
         other => other,
     }
 }
 
-fn resolve_string(s: &str, origin: &str, collected: &mut Vec<String>) -> String {
+fn resolve_string_with_mode(
+    s: &str,
+    origin: &str,
+    collected: &mut Vec<String>,
+    dev_ctx: Option<&DevRewriteCtx<'_>>,
+) -> String {
     let after_dq = ROOT_RELATIVE_RE.replace_all(s, |caps: &regex::Captures| {
         let path = &caps[1];
         let absolute = format!("{}{}", origin, path);
-        collected.push(absolute.clone());
+        let rewritten = match dev_ctx {
+            Some(ctx) => build_proxy_url(ctx.source_name, &absolute, ctx.source_base_url),
+            None => {
+                collected.push(absolute.clone());
+                absolute
+            }
+        };
         let full = &caps[0];
         let eq_pos = full.find('=').unwrap();
-        format!("{}=\"{}\"", &full[..eq_pos], absolute)
+        format!("{}=\"{}\"", &full[..eq_pos], rewritten)
     });
 
     let result = ROOT_RELATIVE_SQ_RE.replace_all(&after_dq, |caps: &regex::Captures| {
         let path = &caps[1];
         let absolute = format!("{}{}", origin, path);
-        collected.push(absolute.clone());
+        let rewritten = match dev_ctx {
+            Some(ctx) => build_proxy_url(ctx.source_name, &absolute, ctx.source_base_url),
+            None => {
+                collected.push(absolute.clone());
+                absolute
+            }
+        };
         let full = &caps[0];
         let eq_pos = full.find('=').unwrap();
-        format!("{}='{}'", &full[..eq_pos], absolute)
+        format!("{}='{}'", &full[..eq_pos], rewritten)
     });
 
     result.into_owned()
@@ -316,6 +351,7 @@ mod tests {
             "https://cms.example.com",
             "my_cms",
             Some(&collector),
+            None,
         );
         assert_eq!(
             result["body"].as_str().unwrap(),
@@ -327,10 +363,62 @@ mod tests {
         assert_eq!(requests[0].url, "https://cms.example.com/uploads/photo.jpg");
     }
 
+    #[test]
+    fn resolve_dev_mode_rewrites_to_proxy_url_same_host() {
+        let input = json!({
+            "body": r#"<img src="/uploads/photo.jpg">"#
+        });
+        let (result, urls) = resolve_with_dev_mode(
+            &input,
+            "https://cms.example.com",
+            "my_cms",
+            "https://cms.example.com/api",
+        );
+        assert_eq!(
+            result["body"].as_str().unwrap(),
+            r#"<img src="/_proxy/my_cms/uploads/photo.jpg">"#,
+        );
+        assert!(urls.is_empty(), "dev mode should not collect URLs");
+    }
+
+    #[test]
+    fn resolve_dev_mode_cross_host_uses_source_asset_prefix() {
+        let input = json!({
+            "body": r#"<img src="/media/photo.jpg">"#
+        });
+        let (result, urls) = resolve_with_dev_mode(
+            &input,
+            "https://media.example.com",
+            "my_cms",
+            "https://cms.example.com/api",
+        );
+        assert_eq!(
+            result["body"].as_str().unwrap(),
+            r#"<img src="/_proxy/my_cms/__source_asset__/https://media.example.com/media/photo.jpg">"#,
+        );
+        assert!(urls.is_empty());
+    }
+
+    fn resolve_with_dev_mode(
+        value: &Value,
+        origin: &str,
+        source_name: &str,
+        source_base_url: &str,
+    ) -> (Value, Vec<String>) {
+        let mut collected = Vec::new();
+        let result = resolve_value_with_mode(
+            value.clone(),
+            origin,
+            &mut collected,
+            Some(&DevRewriteCtx { source_name, source_base_url }),
+        );
+        (result, collected)
+    }
+
     /// Helper: resolve and collect URLs without needing SourceAssetCollector.
     fn resolve_html_urls_in_value_collect(value: &Value, origin: &str) -> (Value, Vec<String>) {
         let mut collected = Vec::new();
-        let result = resolve_value(value.clone(), origin, &mut collected);
+        let result = resolve_value_with_mode(value.clone(), origin, &mut collected, None);
         (result, collected)
     }
 }

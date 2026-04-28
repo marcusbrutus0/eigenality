@@ -187,6 +187,7 @@ impl DataFetcher {
                                 &origin,
                                 source_name,
                                 self.source_asset_collector.as_ref(),
+                                None,
                             )
                         }
                         None => {

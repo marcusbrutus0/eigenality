@@ -600,6 +600,7 @@ fn apply_html_url_resolution(
                 origin,
                 source_name,
                 collector.as_ref(),
+                None,
             )
         }
         None => value,
