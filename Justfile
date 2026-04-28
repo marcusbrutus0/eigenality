@@ -1,5 +1,6 @@
 # Sync design system CSS + fonts from sibling repo
 sync-design:
+    @test -d ../design/css || (echo "Error: ../design/css not found. Clone the design repo as a sibling directory." && exit 1)
     rm -rf website/static/css/wavefunk
     cp -r ../design/css website/static/css/wavefunk
 

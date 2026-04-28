@@ -7,7 +7,7 @@
   {% endblock %}
 
   {% block doc_content %}
-    <div id="doc-content" class="wf-docs-content">
+    <main id="doc-content" class="wf-docs-content">
       <article class="wf-prose">
         <div class="wf-crumbs">
           <button class="wf-docs-menu-btn" onclick="toggleSidebar()" aria-label="Open navigation">&#9776;</button>
@@ -23,7 +23,7 @@
           {% block docs_body %}{% endblock %}
         </div>
       </article>
-    </div>
+    </main>
   {% endblock %}
 
   {% include "_partials/docs-toc.html" %}

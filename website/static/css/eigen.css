@@ -3,11 +3,6 @@
   --accent-ink: #ffffff;
 }
 
-[data-mode="light"] {
-  --accent: #d65d0e;
-  --accent-ink: #ffffff;
-}
-
 .wf-docs-menu-btn {
   display: none;
   background: none; border: 1px solid var(--hairline); color: var(--fg-muted);
@@ -42,4 +37,23 @@
     box-shadow: 2px 0 8px rgba(0,0,0,0.3);
   }
   .wf-docs-side.is-open { transform: translateX(0); }
+}
+
+.mk-cta { text-align: center; padding: 100px 32px; }
+.mk-cta-kicker { justify-content: center; }
+.mk-cta-title { max-width: none; margin: 0 auto 20px; }
+.mk-cta-sub { margin: 0 auto 32px; }
+.mk-cta-buttons { display: flex; gap: 12px; justify-content: center; }
+
+.mk-foot-brand { margin-bottom: 14px; }
+.mk-foot-desc {
+  font-size: 12px; color: var(--fg-muted); max-width: 32ch;
+  line-height: 1.55; font-family: var(--font-mono);
+}
+
+.mk-feat-links { margin-top: auto; padding-top: 16px; }
+.mk-feat-link {
+  display: block; font-family: var(--font-mono); font-size: 11px;
+  letter-spacing: 0.04em; text-transform: uppercase;
+  color: var(--fg-muted); text-decoration: none; padding: 3px 0;
 }

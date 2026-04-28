@@ -1,8 +1,8 @@
-<div class="wf-mnav">
-  <div class="wf-wordmark">
+<nav class="wf-mnav">
+  <a href="/" class="wf-wordmark">
     <img src="/favicon.svg" alt="eigen" width="22" height="22">
     <span class="wf-wordmark-name">EIGEN</span>
-  </div>
+  </a>
   {% for item in nav %}
     {% if item.external %}
       <a href="{{ item.url }}" target="_blank" rel="noopener">{{ item.label }}</a>
@@ -11,4 +11,4 @@
     {% endif %}
   {% endfor %}
   <div class="wf-mnav-spacer"></div>
-</div>
+</nav>

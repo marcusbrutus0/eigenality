@@ -34,10 +34,10 @@ schema:
       <div class="mk-feat-num">&mdash; {{ "%02d" | format(loop.index) }}</div>
       <h3 class="mk-feat-t">{{ cat.name }}</h3>
       <p class="mk-feat-b">{{ cat.desc }}</p>
-      <div style="margin-top: auto; padding-top: 16px;">
+      <div class="mk-feat-links">
         {% for d in docs_list %}
           {% if d.category == cat.name %}
-          <a href="/docs/{{ d.slug }}" style="display: block; font-family: var(--font-mono); font-size: 11px; letter-spacing: 0.04em; text-transform: uppercase; color: var(--fg-muted); text-decoration: none; padding: 3px 0;">{{ d.title }}</a>
+          <a href="/docs/{{ d.slug }}" class="mk-feat-link">{{ d.title }}</a>
           {% endif %}
         {% endfor %}
       </div>
