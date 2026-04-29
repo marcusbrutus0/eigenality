@@ -3250,6 +3250,132 @@ minify = false
 }
 
 // ============================================================================
+// Prod render_dynamic_page: continue_on_render_error flag
+// ============================================================================
+
+#[tokio::test]
+async fn test_prod_dynamic_page_aborts_on_error_by_default() {
+    let tmp = TempDir::new().unwrap();
+    let root = tmp.path();
+
+    write(
+        root,
+        "site.toml",
+        r#"
+[site]
+name = "Prod Abort Test"
+base_url = "https://test.com"
+
+[build]
+fragments = false
+minify = false
+"#,
+    );
+
+    write(
+        root,
+        "templates/_base.html",
+        "<!DOCTYPE html><html><body>{% block content %}{% endblock %}</body></html>",
+    );
+
+    write(
+        root,
+        "templates/posts/[post].html",
+        r#"---
+collection:
+  file: "posts.json"
+slug_field: slug
+item_as: post
+---
+{% extends "_base.html" %}
+{% block content %}
+<h1>{{ post.title }}</h1>
+<p>{{ post.detail.nested }}</p>
+{% endblock %}"#,
+    );
+
+    write(
+        root,
+        "_data/posts.json",
+        r#"[
+            {"slug": "good", "title": "Good", "detail": {"nested": "ok"}},
+            {"slug": "bad", "title": "Bad"}
+        ]"#,
+    );
+
+    // Prod build (dev=false) should fail by default.
+    let result = eigen::build::build(root, false, false, false).await;
+    assert!(result.is_err(), "Prod build should abort on render error by default");
+}
+
+#[tokio::test]
+async fn test_prod_dynamic_page_continues_with_flag() {
+    let tmp = TempDir::new().unwrap();
+    let root = tmp.path();
+
+    write(
+        root,
+        "site.toml",
+        r#"
+[site]
+name = "Prod Continue Test"
+base_url = "https://test.com"
+
+[build]
+fragments = false
+minify = false
+continue_on_render_error = true
+"#,
+    );
+
+    write(
+        root,
+        "templates/_base.html",
+        "<!DOCTYPE html><html><body>{% block content %}{% endblock %}</body></html>",
+    );
+
+    write(
+        root,
+        "templates/posts/[post].html",
+        r#"---
+collection:
+  file: "posts.json"
+slug_field: slug
+item_as: post
+---
+{% extends "_base.html" %}
+{% block content %}
+<h1>{{ post.title }}</h1>
+<p>{{ post.detail.nested }}</p>
+{% endblock %}"#,
+    );
+
+    write(
+        root,
+        "_data/posts.json",
+        r#"[
+            {"slug": "good", "title": "Good", "detail": {"nested": "ok"}},
+            {"slug": "bad", "title": "Bad"},
+            {"slug": "also-good", "title": "Also", "detail": {"nested": "fine"}}
+        ]"#,
+    );
+
+    // Prod build with flag should succeed.
+    let result = eigen::build::build(root, false, false, false).await;
+    assert!(result.is_ok(), "Prod build should continue with flag: {:?}", result.err());
+
+    // Good items rendered.
+    assert!(root.join("dist/posts/good.html").exists());
+    assert!(root.join("dist/posts/also-good.html").exists());
+
+    let good = fs::read_to_string(root.join("dist/posts/good.html")).unwrap();
+    assert!(good.contains("<h1>Good</h1>"));
+
+    // Bad item should NOT have a file (prod skips, doesn't write error page).
+    assert!(!root.join("dist/posts/bad.html").exists(), "bad item should be skipped in prod");
+}
+
+// ============================================================================
 
 /// Recursively copy a directory.
 fn copy_dir_all(src: &Path, dst: &Path) {
