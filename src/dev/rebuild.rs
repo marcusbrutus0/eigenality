@@ -498,21 +498,15 @@ async fn render_static_page_dev(
 /// sentinel file. The sentinel is checked by `rebuild()` to determine whether
 /// a browser reload should be triggered.
 fn write_dev_error_pages(dist_dir: &Path, output_path: &Path, error_html: &str) {
-    // Ensure dist dir exists.
     let _ = std::fs::create_dir_all(dist_dir);
 
-    // Write to the actual output path so if the user is viewing that page, they see the error.
     let full_path = dist_dir.join(output_path);
     if let Some(parent) = full_path.parent() {
         let _ = std::fs::create_dir_all(parent);
     }
     let _ = std::fs::write(&full_path, error_html);
 
-    // Write to _error.html sentinel.
     let _ = std::fs::write(dist_dir.join("_error.html"), error_html);
-
-    // Also write to index.html so the root page shows the error.
-    let _ = std::fs::write(dist_dir.join("index.html"), error_html);
 }
 
 /// Render all pages for a dynamic template with live-reload script injection.
@@ -543,6 +537,8 @@ async fn render_dynamic_page_dev(
         .wrap_err_with(|| format!("Template '{}' not found", tmpl_name))?;
 
     let mut rendered_pages = Vec::new();
+    let mut error_count: usize = 0;
+    let total_count = items.len();
 
     for (idx, item) in items.iter().enumerate() {
         // Extract slug.
@@ -612,16 +608,11 @@ async fn render_dynamic_page_dev(
                 let console_msg = te.format_console(&tmpl_name, Some(&slug));
                 let error_html = te.to_error_html(&tmpl_name, Some(&slug));
 
-                // Write the error page to the output location and sentinel.
                 write_dev_error_pages(ctx.dist_dir, &output_path, &error_html);
 
                 eprintln!("{}", console_msg);
-                return Err(eyre::eyre!(
-                    "Failed to render '{}' for slug '{}': {}",
-                    tmpl_name,
-                    slug,
-                    te.short_msg
-                ));
+                error_count += 1;
+                continue;
             }
         };
 
@@ -645,5 +636,44 @@ async fn render_dynamic_page_dev(
         });
     }
 
+    if error_count > 0 {
+        tracing::warn!(
+            "{} of {} items in '{}' failed to render",
+            error_count, total_count, tmpl_name,
+        );
+    }
+
     Ok(rendered_pages)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    #[test]
+    fn test_write_dev_error_pages_does_not_overwrite_index() {
+        let tmp = TempDir::new().unwrap();
+        let dist = tmp.path();
+
+        // Pre-existing index.html with real homepage content.
+        std::fs::create_dir_all(dist).unwrap();
+        std::fs::write(dist.join("index.html"), "<h1>Home</h1>").unwrap();
+
+        // Simulate an error in a completely different page.
+        let output_path = std::path::PathBuf::from("posts/bad-post.html");
+        write_dev_error_pages(dist, &output_path, "<h1>Error: undefined var</h1>");
+
+        // The error page should be written to the item's own path.
+        let error_page = std::fs::read_to_string(dist.join("posts/bad-post.html")).unwrap();
+        assert!(error_page.contains("Error: undefined var"));
+
+        // The sentinel should be written.
+        let sentinel = std::fs::read_to_string(dist.join("_error.html")).unwrap();
+        assert!(sentinel.contains("Error: undefined var"));
+
+        // index.html must NOT be overwritten.
+        let index = std::fs::read_to_string(dist.join("index.html")).unwrap();
+        assert_eq!(index, "<h1>Home</h1>", "index.html should not be overwritten by unrelated error");
+    }
 }

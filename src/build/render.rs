@@ -1238,13 +1238,30 @@ async fn render_dynamic_page(page: &PageDef, ctx: &BuildContext) -> Result<Vec<R
         .collect()
         .await;
 
-    // Check for errors from concurrent renders — collect all, return first.
     let mut phase_two_items: Vec<PhaseTwoResult> = Vec::with_capacity(results.len());
+    let mut render_error_count: usize = 0;
+
     for result in results {
         match result {
             Ok(p2) => phase_two_items.push(p2),
-            Err(e) => return Err(e),
+            Err(e) => {
+                if ctx.config.build.continue_on_render_error {
+                    tracing::error!("{:?}", e);
+                    render_error_count += 1;
+                } else {
+                    return Err(e);
+                }
+            }
         }
+    }
+
+    if render_error_count > 0 {
+        tracing::warn!(
+            "{} of {} items in '{}' failed to render - skipped",
+            render_error_count,
+            render_error_count + phase_two_items.len(),
+            tmpl_name,
+        );
     }
 
     // Drain source assets once after all renders complete.
