@@ -116,6 +116,11 @@ pub struct BuildConfig {
     /// When set, all build-time HTTP requests are throttled to this rate per host.
     #[serde(default)]
     pub rate_limit: Option<u32>,
+    /// Whether to continue the build when a template fails to render.
+    /// When false (default), the build aborts on the first render error.
+    /// When true, the build continues and collects all errors.
+    #[serde(default)]
+    pub continue_on_render_error: bool,
 }
 
 impl Default for BuildConfig {
@@ -135,6 +140,7 @@ impl Default for BuildConfig {
             view_transitions: ViewTransitionsConfig::default(),
             not_found: true,
             rate_limit: None,
+            continue_on_render_error: false,
         }
     }
 }
