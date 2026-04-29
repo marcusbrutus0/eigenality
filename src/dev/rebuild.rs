@@ -537,6 +537,8 @@ async fn render_dynamic_page_dev(
         .wrap_err_with(|| format!("Template '{}' not found", tmpl_name))?;
 
     let mut rendered_pages = Vec::new();
+    let mut error_count: usize = 0;
+    let total_count = items.len();
 
     for (idx, item) in items.iter().enumerate() {
         // Extract slug.
@@ -606,16 +608,11 @@ async fn render_dynamic_page_dev(
                 let console_msg = te.format_console(&tmpl_name, Some(&slug));
                 let error_html = te.to_error_html(&tmpl_name, Some(&slug));
 
-                // Write the error page to the output location and sentinel.
                 write_dev_error_pages(ctx.dist_dir, &output_path, &error_html);
 
                 eprintln!("{}", console_msg);
-                return Err(eyre::eyre!(
-                    "Failed to render '{}' for slug '{}': {}",
-                    tmpl_name,
-                    slug,
-                    te.short_msg
-                ));
+                error_count += 1;
+                continue;
             }
         };
 
@@ -637,6 +634,13 @@ async fn render_dynamic_page_dev(
             is_dynamic: true,
             template_path: Some(page.template_path.display().to_string()),
         });
+    }
+
+    if error_count > 0 {
+        tracing::warn!(
+            "{} of {} items in '{}' failed to render",
+            error_count, total_count, tmpl_name,
+        );
     }
 
     Ok(rendered_pages)
