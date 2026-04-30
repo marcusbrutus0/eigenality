@@ -5,7 +5,7 @@
 //! This enables immutable caching (`Cache-Control: max-age=31536000, immutable`).
 //!
 //! Three phases:
-//! - Phase 1 (`build_manifest`): hash and rename files in dist, build manifest.
+//! - Phase 1 (`compute_manifest`): hash files in dist, build manifest (no renames).
 //! - Phase 2: `asset()` template function uses manifest for render-time resolution.
 //! - Phase 3 (`rewrite_references`): post-render string replacement in HTML/CSS/JS.
 
@@ -153,15 +153,16 @@ fn is_excluded(relative_path: &str, exclude_patterns: &[String]) -> bool {
     false
 }
 
-/// Build the asset manifest by hashing and renaming static assets in
-/// dist_dir.
+/// Compute the asset manifest by hashing static assets in dist_dir,
+/// without renaming any files.
 ///
 /// Walks all files in dist_dir that correspond to files from static_dir,
-/// computes content hashes, renames files to include the hash, and
-/// returns the manifest.
+/// computes content hashes, and returns the manifest mapping original
+/// paths to their hashed equivalents.
 ///
-/// Files matching the exclude patterns are left at their original names.
-pub fn build_manifest(
+/// Files are left at their original names — call `rename_manifest_files`
+/// after bundling to apply the renames.
+pub fn compute_manifest(
     dist_dir: &Path,
     static_dir: &Path,
     config: &ContentHashConfig,
@@ -172,7 +173,6 @@ pub fn build_manifest(
         return Ok(AssetManifest::new());
     }
 
-    // Count files for capacity hint.
     let file_count = WalkDir::new(static_dir)
         .into_iter()
         .filter_map(|e| e.ok())
@@ -195,16 +195,12 @@ pub fn build_manifest(
 
         let rel_str = rel_path.to_string_lossy().replace('\\', "/");
 
-        // Check exclusion.
         if is_excluded(&rel_str, &config.exclude) {
             tracing::debug!("Content hash: excluding {}", rel_str);
             continue;
         }
 
-        // Never hash platform convention files (e.g. _headers, _redirects).
-        // Renaming them breaks CDN platform detection silently.
-        // Note: _headers and _redirects are also in default_hash_exclude(); this check
-        // provides forward coverage for any future _-prefixed platform files.
+        // Renaming _-prefixed files breaks CDN platform detection silently.
         if rel_path
             .file_name()
             .and_then(|n| n.to_str())
@@ -215,7 +211,6 @@ pub fn build_manifest(
             continue;
         }
 
-        // The file in dist/ has the same relative path.
         let dist_path = dist_dir.join(rel_path);
         if !dist_path.exists() {
             tracing::warn!(
@@ -225,7 +220,6 @@ pub fn build_manifest(
             continue;
         }
 
-        // Read file and compute hash.
         let data = match std::fs::read(&dist_path) {
             Ok(d) => d,
             Err(e) => {
@@ -240,29 +234,12 @@ pub fn build_manifest(
 
         let hash = content_hash(&data);
 
-        // Build hashed filename.
         let filename = rel_path
             .file_name()
             .and_then(|f| f.to_str())
             .unwrap_or(&rel_str);
         let new_filename = hashed_filename(filename, &hash);
 
-        // Build new dist path.
-        let new_dist_path = match dist_path.parent() {
-            Some(parent) => parent.join(&new_filename),
-            None => dist_dir.join(&new_filename),
-        };
-
-        // Rename file in dist.
-        std::fs::rename(&dist_path, &new_dist_path).wrap_err_with(|| {
-            format!(
-                "Failed to rename {} -> {}",
-                dist_path.display(),
-                new_dist_path.display()
-            )
-        })?;
-
-        // Build URL paths (with leading slash).
         let original_url = format!("/{}", rel_str);
         let hashed_rel = match rel_path.parent() {
             Some(parent) if !parent.as_os_str().is_empty() => {
@@ -277,6 +254,39 @@ pub fn build_manifest(
     }
 
     Ok(manifest)
+}
+
+/// Rename files in dist_dir according to the manifest.
+///
+/// For each entry in the manifest, renames the file from its original
+/// name to the hashed name. Must be called after bundling so the bundler
+/// can read files at their original paths.
+pub fn rename_manifest_files(dist_dir: &Path, manifest: &AssetManifest) -> Result<()> {
+    for (original_url, hashed_url) in manifest.entries_sorted() {
+        let original_rel = original_url.trim_start_matches('/');
+        let hashed_rel = hashed_url.trim_start_matches('/');
+
+        let original_path = dist_dir.join(original_rel);
+        let hashed_path = dist_dir.join(hashed_rel);
+
+        if !original_path.exists() {
+            tracing::debug!(
+                "Content hash rename: {} already renamed or missing",
+                original_path.display()
+            );
+            continue;
+        }
+
+        std::fs::rename(&original_path, &hashed_path).wrap_err_with(|| {
+            format!(
+                "Failed to rename {} -> {}",
+                original_path.display(),
+                hashed_path.display()
+            )
+        })?;
+    }
+
+    Ok(())
 }
 
 /// Hash and rename additional generated files (e.g., CSS/JS bundles)
@@ -568,7 +578,7 @@ mod tests {
         assert_eq!(r1[2].0, "/z.css");
     }
 
-    // --- build_manifest ---
+    // --- compute_manifest ---
 
     /// Helper to write a file into a temp directory.
     fn write_file(dir: &Path, rel: &str, content: &str) {
@@ -588,7 +598,7 @@ mod tests {
     }
 
     #[test]
-    fn test_build_manifest_basic() {
+    fn test_compute_manifest_basic() {
         let tmp = tempfile::TempDir::new().unwrap();
         let root = tmp.path();
         let static_dir = root.join("static");
@@ -598,7 +608,7 @@ mod tests {
         write_file(&dist_dir, "css/style.css", "body { color: red; }");
 
         let config = hash_config();
-        let manifest = build_manifest(&dist_dir, &static_dir, &config).unwrap();
+        let manifest = compute_manifest(&dist_dir, &static_dir, &config).unwrap();
 
         assert_eq!(manifest.len(), 1);
         let resolved = manifest.resolve("/css/style.css");
@@ -606,15 +616,33 @@ mod tests {
         assert!(resolved.starts_with("/css/style."));
         assert!(resolved.ends_with(".css"));
 
-        // Original file should no longer exist.
+        // compute_manifest does NOT rename — original file still exists.
+        assert!(dist_dir.join("css/style.css").exists());
+    }
+
+    #[test]
+    fn test_rename_manifest_files_basic() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let root = tmp.path();
+        let static_dir = root.join("static");
+        let dist_dir = root.join("dist");
+
+        write_file(&static_dir, "css/style.css", "body { color: red; }");
+        write_file(&dist_dir, "css/style.css", "body { color: red; }");
+
+        let config = hash_config();
+        let manifest = compute_manifest(&dist_dir, &static_dir, &config).unwrap();
+        rename_manifest_files(&dist_dir, &manifest).unwrap();
+
+        let resolved = manifest.resolve("/css/style.css");
+        // After rename, original should be gone and hashed file should exist.
         assert!(!dist_dir.join("css/style.css").exists());
-        // Hashed file should exist.
         let hashed_name = resolved.trim_start_matches("/css/");
         assert!(dist_dir.join("css").join(hashed_name).exists());
     }
 
     #[test]
-    fn test_build_manifest_excludes() {
+    fn test_compute_manifest_excludes() {
         let tmp = tempfile::TempDir::new().unwrap();
         let root = tmp.path();
         let static_dir = root.join("static");
@@ -626,7 +654,7 @@ mod tests {
         write_file(&dist_dir, "robots.txt", "allow all");
 
         let config = hash_config();
-        let manifest = build_manifest(&dist_dir, &static_dir, &config).unwrap();
+        let manifest = compute_manifest(&dist_dir, &static_dir, &config).unwrap();
 
         assert!(
             manifest.is_empty(),
@@ -655,7 +683,7 @@ mod tests {
         write_file(&dist_dir, "style.css", "body{}");
 
         let config = hash_config();
-        let manifest = build_manifest(&dist_dir, &static_dir, &config).unwrap();
+        let manifest = compute_manifest(&dist_dir, &static_dir, &config).unwrap();
 
         // _routes must not appear in the manifest.
         assert!(
@@ -672,7 +700,7 @@ mod tests {
     }
 
     #[test]
-    fn test_build_manifest_empty_dir() {
+    fn test_compute_manifest_empty_dir() {
         let tmp = tempfile::TempDir::new().unwrap();
         let root = tmp.path();
         let static_dir = root.join("static");
@@ -681,13 +709,13 @@ mod tests {
         std::fs::create_dir_all(&dist_dir).unwrap();
 
         let config = hash_config();
-        let manifest = build_manifest(&dist_dir, &static_dir, &config).unwrap();
+        let manifest = compute_manifest(&dist_dir, &static_dir, &config).unwrap();
 
         assert!(manifest.is_empty());
     }
 
     #[test]
-    fn test_build_manifest_no_static_dir() {
+    fn test_compute_manifest_no_static_dir() {
         let tmp = tempfile::TempDir::new().unwrap();
         let root = tmp.path();
         let static_dir = root.join("static"); // does not exist
@@ -695,13 +723,13 @@ mod tests {
         std::fs::create_dir_all(&dist_dir).unwrap();
 
         let config = hash_config();
-        let manifest = build_manifest(&dist_dir, &static_dir, &config).unwrap();
+        let manifest = compute_manifest(&dist_dir, &static_dir, &config).unwrap();
 
         assert!(manifest.is_empty());
     }
 
     #[test]
-    fn test_build_manifest_nested_dirs() {
+    fn test_compute_manifest_nested_dirs() {
         let tmp = tempfile::TempDir::new().unwrap();
         let root = tmp.path();
         let static_dir = root.join("static");
@@ -711,7 +739,7 @@ mod tests {
         write_file(&dist_dir, "a/b/c/deep.js", "deep()");
 
         let config = hash_config();
-        let manifest = build_manifest(&dist_dir, &static_dir, &config).unwrap();
+        let manifest = compute_manifest(&dist_dir, &static_dir, &config).unwrap();
 
         assert_eq!(manifest.len(), 1);
         let resolved = manifest.resolve("/a/b/c/deep.js");
@@ -720,7 +748,7 @@ mod tests {
     }
 
     #[test]
-    fn test_build_manifest_deterministic_hash() {
+    fn test_compute_manifest_deterministic_hash() {
         // Same content should produce same hash.
         let tmp = tempfile::TempDir::new().unwrap();
         let root = tmp.path();
@@ -732,12 +760,12 @@ mod tests {
         write_file(&dist_dir, "a.css", content);
 
         let config = hash_config();
-        let m1 = build_manifest(&dist_dir, &static_dir, &config).unwrap();
+        let m1 = compute_manifest(&dist_dir, &static_dir, &config).unwrap();
         let r1 = m1.resolve("/a.css").to_string();
 
         // Rebuild with same content.
         write_file(&dist_dir, "a.css", content);
-        let m2 = build_manifest(&dist_dir, &static_dir, &config).unwrap();
+        let m2 = compute_manifest(&dist_dir, &static_dir, &config).unwrap();
         let r2 = m2.resolve("/a.css").to_string();
 
         assert_eq!(r1, r2, "same content should produce same hash");
@@ -1077,7 +1105,7 @@ mod tests {
 
         // Phase 1: Build manifest.
         let config = hash_config();
-        let manifest = build_manifest(&dist_dir, &static_dir, &config).unwrap();
+        let manifest = compute_manifest(&dist_dir, &static_dir, &config).unwrap();
 
         // favicon.ico should be excluded.
         assert_eq!(manifest.len(), 2);

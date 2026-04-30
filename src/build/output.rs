@@ -94,9 +94,11 @@ pub fn copy_static_assets(
         }
     }
 
-    // Phase 1: Build content hash manifest if enabled.
+    // Compute content hash manifest if enabled (files are NOT renamed yet —
+    // renaming is deferred until after bundling so the bundler can read
+    // files at their original paths).
     if content_hash_config.enabled {
-        crate::build::content_hash::build_manifest(&dist_dir, &static_dir, content_hash_config)
+        crate::build::content_hash::compute_manifest(&dist_dir, &static_dir, content_hash_config)
     } else {
         Ok(crate::build::content_hash::AssetManifest::new())
     }
