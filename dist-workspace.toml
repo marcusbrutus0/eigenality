@@ -15,7 +15,7 @@ targets = ["aarch64-apple-darwin", "aarch64-unknown-linux-gnu", "x86_64-apple-da
 npm-scope = "@wavefunk"
 # Path that installers should place binaries in
 install-path = "CARGO_HOME"
-# Cache compiled dependencies across CI runs
+# Whether builds should try to be cached in CI
 cache-builds = true
 # Whether to install an updater program
 install-updater = false

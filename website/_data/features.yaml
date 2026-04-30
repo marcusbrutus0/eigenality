@@ -1,11 +1,11 @@
 - title: HTMX Fragments
-  description: Every template block becomes a standalone fragment. Click a link, swap a div — no full page reload. Navigation that feels like an SPA, built with zero JavaScript frameworks.
+  description: Every template block becomes a standalone fragment. Click a link, swap a div. No full page reload. Navigation that feels like an SPA, built with zero JavaScript frameworks.
 
 - title: Data From Anywhere
   description: Pull data from local YAML files, REST APIs, Notion, or GraphQL. One config block per source. Caching, rate limiting, and auth headers built in.
 
 - title: Dynamic Pages
-  description: Name a template [slug].html and point it at a collection. Eigen generates one page per item — blog posts, product pages, docs — from a single template.
+  description: Name a template [slug].html and point it at a collection. Eigen generates one page per item (blog posts, product pages, docs) from a single template.
 
 - title: Built-in Optimization
   description: Critical CSS inlining, image lazy loading, CSS/JS bundling with tree-shaking, content-hashed assets, HTML minification. All on by default.
@@ -14,7 +14,7 @@
   description: Only re-renders pages whose templates, data, or config actually changed. Two-tier hashing keeps rebuilds fast even on large sites.
 
 - title: Single Config
-  description: One site.toml file configures everything — data sources, SEO defaults, build optimization, analytics, redirects, feeds. No plugin ecosystem to navigate.
+  description: One site.toml file configures everything: data sources, SEO defaults, build optimization, analytics, redirects, feeds. No plugin ecosystem to navigate.
 
 - title: SEO Out of the Box
   description: Auto-generated sitemap, robots.txt, Open Graph tags, Twitter cards, JSON-LD structured data. Configure once at the site level, override per page.

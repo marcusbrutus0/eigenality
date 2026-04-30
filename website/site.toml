@@ -3,8 +3,8 @@ name = "eigen"
 base_url = "https://eigen.wavefunk.io"
 
 [site.seo]
-title = "eigen — a static site generator that thinks in fragments"
-description = "A Rust-powered static site generator with HTMX fragment navigation, data fetching, and built-in optimization."
+title = "eigen | static site generator with htmx fragment navigation"
+description = "Rust-powered static site generator where every template block becomes an htmx fragment. Auto-generated SEO tags, sitemaps, and JSON-LD. Zero client JavaScript."
 og_type = "website"
 
 [site.schema]
