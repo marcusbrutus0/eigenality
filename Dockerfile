@@ -1,6 +1,6 @@
-FROM debian:bookworm-slim AS runtime
+FROM debian:trixie-slim AS runtime
 
-RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates ffmpeg && rm -rf /var/lib/apt/lists/*
 WORKDIR /site
 ENTRYPOINT ["eigen"]
 CMD ["build"]
@@ -10,7 +10,7 @@ FROM runtime AS release
 COPY eigen /usr/local/bin/eigen
 
 # Local: build from source (docker build .)
-FROM rust:1-bookworm AS builder
+FROM rust:1-trixie AS builder
 WORKDIR /app
 COPY . .
 RUN cargo build --profile dist

@@ -989,7 +989,7 @@ checksum = "b04dc5a38e4f151a79d9f2451ae6037fb6eaf5cba34771f44781f80e508498e3"
 
 [[package]]
 name = "eigen"
-version = "0.16.0"
+version = "0.17.0"
 dependencies = [
  "axum",
  "axum-htmx",
@@ -5367,3 +5367,15 @@ checksum = "27bc9d5b815bc103f142aa054f561d9187d191692ec7c2d1e2b4737f8dbd7296"
 dependencies = [
  "zune-core",
 ]
+
+[[patch.unused]]
+name = "allowthem-core"
+version = "0.0.5"
+
+[[patch.unused]]
+name = "allowthem-server"
+version = "0.0.5"
+
+[[patch.unused]]
+name = "allowthem-teams"
+version = "0.0.5"
