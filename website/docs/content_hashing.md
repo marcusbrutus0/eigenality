@@ -38,16 +38,19 @@ exclude = [
 
 ### Three Phases
 
-1. **Phase 1 (Build Manifest):** During `copy_static_assets`, files in
-   `dist/` are hashed and renamed. A manifest maps original paths to
-   hashed paths.
+1. **Phase 1 (Compute Manifest):** During `copy_static_assets`, files in
+   `dist/` are hashed and a manifest maps original paths to hashed paths.
+   Files are **not** renamed yet — they stay at their original paths so
+   that bundling (Phase 2.5) can read them.
 
 2. **Phase 2 (Template Resolution):** The `asset()` template function
-   uses the manifest to return hashed paths at render time.
+   uses the manifest to return hashed paths at render time. When bundling
+   is enabled, `asset()` returns original paths instead so the bundler
+   can resolve file references.
 
-3. **Phase 3 (Post-Render Rewrite):** After all rendering, a final pass
-   rewrites any remaining hardcoded asset references in `.html`, `.css`,
-   and `.js` files.
+3. **Phase 3 (Rename + Rewrite):** After bundling, files are renamed to
+   their hashed filenames. Then a final pass rewrites any remaining
+   hardcoded asset references in `.html`, `.css`, and `.js` files.
 
 ### Template Usage
 
@@ -81,6 +84,9 @@ Content hashing is always disabled during dev server operation. The
 
 ## Interactions
 
+- **CSS/JS Bundling:** Works correctly. Content hashing defers file
+  renames until after bundling so the bundler can read `@import` chains
+  at their original paths. The final bundle is then hashed.
 - **Image optimization:** Works correctly. Use `asset()` for source
   image paths; image optimization reads the hashed filename from dist.
 - **Critical CSS:** Enhanced to resolve hashed paths via manifest
@@ -102,4 +108,5 @@ Content hashing is always disabled during dev server operation. The
 ## Module Location
 
 `src/build/content_hash.rs` -- single-file module containing
-`AssetManifest`, `build_manifest()`, and `rewrite_references()`.
+`AssetManifest`, `compute_manifest()`, `rename_manifest_files()`, and
+`rewrite_references()`.

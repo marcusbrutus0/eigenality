@@ -235,17 +235,21 @@ pub async fn build(project_root: &Path, dev: bool, fresh: bool, full: bool) -> R
     let source_asset_collector = SourceAssetCollector::new();
 
     // Set up template engine (with plugin extensions).
-    // Phase 2: Setup template engine (pass manifest for asset() function).
+    // Pass manifest for asset() only when bundling is disabled — when bundling
+    // is active, asset() returns original paths so the bundler can read files
+    // at their original names; rewrite_references fixes paths afterward.
+    let manifest_for_templates =
+        if config.build.content_hash.enabled && !config.build.bundling.enabled {
+            Some(manifest.clone())
+        } else {
+            None
+        };
     let env = template::setup_environment(
         project_root,
         &config,
         &pages,
         Some(&plugin_registry),
-        if config.build.content_hash.enabled {
-            Some(manifest.clone())
-        } else {
-            None
-        },
+        manifest_for_templates,
         false,
         Some(source_asset_collector.clone()),
     )?;
@@ -442,8 +446,12 @@ pub async fn build(project_root: &Path, dev: bool, fresh: bool, full: bool) -> R
         Vec::new()
     };
 
-    // Phase 3: Content hash rewrite.
+    // Phase 3: Content hash — rename files and rewrite references.
+    // Renames are deferred to here so the bundler can read files at their
+    // original paths during Phase 2.5.
     if ctx.config.build.content_hash.enabled {
+        content_hash::rename_manifest_files(&dist_dir, &manifest)?;
+
         // Hash bundled files (generated, not from static/).
         let bundle_manifest = if !bundled_files.is_empty() {
             Some(

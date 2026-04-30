@@ -3376,6 +3376,190 @@ item_as: post
 }
 
 // ============================================================================
+// Content hashing + bundling interaction
+// ============================================================================
+
+#[tokio::test]
+async fn test_content_hash_with_bundling_hardcoded_refs() {
+    let tmp = TempDir::new().unwrap();
+    let root = tmp.path();
+
+    write(
+        root,
+        "site.toml",
+        r#"
+[site]
+name = "Hash + Bundle Test"
+base_url = "https://example.com"
+
+[build]
+fragments = false
+minify = false
+
+[build.content_hash]
+enabled = true
+
+[build.bundling]
+enabled = true
+css = true
+js = false
+"#,
+    );
+
+    write(
+        root,
+        "static/css/wavefunk/tokens.css",
+        ":root { --color-primary: #333; }",
+    );
+    write(
+        root,
+        "static/css/wavefunk/base.css",
+        "body { margin: 0; font-family: sans-serif; }",
+    );
+    write(
+        root,
+        "static/css/wavefunk/wavefunk.css",
+        r#"@import url("./tokens.css");
+@import url("./base.css");
+"#,
+    );
+
+    write(
+        root,
+        "templates/index.html",
+        r#"<!DOCTYPE html>
+<html>
+<head><link rel="stylesheet" href="/css/wavefunk/wavefunk.css"></head>
+<body><h1>Hello</h1></body>
+</html>"#,
+    );
+
+    eigen::build::build(root, false, false, true).await.unwrap();
+
+    let dist = root.join("dist");
+
+    // Bundle gets content-hashed — find it by prefix.
+    let bundle_path = fs::read_dir(dist.join("css"))
+        .unwrap()
+        .filter_map(|e| e.ok())
+        .map(|e| e.path())
+        .find(|p| {
+            p.file_name()
+                .and_then(|n| n.to_str())
+                .map(|n| n.starts_with("bundle.") && n.ends_with(".css"))
+                .unwrap_or(false)
+        })
+        .expect("hashed bundle.css should exist in dist/css/");
+
+    let bundle = fs::read_to_string(&bundle_path).unwrap();
+    assert!(
+        bundle.contains("--color-primary"),
+        "bundle should contain tokens CSS (resolved @import)"
+    );
+    assert!(
+        bundle.contains("font-family"),
+        "bundle should contain base CSS (resolved @import)"
+    );
+
+    // HTML should reference the hashed bundle, not individual files.
+    let html = fs::read_to_string(dist.join("index.html")).unwrap();
+    assert!(
+        html.contains("bundle.") && html.contains(".css"),
+        "HTML should reference the hashed CSS bundle"
+    );
+    assert!(
+        !html.contains("wavefunk.css"),
+        "HTML should not reference the original CSS file"
+    );
+}
+
+#[tokio::test]
+async fn test_content_hash_with_bundling_asset_refs() {
+    let tmp = TempDir::new().unwrap();
+    let root = tmp.path();
+
+    write(
+        root,
+        "site.toml",
+        r#"
+[site]
+name = "Hash + Bundle Asset Test"
+base_url = "https://example.com"
+
+[build]
+fragments = false
+minify = false
+
+[build.content_hash]
+enabled = true
+
+[build.bundling]
+enabled = true
+css = true
+js = false
+"#,
+    );
+
+    write(
+        root,
+        "static/css/tokens.css",
+        ":root { --color-primary: #333; }",
+    );
+    write(
+        root,
+        "static/css/style.css",
+        r#"@import url("./tokens.css");
+.hero { color: var(--color-primary); }
+"#,
+    );
+
+    // Use asset() to reference the CSS — this produces hashed hrefs.
+    write(
+        root,
+        "templates/index.html",
+        r#"<!DOCTYPE html>
+<html>
+<head><link rel="stylesheet" href="{{ asset('/css/style.css') }}"></head>
+<body><div class="hero">Hello</div></body>
+</html>"#,
+    );
+
+    eigen::build::build(root, false, false, true).await.unwrap();
+
+    let dist = root.join("dist");
+
+    // Bundle gets content-hashed — find it by prefix.
+    let bundle_path = fs::read_dir(dist.join("css"))
+        .unwrap()
+        .filter_map(|e| e.ok())
+        .map(|e| e.path())
+        .find(|p| {
+            p.file_name()
+                .and_then(|n| n.to_str())
+                .map(|n| n.starts_with("bundle.") && n.ends_with(".css"))
+                .unwrap_or(false)
+        })
+        .expect("hashed bundle.css should exist in dist/css/");
+
+    let bundle = fs::read_to_string(&bundle_path).unwrap();
+    assert!(
+        bundle.contains("--color-primary"),
+        "bundle should contain tokens CSS (resolved @import)"
+    );
+    assert!(
+        bundle.contains(".hero"),
+        "bundle should contain style CSS"
+    );
+
+    // HTML should reference the hashed bundle, not individual files.
+    let html = fs::read_to_string(dist.join("index.html")).unwrap();
+    assert!(
+        html.contains("bundle.") && html.contains(".css"),
+        "HTML should reference the hashed CSS bundle"
+    );
+}
+
+// ============================================================================
 
 /// Recursively copy a directory.
 fn copy_dir_all(src: &Path, dst: &Path) {
