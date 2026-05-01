@@ -55,3 +55,4 @@ sitemap = true
 [[robots.rules]]
 user_agent = "*"
 allow = ["/"]
+
