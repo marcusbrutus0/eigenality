@@ -14,7 +14,7 @@
   description: Only re-renders pages whose templates, data, or config actually changed. Two-tier hashing keeps rebuilds fast even on large sites.
 
 - title: Single Config
-  description: One site.toml file configures everything: data sources, SEO defaults, build optimization, analytics, redirects, feeds. No plugin ecosystem to navigate.
+  description: "One site.toml file configures everything: data sources, SEO defaults, build optimization, analytics, redirects, feeds. No plugin ecosystem to navigate."
 
 - title: SEO Out of the Box
   description: Auto-generated sitemap, robots.txt, Open Graph tags, Twitter cards, JSON-LD structured data. Configure once at the site level, override per page.
