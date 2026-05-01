@@ -54,6 +54,10 @@ pub fn merge_css_files(hrefs: &[String], dist_dir: &Path) -> Result<String> {
         // Resolve @import directives.
         let resolved = resolve_imports(&content, &file_path, dist_dir, 0);
 
+        // Rewrite relative url() paths to absolute so they survive relocation
+        // into the bundle output directory.
+        let resolved = rewrite_relative_urls(&resolved, &file_path, dist_dir);
+
         if !merged.is_empty() {
             merged.push('\n');
         }
@@ -81,6 +85,11 @@ pub fn merge_css_files(hrefs: &[String], dist_dir: &Path) -> Result<String> {
 static IMPORT_RE: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
     regex::Regex::new(r#"@import\s+(?:url\(\s*['"]?([^'")]+)['"]?\s*\)|['"]([^'"]+)['"]);?"#)
         .expect("import regex is valid")
+});
+
+/// Matches CSS `url(...)` references (quoted or unquoted).
+static URL_RE: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
+    regex::Regex::new(r#"url\(\s*([^)]+?)\s*\)"#).expect("url() regex is valid")
 });
 
 /// Recursively resolve `@import` directives in CSS content.
@@ -148,21 +157,79 @@ fn resolve_imports(css: &str, css_path: &Path, dist_dir: &Path, depth: usize) ->
     result
 }
 
+/// Normalize a path by resolving `.` and `..` components without I/O.
+fn normalize_path(path: &Path) -> PathBuf {
+    let mut result = PathBuf::new();
+    for component in path.components() {
+        match component {
+            std::path::Component::CurDir => {}
+            std::path::Component::ParentDir => {
+                result.pop();
+            }
+            other => result.push(other),
+        }
+    }
+    result
+}
+
+/// Rewrite relative `url()` references in CSS to absolute paths.
+///
+/// When CSS files are bundled from subdirectories into a single bundle,
+/// relative paths (e.g. `url("./fonts/file.woff2")`) break because the
+/// bundle lives at a different directory level. Converting to absolute
+/// paths (e.g. `url("/css/wavefunk/fonts/file.woff2")`) makes them
+/// location-independent.
+///
+/// Limitation: runs after `@import` resolution, so `url()` paths from
+/// imported files are rewritten relative to the *importer*, not the
+/// original source. This is correct when all imports are same-directory
+/// (the common pattern), but would produce wrong paths for cross-directory
+/// imports like `@import "../other-dir/tokens.css"`.
+fn rewrite_relative_urls(css: &str, source_path: &Path, dist_dir: &Path) -> String {
+    let source_dir = source_path.parent().unwrap_or(dist_dir);
+
+    URL_RE
+        .replace_all(css, |caps: &regex::Captures| {
+            let raw = &caps[1];
+
+            let (quote, path) = if raw.starts_with('"') && raw.ends_with('"') {
+                ("\"", &raw[1..raw.len() - 1])
+            } else if raw.starts_with('\'') && raw.ends_with('\'') {
+                ("'", &raw[1..raw.len() - 1])
+            } else {
+                ("", raw)
+            };
+
+            if path.starts_with('/')
+                || path.starts_with("http:")
+                || path.starts_with("https:")
+                || path.starts_with("data:")
+                || path.starts_with('#')
+            {
+                return caps[0].to_string();
+            }
+
+            let resolved = normalize_path(&source_dir.join(path));
+            match resolved.strip_prefix(dist_dir) {
+                Ok(rel) => {
+                    let abs = format!("/{}", rel.to_string_lossy().replace('\\', "/"));
+                    format!("url({quote}{abs}{quote})")
+                }
+                Err(_) => caps[0].to_string(),
+            }
+        })
+        .into_owned()
+}
+
 /// Tree-shake CSS: remove selectors that do not match any element in any
 /// rendered HTML page.
 ///
-/// Steps:
-/// 1. Parse every HTML file into a `scraper::Html` DOM.
-/// 2. Parse the merged CSS with lightningcss (error recovery enabled).
-/// 3. Walk all CSS rules. For each style rule, test its selectors against
-///    every DOM. If a selector matches in at least one DOM, keep the rule.
-/// 4. Include transitively referenced @font-face, @keyframes, and custom
-///    property rules (same dependency tracking as critical_css/extract.rs).
-/// 5. Serialize the surviving rules to a string.
-///
-/// Returns the tree-shaken CSS string.
+/// `@font-face` rules are always preserved — browsers only download fonts
+/// when they appear in computed styles, so keeping them is free. Trying to
+/// tree-shake them requires resolving CSS custom property indirection
+/// (e.g. `font-family: var(--font-body)`) which is fragile and produces
+/// false negatives.
 pub fn tree_shake_css(merged_css: &str, html_files: &[PathBuf], minify: bool) -> Result<String> {
-    // Step 1: Parse all HTML files into DOMs.
     let documents: Vec<scraper::Html> = html_files
         .iter()
         .filter_map(|path| match std::fs::read_to_string(path) {
@@ -182,7 +249,6 @@ pub fn tree_shake_css(merged_css: &str, html_files: &[PathBuf], minify: bool) ->
         return Ok(merged_css.to_string());
     }
 
-    // Step 2: Parse CSS.
     let options = ParserOptions {
         error_recovery: true,
         ..ParserOptions::default()
@@ -190,11 +256,9 @@ pub fn tree_shake_css(merged_css: &str, html_files: &[PathBuf], minify: bool) ->
     let stylesheet = StyleSheet::parse(merged_css, options)
         .map_err(|e| eyre::eyre!("CSS parse error during tree-shaking: {e}"))?;
 
-    // Step 3: Walk rules, matching against all DOMs.
     let mut matched_rules: Vec<String> = Vec::new();
     let mut global_deps = GlobalDependencies::default();
 
-    let mut font_face_rules: Vec<String> = Vec::new();
     let mut keyframe_rules: Vec<String> = Vec::new();
     let mut custom_prop_rules: Vec<(String, String)> = Vec::new();
 
@@ -203,7 +267,6 @@ pub fn tree_shake_css(merged_css: &str, html_files: &[PathBuf], minify: bool) ->
         &documents,
         &mut matched_rules,
         &mut global_deps,
-        &mut font_face_rules,
         &mut keyframe_rules,
         &mut custom_prop_rules,
         minify,
@@ -214,20 +277,8 @@ pub fn tree_shake_css(merged_css: &str, html_files: &[PathBuf], minify: bool) ->
         return Ok(String::new());
     }
 
-    // Step 4: Include transitively referenced global rules.
     let mut critical_parts: Vec<String> = Vec::new();
 
-    // Include referenced @font-face rules.
-    for rule_css in &font_face_rules {
-        for family in &global_deps.font_families {
-            if rule_css.contains(family.as_str()) {
-                critical_parts.push(rule_css.clone());
-                break;
-            }
-        }
-    }
-
-    // Include referenced @keyframes rules.
     for rule_css in &keyframe_rules {
         for anim_name in &global_deps.animation_names {
             if rule_css.contains(anim_name.as_str()) {
@@ -237,14 +288,12 @@ pub fn tree_shake_css(merged_css: &str, html_files: &[PathBuf], minify: bool) ->
         }
     }
 
-    // Include referenced custom property definitions.
     for (prop_name, rule_css) in &custom_prop_rules {
         if global_deps.custom_properties.contains(prop_name) {
             critical_parts.push(rule_css.clone());
         }
     }
 
-    // Add matched style rules.
     critical_parts.extend(matched_rules);
 
     Ok(critical_parts.join("\n"))
@@ -263,13 +312,11 @@ fn printer(minify: bool) -> PrinterOptions<'static> {
 /// This is the bundling variant of the walk_rules in critical_css/extract.rs.
 /// The key difference: selectors are tested against multiple documents (the
 /// union of all pages), not a single document.
-#[allow(clippy::too_many_arguments)]
 fn walk_rules(
     rules: &[CssRule],
     documents: &[scraper::Html],
     matched_rules: &mut Vec<String>,
     global_deps: &mut GlobalDependencies,
-    font_face_rules: &mut Vec<String>,
     keyframe_rules: &mut Vec<String>,
     custom_prop_rules: &mut Vec<(String, String)>,
     minify: bool,
@@ -293,7 +340,6 @@ fn walk_rules(
                     documents,
                     &mut media_matched,
                     global_deps,
-                    font_face_rules,
                     keyframe_rules,
                     custom_prop_rules,
                     minify,
@@ -314,7 +360,6 @@ fn walk_rules(
                     documents,
                     &mut supports_matched,
                     global_deps,
-                    font_face_rules,
                     keyframe_rules,
                     custom_prop_rules,
                     minify,
@@ -335,7 +380,6 @@ fn walk_rules(
                     documents,
                     &mut layer_matched,
                     global_deps,
-                    font_face_rules,
                     keyframe_rules,
                     custom_prop_rules,
                     minify,
@@ -361,7 +405,7 @@ fn walk_rules(
             }
             CssRule::FontFace(_) => {
                 if let Ok(css) = rule.to_css_string(printer(minify)) {
-                    font_face_rules.push(css);
+                    matched_rules.push(css);
                 }
             }
             CssRule::Keyframes(_) => {
@@ -541,6 +585,115 @@ mod tests {
         assert!(result.contains(".ok { color: green; }"));
     }
 
+    // --- rewrite_relative_urls tests ---
+
+    #[test]
+    fn test_rewrite_relative_url_double_quoted() {
+        let tmp = TempDir::new().unwrap();
+        let dist = tmp.path();
+        let source = dist.join("css/wavefunk/tokens.css");
+
+        let css = r#"@font-face { src: url("./fonts/Inter.woff2"); }"#;
+        let result = rewrite_relative_urls(css, &source, dist);
+        assert_eq!(
+            result,
+            r#"@font-face { src: url("/css/wavefunk/fonts/Inter.woff2"); }"#
+        );
+    }
+
+    #[test]
+    fn test_rewrite_relative_url_single_quoted() {
+        let tmp = TempDir::new().unwrap();
+        let dist = tmp.path();
+        let source = dist.join("css/wavefunk/tokens.css");
+
+        let css = "@font-face { src: url('./fonts/Inter.woff2'); }";
+        let result = rewrite_relative_urls(css, &source, dist);
+        assert_eq!(
+            result,
+            "@font-face { src: url('/css/wavefunk/fonts/Inter.woff2'); }"
+        );
+    }
+
+    #[test]
+    fn test_rewrite_relative_url_unquoted() {
+        let tmp = TempDir::new().unwrap();
+        let dist = tmp.path();
+        let source = dist.join("css/wavefunk/tokens.css");
+
+        let css = "@font-face { src: url(./fonts/Inter.woff2); }";
+        let result = rewrite_relative_urls(css, &source, dist);
+        assert_eq!(
+            result,
+            "@font-face { src: url(/css/wavefunk/fonts/Inter.woff2); }"
+        );
+    }
+
+    #[test]
+    fn test_rewrite_skips_absolute_urls() {
+        let tmp = TempDir::new().unwrap();
+        let dist = tmp.path();
+        let source = dist.join("css/style.css");
+
+        let css = r#"body { background: url("/img/bg.png"); }"#;
+        let result = rewrite_relative_urls(css, &source, dist);
+        assert_eq!(result, css);
+    }
+
+    #[test]
+    fn test_rewrite_skips_external_urls() {
+        let tmp = TempDir::new().unwrap();
+        let dist = tmp.path();
+        let source = dist.join("css/style.css");
+
+        let css = r#"@import url("https://fonts.googleapis.com/css2");"#;
+        let result = rewrite_relative_urls(css, &source, dist);
+        assert_eq!(result, css);
+    }
+
+    #[test]
+    fn test_rewrite_skips_data_urls() {
+        let tmp = TempDir::new().unwrap();
+        let dist = tmp.path();
+        let source = dist.join("css/style.css");
+
+        let css = r#"body { background: url("data:image/svg+xml,..."); }"#;
+        let result = rewrite_relative_urls(css, &source, dist);
+        assert_eq!(result, css);
+    }
+
+    #[test]
+    fn test_rewrite_normalizes_dot_segments() {
+        let tmp = TempDir::new().unwrap();
+        let dist = tmp.path();
+        let source = dist.join("css/deep/nested/style.css");
+
+        let css = r#"body { background: url("../../img/bg.png"); }"#;
+        let result = rewrite_relative_urls(css, &source, dist);
+        assert_eq!(
+            result,
+            r#"body { background: url("/css/img/bg.png"); }"#
+        );
+    }
+
+    #[test]
+    fn test_merge_rewrites_urls_from_subdirectory() {
+        let tmp = TempDir::new().unwrap();
+        let dist = tmp.path();
+        write_file(
+            dist,
+            "css/wavefunk/tokens.css",
+            r#"@font-face { src: url("./fonts/Inter.woff2"); }"#,
+        );
+
+        let result =
+            merge_css_files(&["/css/wavefunk/tokens.css".to_string()], dist).unwrap();
+        assert!(
+            result.contains("/css/wavefunk/fonts/Inter.woff2"),
+            "url() should be rewritten to absolute path, got: {result}"
+        );
+    }
+
     // --- tree_shake_css tests ---
 
     #[test]
@@ -647,6 +800,35 @@ mod tests {
         assert!(result.contains("Inter"));
         assert!(result.contains(".heading"));
         assert!(!result.contains(".unused"));
+    }
+
+    #[test]
+    fn test_tree_shake_font_face_via_css_variable() {
+        let tmp = TempDir::new().unwrap();
+        let dist = tmp.path();
+        write_file(
+            dist,
+            "page.html",
+            r#"<html><body><h1 class="heading">Title</h1></body></html>"#,
+        );
+
+        let css = r#"
+            @font-face {
+                font-family: "Martian Grotesk";
+                src: url("/fonts/MartianGrotesk-VF.woff2") format("woff2");
+            }
+            :root { --font-body: "Martian Grotesk", sans-serif; }
+            .heading { font-family: var(--font-body); }
+        "#;
+        let html_files = vec![dist.join("page.html")];
+        let result = tree_shake_css(css, &html_files, false).unwrap();
+
+        assert!(
+            result.contains("@font-face"),
+            "@font-face should be preserved even when referenced via CSS variable"
+        );
+        assert!(result.contains("Martian Grotesk"));
+        assert!(result.contains(".heading"));
     }
 
     #[test]

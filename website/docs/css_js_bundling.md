@@ -57,8 +57,23 @@ Runs as Phase 2.5 in the build pipeline:
 1. Scans all HTML files in `dist/` for `<link rel="stylesheet">` tags
 2. Deduplicates hrefs in first-encounter order (sorted by file path)
 3. Reads and concatenates CSS files, resolving `@import` chains
-4. Tree-shakes: parses all HTML DOMs, keeps selectors matching any page
-5. Writes bundled CSS to `dist/{css_output}`
+4. Rewrites relative `url()` paths to absolute so font/image references
+   survive relocation into the bundle output directory
+5. Tree-shakes: parses all HTML DOMs, keeps selectors matching any page
+6. Writes bundled CSS to `dist/{css_output}`
+
+### Font Loading
+
+`@font-face` rules are always preserved during tree-shaking. Browsers only
+download fonts when they appear in computed styles, so keeping the
+declarations is free. This avoids false negatives from CSS variable
+indirection (e.g. `font-family: var(--font-body)` referencing a font
+defined elsewhere).
+
+Relative `url()` paths in `@font-face` `src` declarations (and any other
+CSS `url()`) are rewritten to absolute paths during bundling, so fonts
+loaded from subdirectories (e.g. `css/wavefunk/fonts/`) resolve correctly
+from the bundle's output location.
 
 ### JS Bundling
 1. Scans all HTML files for `<script src="...">` tags

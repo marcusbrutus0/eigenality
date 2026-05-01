@@ -3560,6 +3560,100 @@ js = false
 }
 
 // ============================================================================
+// Bundling with fonts: url() rewriting + @font-face preservation
+// ============================================================================
+
+#[tokio::test]
+async fn test_bundling_rewrites_font_urls_and_preserves_font_face() {
+    let tmp = TempDir::new().unwrap();
+    let root = tmp.path();
+
+    write(
+        root,
+        "site.toml",
+        r#"
+[site]
+name = "Font Bundle Test"
+base_url = "https://example.com"
+
+[build]
+fragments = false
+minify = false
+
+[build.content_hash]
+enabled = false
+
+[build.bundling]
+enabled = true
+css = true
+js = false
+tree_shake_css = true
+"#,
+    );
+
+    write(
+        root,
+        "static/css/wavefunk/fonts/Inter.woff2",
+        "fake-font-data",
+    );
+    write(
+        root,
+        "static/css/wavefunk/tokens.css",
+        r#"@font-face {
+    font-family: "Inter";
+    src: url("./fonts/Inter.woff2") format("woff2");
+    font-display: swap;
+}
+:root { --font-body: "Inter", sans-serif; }
+"#,
+    );
+    write(
+        root,
+        "static/css/wavefunk/base.css",
+        "body { font-family: var(--font-body); margin: 0; }",
+    );
+    write(
+        root,
+        "static/css/wavefunk/wavefunk.css",
+        r#"@import url("./tokens.css");
+@import url("./base.css");
+"#,
+    );
+
+    write(
+        root,
+        "templates/index.html",
+        r#"<!DOCTYPE html>
+<html>
+<head><link rel="stylesheet" href="/css/wavefunk/wavefunk.css"></head>
+<body><p>Hello</p></body>
+</html>"#,
+    );
+
+    eigen::build::build(root, false, false, true).await.unwrap();
+
+    let dist = root.join("dist");
+    let bundle = fs::read_to_string(dist.join("css/bundle.css")).unwrap();
+
+    // @font-face must survive tree-shaking (font referenced via CSS variable).
+    assert!(
+        bundle.contains("@font-face"),
+        "bundle should preserve @font-face declarations"
+    );
+
+    // Relative url("./fonts/Inter.woff2") from css/wavefunk/tokens.css must be
+    // rewritten to an absolute path that resolves from the bundle location.
+    assert!(
+        bundle.contains("/css/wavefunk/fonts/Inter.woff2"),
+        "font url() should be rewritten to absolute path, got: {}",
+        &bundle[..bundle.len().min(500)]
+    );
+
+    // The font file must exist at the expected dist path.
+    assert!(dist.join("css/wavefunk/fonts/Inter.woff2").exists());
+}
+
+// ============================================================================
 
 /// Recursively copy a directory.
 fn copy_dir_all(src: &Path, dst: &Path) {
